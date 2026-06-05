@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "msts-trader"
-version = "0.5.1"
+version = "0.5.2"
 description = "Paste a target-weights CSV, preview the rebalance, execute it on your brokerage account. Tastytrade + Alpaca + IBKR + Schwab + Hyperliquid + paper."
 readme = "README.md"
 license = { file = "LICENSE" }

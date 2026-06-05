@@ -245,6 +245,7 @@ Resolution order for any setting: CLI flag > environment > config file > default
 
 ```bash
 msts-trader status                  # NAV, positions, market status (default broker)
+msts-trader status --json           # machine-readable account snapshot (monitoring)
 msts-trader status --creds-file x   # headless status, no keychain
 msts-trader doctor                  # health-check creds/connectivity/market for each broker
 msts-trader doctor --broker ibkr    # check one broker

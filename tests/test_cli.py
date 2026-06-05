@@ -86,6 +86,22 @@ def test_paper_rebalance_dry_run_end_to_end(tmp_path, monkeypatch):
     assert r2.exit_code in (0,), r2.output
 
 
+def test_status_json_paper(tmp_path, monkeypatch):
+    import json as _json
+
+    from msts_trader.brokers import paper
+
+    monkeypatch.setattr(paper, "STATE_PATH", tmp_path / "paper_state.json")
+    runner = CliRunner()
+    runner.invoke(main, ["login", "--broker", "paper"], input="40000\n")
+    r = runner.invoke(main, ["--broker", "paper", "status", "--json"])
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.output.strip().splitlines()[-1])
+    assert payload["broker"] == "paper"
+    assert payload["nav"] == "40000"
+    assert payload["positions"] == []
+
+
 def test_paper_reset_clears_book(tmp_path, monkeypatch):
     from msts_trader.brokers import paper
 

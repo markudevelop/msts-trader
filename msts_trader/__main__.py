@@ -434,8 +434,9 @@ def paper_reset() -> None:
 @main.command()
 @_BROKER_OPT
 @click.option("--creds-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Load credentials from a JSON or KEY=VALUE file (headless).")
+@click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON (NAV, balances, positions).")
 @click.pass_context
-def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -> None:
+def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, json_out: bool) -> None:
     """Show account NAV, positions, market status. No orders."""
     if creds_file:
         _load_creds_file_or_exit(creds_file)
@@ -444,6 +445,29 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -
     bal = b.balances()
     pos = b.positions()
     ms = market_status()
+
+    if json_out:
+        payload = {
+            "broker": b.name,
+            "account_id": b.account_id,
+            "nav": str(bal.nav),
+            "cash": str(bal.cash),
+            "buying_power": str(bal.buying_power),
+            "market": ms.status,
+            "minutes_to_close": ms.minutes_to_close,
+            "positions": [
+                {
+                    "ticker": p.ticker,
+                    "quantity": str(p.quantity),
+                    "price": str(p.price),
+                    "market_value": str(p.market_value),
+                    "pct_nav": str(p.market_value / bal.nav) if bal.nav else "0",
+                }
+                for p in sorted(pos.values(), key=lambda x: -x.market_value)
+            ],
+        }
+        print(json.dumps(payload, default=str))
+        return
 
     c.print(
         f"\n[bold]{b.name}[/bold]  ·  account [bold]{b.account_id}[/bold]  ·  "
