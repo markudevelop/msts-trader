@@ -12,6 +12,28 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.3.7] — 2026-06-05
+
+### Fixed
+- **IBKR now surfaces the real rejection reason.** Orders that IBKR
+  cancels used to return a bare `Cancelled` status. The adapter now
+  reads the trade log and returns the actual cause (skipping the
+  cosmetic `10349` TIF-preset note), e.g. `IBKR 201: ... does not have
+  a KID ...`.
+
+### Changed
+- Diagnosed the earlier IBKR cancellation: it was **not** the order
+  preset / `10349` (a red herring) but **Error 201 / KID-PRIIPs** — EU
+  retail accounts cannot trade US-domiciled ETFs (SPY, QQQ, SHV, GLD)
+  without an EU Key Information Document. `login_errors` and the IBKR
+  adapter now explain this. This is a brokerage/regulatory limit, not a
+  tool bug; Tastytrade and Alpaca trade these tickers fine.
+
+### Known issues
+- IBKR on an EU retail account will reject the US-ETF Core/Apex universe
+  (KID/PRIIPs). Use Tastytrade or Alpaca for those strategies, trade
+  UCITS equivalents, or ask IBKR about elective-professional status.
+
 ## [0.3.6] — 2026-06-05
 
 ### Added
@@ -191,7 +213,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.3.6...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.3.7...HEAD
+[0.3.7]: https://github.com/markudevelop/msts-trader/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/markudevelop/msts-trader/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/markudevelop/msts-trader/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/markudevelop/msts-trader/compare/v0.3.3...v0.3.4

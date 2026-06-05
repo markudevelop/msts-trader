@@ -201,14 +201,42 @@ class IBKR:
             self._ib.sleep(0.1)
             if trade.orderStatus.status in {"Filled", "Submitted", "PreSubmitted", "ApiCancelled", "Cancelled"}:
                 break
-        return {
-            "status": str(trade.orderStatus.status or "submitted"),
+
+        status = str(trade.orderStatus.status or "submitted")
+        result = {
+            "status": status,
             "ticker": order.ticker,
             "side": order.side.value,
             "quantity": qty,
             "order_id": str(getattr(trade.order, "permId", "") or getattr(trade.order, "orderId", "")) or None,
             "dry_run": False,
         }
+
+        # Surface the real rejection reason from the trade log. IBKR cancels
+        # with a terse status but the *why* (e.g. Error 201 KID/PRIIPs:
+        # "this product does not have a KID" — EU retail can't trade US ETFs)
+        # arrives as a log entry. Ignore the cosmetic 10349 TIF-preset note.
+        reason = _reject_reason(trade)
+        if reason and status in {"Cancelled", "ApiCancelled", "Inactive"}:
+            result["status"] = "error"
+            result["reason"] = reason
+        return result
+
+
+def _reject_reason(trade) -> str | None:
+    """Extract the meaningful rejection message from an ib_insync trade log.
+
+    Skips the cosmetic 10349 ("TIF set to DAY based on order preset") note.
+    Returns e.g. "IBKR 201: ... does not have a KID ..." for EU PRIIPs blocks.
+    """
+    reason = None
+    for le in getattr(trade, "log", []) or []:
+        code = getattr(le, "errorCode", 0) or 0
+        if code in (0, 10349):
+            continue
+        msg = (getattr(le, "message", "") or "").replace("<br>", " ").strip()
+        reason = f"IBKR {code}: {msg}"
+    return reason
 
 
 def _f(v) -> float | None:

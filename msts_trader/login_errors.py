@@ -48,6 +48,15 @@ def explain_login_error(broker: str, err: Exception) -> str:
             )
 
     if broker == "ibkr":
+        if "kid" in low or "priips" in low or "ineligible" in low or "201" in low:
+            return (
+                "IBKR rejected the order on regulatory grounds (no KID / PRIIPs).\n"
+                "EU retail accounts cannot trade US-domiciled ETFs (SPY, QQQ, "
+                "SHV, GLD, ...) because they lack an EU Key Information Document.\n"
+                "Options: use a non-EU broker (Tastytrade / Alpaca work with these "
+                "tickers), trade UCITS/EU-domiciled equivalents instead, or ask "
+                "IBKR about elective-professional classification."
+            )
         if "connect" in low or "refused" in low or "timeout" in low:
             return (
                 "Couldn't reach TWS / IB Gateway.\n"
