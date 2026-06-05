@@ -210,23 +210,11 @@ def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None) ->
         or ctx.obj.get("broker")
         or _prompt_choice(f"broker [{'|'.join(SUPPORTED)}]", choices=list(SUPPORTED), default="tastytrade")
     )
-    if broker == "tastytrade":
-        _login_tastytrade()
-    elif broker == "alpaca":
-        _login_alpaca()
-    elif broker == "tradier":
-        _login_tradier()
-    elif broker == "ibkr":
-        _login_ibkr()
-    elif broker == "schwab":
-        _login_schwab()
-    elif broker == "hyperliquid":
-        _login_hyperliquid()
-    elif broker == "paper":
-        _login_paper()
-    else:
+    flow = _LOGIN_FLOWS.get(broker)
+    if flow is None:
         c.print(f"[red]unknown broker {broker!r}[/red]")
         sys.exit(1)
+    flow()
 
 
 def _login_tastytrade() -> None:
@@ -423,6 +411,21 @@ def _login_paper() -> None:
     b = make("paper", starting_cash=Decimal(starting))
     bal = b.balances()
     c.print(f"[green]✓ paper book ready.[/green] cash ${bal.cash:,.2f}")
+
+
+# Login dispatch — every broker in SUPPORTED must have an entry here.
+# test_login_flows_cover_all_brokers pins this so a new broker can never
+# ship wired into the factory but missing a login flow (the bug that hit
+# Hyperliquid in 0.3.x).
+_LOGIN_FLOWS = {
+    "tastytrade": _login_tastytrade,
+    "alpaca": _login_alpaca,
+    "tradier": _login_tradier,
+    "ibkr": _login_ibkr,
+    "schwab": _login_schwab,
+    "hyperliquid": _login_hyperliquid,
+    "paper": _login_paper,
+}
 
 
 @main.command()

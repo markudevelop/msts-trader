@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the project is pre-1.0, minor versions (0.x.0) may introduce
 behaviour changes; patch versions (0.x.y) are fixes and docs.
 
+## [0.7.1] — 2026-06-05
+
+Solidity pass — no user-facing change.
+
+### Changed
+- Login dispatch is now a `_LOGIN_FLOWS` dict instead of an if/elif
+  chain, pinned by a test to exactly cover `SUPPORTED`. A new broker can
+  no longer ship wired into the factory but missing its login flow (the
+  class of bug that broke Hyperliquid in 0.3.x).
+
+### Tests
+- 258 total (+16): cross-broker consistency — every broker in SUPPORTED
+  is present in the factory, the env-creds builder (returns None, no
+  crash), and the login dispatch; unknown names still error cleanly.
+
 ## [0.7.0] — 2026-06-05
 
 ### Added
@@ -378,7 +393,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/markudevelop/msts-trader/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/markudevelop/msts-trader/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/markudevelop/msts-trader/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/markudevelop/msts-trader/compare/v0.5.2...v0.5.3
