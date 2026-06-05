@@ -27,7 +27,7 @@ from ..models import Order, Position, Side
 from .base import Balances, BrokerError
 
 try:
-    from ib_insync import IB, MarketOrder, Stock, util  # type: ignore
+    from ib_insync import IB, MarketOrder, Stock  # type: ignore
     _IB_OK = True
 except ImportError:
     _IB_OK = False

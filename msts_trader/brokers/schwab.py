@@ -23,7 +23,6 @@ That file is gitignore-equivalent (~/.msts-trader is per-user).
 """
 from __future__ import annotations
 
-import json
 import os
 from decimal import Decimal
 from pathlib import Path
@@ -167,6 +166,3 @@ def clear_token() -> None:
         TOKEN_PATH.unlink()
     except FileNotFoundError:
         pass
-
-
-_ = json  # silence unused-import: reserved for future inspection helpers
