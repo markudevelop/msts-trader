@@ -20,33 +20,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: install
+      - name: install (with all optional brokers + dev)
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[all,dev]"
       - name: ruff
         run: ruff check msts_trader
-      - name: import smoke (core + bundled brokers)
-        run: |
-          python -c "from msts_trader import diff, csv_parser, market_hours, models, keychain, fill_log; from msts_trader.brokers import base, paper, alpaca, tastytrade; print('ok')"
-      - name: install + import optional brokers
-        run: |
-          pip install "ib_insync>=0.9.86" "nest_asyncio>=1.6" "schwab-py>=1.4"
-          python -c "from msts_trader.brokers import ibkr, schwab; print('optional brokers ok')"
-      - name: csv + diff smoke
-        run: |
-          python -c "
-          from decimal import Decimal
-          from msts_trader.csv_parser import parse_csv
-          from msts_trader.diff import build_preview
-          from msts_trader.models import Position
-          t = parse_csv('ticker,weight\nSPY,0.5\nSHV,0.5\n')
-          assert len(t) == 2
-          pos = {'SHV': Position(ticker='SHV', quantity=Decimal('10'), price=Decimal('100'))}
-          q = {'SPY': Decimal('500'), 'SHV': Decimal('110')}
-          p = build_preview(t, pos, Decimal('10000'), Decimal('9000'), Decimal('9500'), q)
-          assert len(p.orders) == 2
-          print('smoke ok')
-          "
+      - name: pytest
+        run: pytest -v
       - name: cli renders
         run: msts-trader --version

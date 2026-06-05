@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "msts-trader"
-version = "0.3.0"
+version = "0.3.1"
 description = "Paste a target-weights CSV, preview the rebalance, execute it on your brokerage account. Tastytrade + Alpaca + IBKR + Schwab + paper."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -35,7 +35,11 @@ dependencies = [
 ibkr = ["ib_insync>=0.9.86", "nest_asyncio>=1.6"]
 schwab = ["schwab-py>=1.4"]
 all = ["ib_insync>=0.9.86", "nest_asyncio>=1.6", "schwab-py>=1.4"]
-dev = ["pytest>=8", "ruff>=0.5"]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
 
 [project.scripts]
 msts-trader = "msts_trader.__main__:main"

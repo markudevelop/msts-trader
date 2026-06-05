@@ -29,18 +29,35 @@ from .models import Side
 c = Console()
 
 
-def _resolve_broker_name(explicit: str | None) -> str:
-    if explicit:
-        return explicit.lower().strip()
-    chosen = keychain.get_default()
-    if not chosen:
-        c.print("[red]no broker selected and no default stored — pass --broker NAME or run `msts-trader login --broker NAME` first[/red]")
+_BROKER_OPT = click.option(
+    "--broker",
+    "broker_opt",
+    default=None,
+    help=f"Broker name. Supported: {', '.join(SUPPORTED)}",
+)
+
+
+def _resolve_broker_name(ctx: click.Context, explicit: str | None) -> str:
+    """Resolve broker from (subcommand --broker) > (group --broker) > stored default."""
+    chosen = explicit or (ctx.obj or {}).get("broker")
+    if chosen:
+        return chosen.lower().strip()
+    stored = keychain.get_default()
+    if not stored:
+        c.print(
+            "[red]no broker selected and no default stored — pass --broker NAME "
+            "or run `msts-trader login --broker NAME` first[/red]"
+        )
         sys.exit(1)
-    return chosen
+    return stored
 
 
 def _load_broker(name: str):
-    creds = keychain.load(name)
+    try:
+        creds = keychain.load(name)
+    except keychain.CredsMissingError as e:
+        c.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
     try:
         return make(name, **creds)
     except BrokerError as e:
@@ -60,10 +77,11 @@ def main(ctx: click.Context, broker: str | None) -> None:
 
 
 @main.command()
+@_BROKER_OPT
 @click.pass_context
-def login(ctx: click.Context) -> None:
+def login(ctx: click.Context, broker_opt: str | None) -> None:
     """Store broker creds in OS keychain."""
-    broker = ctx.obj.get("broker") or Prompt.ask(
+    broker = broker_opt or ctx.obj.get("broker") or Prompt.ask(
         f"broker [{'|'.join(SUPPORTED)}]",
         default="tastytrade",
         choices=list(SUPPORTED),
@@ -210,10 +228,11 @@ def _login_paper() -> None:
 
 
 @main.command()
+@_BROKER_OPT
 @click.pass_context
-def logout(ctx: click.Context) -> None:
+def logout(ctx: click.Context, broker_opt: str | None) -> None:
     """Clear stored creds for a broker."""
-    broker = ctx.obj.get("broker")
+    broker = broker_opt or ctx.obj.get("broker")
     if not broker:
         broker = Prompt.ask("broker to forget", choices=list(SUPPORTED))
     keychain.clear(broker)
@@ -247,10 +266,11 @@ def paper_reset() -> None:
 
 
 @main.command()
+@_BROKER_OPT
 @click.pass_context
-def status(ctx: click.Context) -> None:
+def status(ctx: click.Context, broker_opt: str | None) -> None:
     """Show account NAV, positions, market status. No orders."""
-    broker = _resolve_broker_name(ctx.obj.get("broker"))
+    broker = _resolve_broker_name(ctx, broker_opt)
     b = _load_broker(broker)
     bal = b.balances()
     pos = b.positions()
@@ -280,14 +300,22 @@ def status(ctx: click.Context) -> None:
 
 
 @main.command()
+@_BROKER_OPT
 @click.option("--dry-run", is_flag=True, help="Preview only — never sends orders.")
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirm prompt (auto-execute).")
 @click.option("--threshold", default=0.04, type=float, show_default=True, help="Drift threshold (fraction of NAV).")
 @click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Read CSV from file instead of stdin.")
 @click.pass_context
-def rebalance(ctx: click.Context, dry_run: bool, yes: bool, threshold: float, csv_file: str | None) -> None:
+def rebalance(
+    ctx: click.Context,
+    broker_opt: str | None,
+    dry_run: bool,
+    yes: bool,
+    threshold: float,
+    csv_file: str | None,
+) -> None:
     """Default command. Paste a ticker,weight CSV → preview → confirm → execute."""
-    broker = _resolve_broker_name(ctx.obj.get("broker"))
+    broker = _resolve_broker_name(ctx, broker_opt)
 
     ms = market_status()
     if broker != "paper":
