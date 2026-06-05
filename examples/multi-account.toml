@@ -1,0 +1,32 @@
+# Multi-account config — run the same target weights across several
+# accounts in one pass:
+#
+#   msts-trader multi --config multi-account.toml --csv-file targets.csv --dry-run
+#   msts-trader multi --config multi-account.toml --csv-url https://.../w.csv --yes
+#
+# The CSV source and limits can live here or be passed as flags (flags win).
+
+csv_url = "https://example.com/your-weights.csv"
+threshold = 0.04
+max_notional = 60000
+max_stale_hours = 36
+notify_url = "https://discord.com/api/webhooks/..."
+
+# Each account names a broker and a creds file (same JSON / KEY=VALUE
+# format as --creds-file). Accounts run sequentially; a combined summary
+# is printed at the end.
+
+[[account]]
+name = "tasty-main"
+broker = "tastytrade"
+creds_file = "~/.msts-trader/tasty.json"
+
+[[account]]
+name = "alpaca-live"
+broker = "alpaca"
+creds_file = "~/.msts-trader/alpaca.json"
+
+# [[account]]
+# name = "ibkr-local"
+# broker = "ibkr"
+# creds_file = "~/.msts-trader/ibkr.env"

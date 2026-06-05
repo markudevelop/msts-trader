@@ -736,6 +736,167 @@ def _execute(broker, preview):
     return sent, failed, results
 
 
+def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool) -> dict:
+    """Run the full rebalance pipeline for one already-built broker.
+
+    No interactive prompts, no rich rendering — returns a result dict.
+    Shared by the `multi` command (and safe to reuse elsewhere). Reuses
+    the same `_execute` (single-submit, no order retry) and idempotency
+    rules as the interactive `rebalance`.
+    """
+    bal = retry.with_retry(b.balances)
+    pos = retry.with_retry(b.positions)
+    universe = sorted({t.ticker for t in targets} | set(pos.keys()))
+    quotes = retry.with_retry(lambda: b.quote(universe))
+    for tk, p in pos.items():
+        quotes.setdefault(tk, p.price)
+
+    preview = build_preview(
+        targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
+        buying_power=bal.buying_power, quotes=quotes,
+        drift_threshold=Decimal(str(threshold)),
+    )
+    cap = safety.check_max_notional(preview.orders, Decimal(str(max_notional)) if max_notional else None)
+    if cap:
+        preview.blockers.append(cap)
+
+    fp = runstate.fingerprint(b.name, b.account_id, targets)
+    duplicate = runstate.already_done(fp) and not force
+
+    result = {
+        "broker": b.name, "account": b.account_id, "nav": str(bal.nav),
+        "orders": len(preview.orders), "sent": 0, "failed": 0,
+        "warnings": preview.warnings, "blockers": preview.blockers, "status": "preview",
+    }
+    if preview.has_blockers:
+        result["status"] = "blocked"
+        return result
+    if not preview.orders:
+        result["status"] = "nothing-to-do"
+        return result
+    if dry_run:
+        result["status"] = "dry-run"
+        return result
+    if duplicate:
+        result["status"] = "duplicate"
+        return result
+
+    sent, failed, _ = _execute(b, preview)
+    if sent > 0 and failed == 0:
+        runstate.record(fp)
+    result.update(sent=sent, failed=failed, status="executed" if failed == 0 else "partial")
+    return result
+
+
+@main.command()
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False), required=True, help="Multi-account config (TOML with [[account]] tables).")
+@click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Target CSV file (overrides config csv_file/url).")
+@click.option("--csv-url", default=None, help="Target CSV URL (overrides config).")
+@click.option("--dry-run", is_flag=True, help="Preview every account, send nothing.")
+@click.option("--yes", "-y", is_flag=True, help="Required to actually execute (multi never prompts).")
+@click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
+@click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON.")
+@click.option("--quiet", "-q", is_flag=True, help="Minimal output.")
+def multi(config_path, csv_file, csv_url, dry_run, yes, force, json_out, quiet):
+    """Run the same target weights across several accounts in one pass.
+
+    Each `[[account]]` in the config names a broker and a creds file; the
+    same CSV is rebalanced against every account sequentially, and a
+    combined summary is printed. Use --dry-run first.
+    """
+    global _QUIET, _JSON
+    _QUIET, _JSON = quiet, json_out
+
+    cfg = _load_config_or_exit(config_path)
+    accounts = cfg.get("account") or []
+    if not accounts:
+        _fail("no [[account]] entries in the config.")
+
+    threshold = float(cfg.get("threshold", 0.04))
+    max_notional = cfg.get("max_notional")
+    max_stale_hours = cfg.get("max_stale_hours")
+    notify_url = cfg.get("notify_url")
+    csv_file = csv_file or cfg.get("csv_file")
+    csv_url = csv_url or cfg.get("csv_url")
+
+    if csv_file and csv_url:
+        _fail("pass only one of --csv-file / --csv-url (or set one in config).")
+    if csv_file:
+        with open(csv_file, encoding="utf-8") as f:
+            csv_text = f.read()
+    elif csv_url:
+        csv_text = _fetch_url_or_exit(csv_url)
+    else:
+        _fail("no CSV source — set csv_file/csv_url in the config or pass --csv-file/--csv-url.")
+
+    stale = safety.check_stale(csv_text, max_stale_hours)
+    if stale:
+        _fail(stale)
+    try:
+        targets = parse_csv(csv_text)
+    except CSVParseError as e:
+        _fail(f"CSV parse error: {e}")
+
+    if not dry_run and not yes:
+        _fail("refusing to execute across accounts without --yes (use --dry-run to preview).")
+
+    from .creds_file import broker_kwargs_from_file
+
+    results = []
+    for i, acct in enumerate(accounts, 1):
+        label = acct.get("name") or f"account-{i}"
+        broker = (acct.get("broker") or "").lower().strip()
+        creds_path = acct.get("creds_file")
+        if broker not in SUPPORTED:
+            results.append({"name": label, "status": "error", "reason": f"bad/missing broker {broker!r}"})
+            continue
+        try:
+            kwargs = broker_kwargs_from_file(broker, creds_path) if creds_path else broker_kwargs_from_env(broker)
+            if kwargs is None:
+                raise BrokerError("no credentials resolved (check creds_file / env)")
+            b = make(broker, **kwargs)
+        except Exception as e:
+            results.append({"name": label, "broker": broker, "status": "error", "reason": str(e)})
+            continue
+
+        say(f"\n[bold cyan]━━ {label} ({broker}) ━━[/bold cyan]")
+        try:
+            r = _rebalance_one(b, targets, threshold=threshold, max_notional=max_notional, dry_run=dry_run, force=force)
+        except Exception as e:
+            r = {"broker": broker, "status": "error", "reason": str(e)}
+        r["name"] = label
+        results.append(r)
+
+    executed = any(r.get("status") in ("executed", "partial") for r in results)
+    if executed and notify_url:
+        lines = [f"msts-trader multi · {len(results)} accounts"]
+        for r in results:
+            lines.append(f"  {r.get('name')}: {r.get('status')} ({r.get('sent', 0)} sent, {r.get('failed', 0)} failed)")
+        notifications.notify("\n".join(lines), notify_url=notify_url)
+
+    if json_out:
+        print(json.dumps({"accounts": results}, default=str))
+        if any(r.get("status") in ("error", "blocked", "partial") for r in results):
+            sys.exit(1)
+        return
+
+    table = Table(show_header=True, header_style="bold", title="Multi-account rebalance")
+    table.add_column("Account")
+    table.add_column("Broker")
+    table.add_column("Status")
+    table.add_column("Orders", justify="right")
+    table.add_column("Sent", justify="right")
+    table.add_column("Failed", justify="right")
+    for r in results:
+        st = r.get("status", "?")
+        color = "green" if st in ("executed", "dry-run", "nothing-to-do") else "yellow" if st in ("duplicate", "partial") else "red"
+        detail = f" {r['reason']}" if r.get("reason") else ""
+        table.add_row(r.get("name", "?"), r.get("broker", "—"), f"[{color}]{st}[/{color}]{detail}", str(r.get("orders", "—")), str(r.get("sent", "—")), str(r.get("failed", "—")))
+    c.print(table)
+    if any(r.get("status") in ("error", "blocked", "partial") for r in results):
+        sys.exit(1)
+
+
 @main.command()
 @_BROKER_OPT
 @click.option("--creds-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Load credentials from a file first.")

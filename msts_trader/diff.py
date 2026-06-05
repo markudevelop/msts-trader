@@ -147,7 +147,7 @@ def build_preview(
     if gross_buys > buying_power:
         warnings.append(
             f"Gross buys ${gross_buys:,.0f} exceed buying power ${buying_power:,.0f} — "
-            f"Tastytrade BP pre-flight may scale down at submit."
+            f"the broker's pre-flight may scale orders down at submit."
         )
 
     rows.sort(key=lambda r: (r.order is None, -abs(r.delta_dollars)))

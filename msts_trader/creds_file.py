@@ -84,15 +84,16 @@ def parse(text: str) -> dict[str, str]:
     return out
 
 
-def broker_kwargs_from_env(broker: str) -> dict | None:
-    """Build `make()` kwargs for a broker from environment variables.
+def broker_kwargs(broker: str, get) -> dict | None:
+    """Build `make()` kwargs for a broker from a value getter.
 
-    Returns the kwargs dict if the required vars are present, else None
-    (so the caller can fall back to the OS keychain). This is what makes
-    fully headless runs possible: set the env (or load a --creds-file)
-    and rebalance without ever running an interactive `login`.
+    `get(name)` returns the value for an env-style key (TT_PROVIDER_SECRET,
+    APCA_API_KEY_ID, ...) or None. Returns the kwargs dict if the required
+    keys are present, else None. The getter abstraction lets us source
+    from os.environ (headless) OR from a per-account mapping (multi),
+    without leaking one account's secrets into another's.
     """
-    e = env_value
+    e = get
     if broker == "tastytrade":
         ps, rt = e("TT_PROVIDER_SECRET"), e("TT_REFRESH_TOKEN")
         if ps and rt:
@@ -133,6 +134,35 @@ def broker_kwargs_from_env(broker: str) -> dict | None:
             return {"starting_cash": sc}
         return None
     return None
+
+
+def broker_kwargs_from_env(broker: str) -> dict | None:
+    """Build `make()` kwargs for a broker from environment variables.
+
+    Returns the kwargs dict if the required vars are present, else None
+    (so the caller can fall back to the OS keychain). This is what makes
+    fully headless runs possible: set the env (or load a --creds-file)
+    and rebalance without ever running an interactive `login`.
+    """
+    return broker_kwargs(broker, env_value)
+
+
+def broker_kwargs_from_file(broker: str, path: str | Path) -> dict | None:
+    """Build `make()` kwargs for one broker from a single creds file.
+
+    Values come from the file first, with env as a fallback for any key
+    the file omits. Isolated per call — no os.environ mutation — so
+    several accounts can be built in one process without cross-leakage.
+    """
+    p = Path(os.path.expanduser(str(path)))
+    if not p.exists():
+        raise CredsFileError(f"creds file not found: {p}")
+    parsed = parse(p.read_text(encoding="utf-8"))
+
+    def get(name: str):
+        return parsed.get(name) or env_value(name)
+
+    return broker_kwargs(broker, get)
 
 
 def load_into_env(path: str | Path, *, overwrite: bool = False) -> list[str]:

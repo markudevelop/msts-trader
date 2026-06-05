@@ -102,6 +102,49 @@ def test_status_json_paper(tmp_path, monkeypatch):
     assert payload["positions"] == []
 
 
+def test_multi_dry_run_two_paper_accounts(tmp_path, monkeypatch):
+    import json as _json
+    from decimal import Decimal
+
+    from msts_trader.brokers import paper
+
+    monkeypatch.setattr(paper, "STATE_PATH", tmp_path / "paper_state.json")
+    # seed quotes so the paper book can size orders
+    p = paper.Paper(starting_cash="50000")
+    p.set_quote("SPY", Decimal("500"))
+    p.set_quote("SHV", Decimal("110"))
+
+    a = tmp_path / "a.env"
+    a.write_text("PAPER_STARTING_CASH=50000\n")
+    b = tmp_path / "b.env"
+    b.write_text("PAPER_STARTING_CASH=50000\n")
+    cfg = tmp_path / "multi.toml"
+    cfg.write_text(
+        f'threshold = 0.04\n'
+        f'[[account]]\nname = "a"\nbroker = "paper"\ncreds_file = "{a}"\n'
+        f'[[account]]\nname = "b"\nbroker = "paper"\ncreds_file = "{b}"\n'
+    )
+    csv = tmp_path / "t.csv"
+    csv.write_text("ticker,weight\nSPY,0.6\nSHV,0.4\n")
+
+    r = CliRunner().invoke(main, ["multi", "--config", str(cfg), "--csv-file", str(csv), "--dry-run", "--json"])
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.output.strip().splitlines()[-1])
+    assert len(payload["accounts"]) == 2
+    assert all(acct["status"] == "dry-run" for acct in payload["accounts"])
+    assert {acct["name"] for acct in payload["accounts"]} == {"a", "b"}
+
+
+def test_multi_requires_yes_to_execute(tmp_path):
+    cfg = tmp_path / "multi.toml"
+    cfg.write_text('[[account]]\nname = "a"\nbroker = "paper"\n')
+    csv = tmp_path / "t.csv"
+    csv.write_text("ticker,weight\nSPY,1.0\n")
+    r = CliRunner().invoke(main, ["multi", "--config", str(cfg), "--csv-file", str(csv)])
+    assert r.exit_code != 0
+    assert "without --yes" in r.output.lower()
+
+
 def test_paper_reset_clears_book(tmp_path, monkeypatch):
     from msts_trader.brokers import paper
 

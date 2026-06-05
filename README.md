@@ -319,6 +319,41 @@ Ready-to-use templates are in [`examples/`](examples/):
 The market-hours guard still applies: a headless run outside US regular
 hours exits without trading, so a daily schedule is safe.
 
+## Multiple accounts
+
+Run the same target weights across several accounts in one pass with the
+`multi` command and a TOML config that lists each account's broker and
+creds file:
+
+```toml
+# multi-account.toml
+csv_url = "https://example.com/weights.csv"
+threshold = 0.04
+max_notional = 60000
+
+[[account]]
+name = "tasty-main"
+broker = "tastytrade"
+creds_file = "~/.msts-trader/tasty.json"
+
+[[account]]
+name = "alpaca-live"
+broker = "alpaca"
+creds_file = "~/.msts-trader/alpaca.json"
+```
+
+```bash
+msts-trader multi --config multi-account.toml --dry-run    # preview all
+msts-trader multi --config multi-account.toml --yes        # execute all
+msts-trader multi --config multi-account.toml --json --yes # machine-readable
+```
+
+Accounts run sequentially; each gets its own credentials (no cross-leak),
+the same idempotency + safety checks as a single run, and a combined
+summary at the end. `multi` never prompts — `--yes` is required to
+execute, `--dry-run` to preview. See
+[`examples/multi-account.toml`](examples/multi-account.toml).
+
 ## Leveraged weights
 
 Target weights are fractions of your account NAV. They **can sum to more
@@ -354,7 +389,6 @@ Two things to know for a **fresh account**:
   09:30–16:00 ET (crypto via Hyperliquid trades 24/7).
 - Shorting. Negative weights are rejected.
 - Options or futures.
-- Multi-account in one command (run it once per account / creds-file).
 - Active stop management (Hydra/Fusion-style watchers).
 - Scheduling itself (use cron / GitHub Actions — see
   [Headless](#headless--automated-cron-github-actions)).

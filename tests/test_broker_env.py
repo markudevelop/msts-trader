@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from msts_trader.creds_file import broker_kwargs_from_env
+from msts_trader.creds_file import broker_kwargs_from_env, broker_kwargs_from_file
 
 TT = ("TT_PROVIDER_SECRET", "TT_REFRESH_TOKEN", "TT_ACCOUNT_ID")
 ALP = ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "APCA_PAPER")
@@ -87,3 +87,23 @@ def test_strips_quotes(monkeypatch):
     monkeypatch.setenv("TT_REFRESH_TOKEN", "'rt'")
     out = broker_kwargs_from_env("tastytrade")
     assert out["provider_secret"] == "ps" and out["refresh_token"] == "rt"
+
+
+def test_from_file_isolated(tmp_path, monkeypatch):
+    # File values build the kwargs; no os.environ mutation, no cross-leak.
+    for v in TT:
+        monkeypatch.delenv(v, raising=False)
+    f = tmp_path / "a.env"
+    f.write_text("TT_PROVIDER_SECRET=ps1\nTT_REFRESH_TOKEN=rt1\nTT_ACCOUNT_ID=acc1\n")
+    out = broker_kwargs_from_file("tastytrade", f)
+    assert out == {"provider_secret": "ps1", "refresh_token": "rt1", "account_id": "acc1"}
+    import os
+    assert "TT_PROVIDER_SECRET" not in os.environ  # not leaked into the process env
+
+
+def test_from_file_falls_back_to_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("TT_ACCOUNT_ID", "from-env")
+    f = tmp_path / "a.env"
+    f.write_text("TT_PROVIDER_SECRET=ps\nTT_REFRESH_TOKEN=rt\n")  # no account id in file
+    out = broker_kwargs_from_file("tastytrade", f)
+    assert out["account_id"] == "from-env"

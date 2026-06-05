@@ -12,6 +12,28 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.6.0] — 2026-06-05
+
+### Added
+- **Multi-account: `multi` command.** Run the same target weights across
+  several accounts in one pass, driven by a TOML config with `[[account]]`
+  tables (each naming a broker + creds file). Accounts run sequentially
+  with isolated credentials (no cross-leak via env), the same
+  idempotency + safety checks as a single run, and a combined table/JSON
+  summary. `--yes` required to execute, `--dry-run` to preview.
+  See `examples/multi-account.toml`.
+- `creds_file.broker_kwargs(broker, get)` + `broker_kwargs_from_file`:
+  build broker kwargs from an isolated per-account mapping (expands `~`),
+  so several accounts can be constructed in one process safely.
+
+### Fixed
+- The buying-power overrun warning hardcoded "Tastytrade"; it's now
+  broker-agnostic ("the broker's pre-flight may scale orders down").
+
+### Tests
+- 200 total (+4): multi dry-run across two accounts, `--yes` requirement,
+  isolated file-based creds + env fallback.
+
 ## [0.5.3] — 2026-06-05
 
 ### Fixed
@@ -335,7 +357,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/markudevelop/msts-trader/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/markudevelop/msts-trader/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/markudevelop/msts-trader/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/markudevelop/msts-trader/compare/v0.5.0...v0.5.1
