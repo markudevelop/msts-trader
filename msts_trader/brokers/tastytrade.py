@@ -10,7 +10,6 @@ from decimal import Decimal
 from typing import Iterable
 
 from tastytrade import Account, Session
-from tastytrade.instruments import Equity
 from tastytrade.order import (
     InstrumentType,
     Leg,
@@ -67,30 +66,56 @@ class Tastytrade:
         return out
 
     def quote(self, tickers: Iterable[str]) -> dict[str, Decimal]:
-        tickers = list({t.upper() for t in tickers})
+        """Last/mark price per ticker, batched via the SDK's market-data API."""
+        symbols = sorted({t.upper() for t in tickers})
+        if not symbols:
+            return {}
+        try:
+            from tastytrade.market_data import get_market_data_by_type  # type: ignore
+
+            rows = get_market_data_by_type(self._sess, equities=symbols)
+        except Exception:
+            # Fall back to one-by-one if the batch API isn't available
+            return self._quote_single(symbols)
+
         out: dict[str, Decimal] = {}
-        for t in tickers:
-            try:
-                Equity.get(self._sess, t)
-                px = self._last_price(t)
-                if px is not None:
-                    out[t] = px
-            except Exception:
+        for row in rows or []:
+            sym = getattr(row, "symbol", None)
+            if not sym:
                 continue
+            px = self._extract_price(row)
+            if px is not None:
+                out[sym] = px
         return out
 
-    def _last_price(self, ticker: str) -> Decimal | None:
+    def _quote_single(self, symbols: list[str]) -> dict[str, Decimal]:
         try:
             from tastytrade.market_data import get_market_data  # type: ignore
-
-            md = get_market_data(self._sess, [ticker], instrument_type=InstrumentType.EQUITY)
-            for row in md:
-                if getattr(row, "symbol", None) == ticker:
-                    px = getattr(row, "last", None) or getattr(row, "mark", None) or getattr(row, "mid", None)
-                    if px is not None:
-                        return Decimal(str(px))
         except Exception:
-            pass
+            return {}
+        out: dict[str, Decimal] = {}
+        for sym in symbols:
+            try:
+                md = get_market_data(self._sess, sym, InstrumentType.EQUITY)
+            except Exception:
+                continue
+            px = self._extract_price(md) if md else None
+            if px is not None:
+                out[sym] = px
+        return out
+
+    @staticmethod
+    def _extract_price(row) -> Decimal | None:
+        for attr in ("last", "mark", "mid", "close"):
+            v = getattr(row, attr, None)
+            if v is None:
+                continue
+            try:
+                d = Decimal(str(v))
+            except Exception:
+                continue
+            if d > 0:
+                return d
         return None
 
     def place_market(self, order: Order, dry_run: bool = False) -> dict:

@@ -10,13 +10,14 @@ Subcommands:
 """
 from __future__ import annotations
 
+import os
 import sys
 from decimal import Decimal
 
 import click
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm, Prompt
+from rich.prompt import Confirm  # used for the post-preview Y/N (works fine in all terminals)
 from rich.table import Table
 
 from . import __version__, fill_log, keychain
@@ -25,6 +26,7 @@ from .csv_parser import CSVParseError, parse_csv
 from .diff import build_preview
 from .market_hours import market_status
 from .models import Side
+from .prompts import ask_secret, ask_text, ask_yes_no
 
 c = Console()
 
@@ -35,6 +37,14 @@ _BROKER_OPT = click.option(
     default=None,
     help=f"Broker name. Supported: {', '.join(SUPPORTED)}",
 )
+
+
+def _prompt_choice(prompt: str, choices: list[str], default: str) -> str:
+    while True:
+        val = ask_text(prompt, default=default, allow_blank=False).lower().strip()
+        if val in choices:
+            return val
+        c.print(f"[red]invalid choice. options: {', '.join(choices)}[/red]")
 
 
 def _resolve_broker_name(ctx: click.Context, explicit: str | None) -> str:
@@ -81,10 +91,10 @@ def main(ctx: click.Context, broker: str | None) -> None:
 @click.pass_context
 def login(ctx: click.Context, broker_opt: str | None) -> None:
     """Store broker creds in OS keychain."""
-    broker = broker_opt or ctx.obj.get("broker") or Prompt.ask(
-        f"broker [{'|'.join(SUPPORTED)}]",
-        default="tastytrade",
-        choices=list(SUPPORTED),
+    broker = (
+        broker_opt
+        or ctx.obj.get("broker")
+        or _prompt_choice(f"broker [{'|'.join(SUPPORTED)}]", choices=list(SUPPORTED), default="tastytrade")
     )
     if broker == "tastytrade":
         _login_tastytrade()
@@ -109,13 +119,16 @@ def _login_tastytrade() -> None:
             "2. Create an OAuth application → copy [bold]provider secret[/bold]\n"
             "3. Run their authorization flow → copy [bold]refresh token[/bold]\n"
             "4. Find your [bold]account number[/bold] in Tastytrade dashboard "
-            "(or leave blank to auto-pick first account)",
+            "(or leave blank to auto-pick first account)\n\n"
+            "[dim]Scripted setup: export TT_PROVIDER_SECRET / TT_REFRESH_TOKEN / "
+            "TT_ACCOUNT_ID in your shell, then run --from-env.[/dim]",
             border_style="cyan",
         )
     )
-    provider_secret = Prompt.ask("provider secret", password=True)
-    refresh_token = Prompt.ask("refresh token", password=True)
-    account_id = Prompt.ask("account id (optional)", default="").strip() or None
+    provider_secret = ask_secret("provider secret", env_var="TT_PROVIDER_SECRET")
+    refresh_token = ask_secret("refresh token", env_var="TT_REFRESH_TOKEN")
+    account_id = os.environ.get("TT_ACCOUNT_ID") or ask_text("account id (optional)", default="", allow_blank=True)
+    account_id = account_id.strip() or None
 
     try:
         b = make("tastytrade", provider_secret=provider_secret, refresh_token=refresh_token, account_id=account_id)
@@ -140,13 +153,19 @@ def _login_alpaca() -> None:
             "1. Sign in at [cyan]https://alpaca.markets[/cyan] (or paper dashboard)\n"
             "2. Generate an API key pair under your account settings\n"
             "3. Paste the key id and secret below\n"
-            "4. Choose paper or live mode",
+            "4. Choose paper or live mode\n\n"
+            "[dim]Scripted setup: export APCA_API_KEY_ID / APCA_API_SECRET_KEY "
+            "/ APCA_PAPER, then run --from-env.[/dim]",
             border_style="cyan",
         )
     )
-    api_key = Prompt.ask("api key id", password=True)
-    secret_key = Prompt.ask("secret key", password=True)
-    paper = Confirm.ask("paper account?", default=True)
+    api_key = ask_secret("api key id", env_var="APCA_API_KEY_ID")
+    secret_key = ask_secret("secret key", env_var="APCA_API_SECRET_KEY")
+    env_paper = os.environ.get("APCA_PAPER")
+    if env_paper is not None:
+        paper = env_paper.lower() in {"1", "true", "yes", "paper"}
+    else:
+        paper = ask_yes_no("paper account?", default=True)
 
     try:
         b = make("alpaca", api_key=api_key, secret_key=secret_key, paper=paper)
@@ -173,10 +192,10 @@ def _login_ibkr() -> None:
             border_style="cyan",
         )
     )
-    host = Prompt.ask("host", default="127.0.0.1")
-    port = int(Prompt.ask("port", default="4002"))
-    client_id = int(Prompt.ask("client id (any free int)", default="17"))
-    account_id = Prompt.ask("account id (optional)", default="").strip() or None
+    host = os.environ.get("IBKR_HOST") or ask_text("host", default="127.0.0.1")
+    port = int(os.environ.get("IBKR_PORT") or ask_text("port", default="4002"))
+    client_id = int(os.environ.get("IBKR_CLIENT_ID") or ask_text("client id (any free int)", default="17"))
+    account_id = (os.environ.get("IBKR_ACCOUNT_ID") or ask_text("account id (optional)", default="", allow_blank=True)).strip() or None
 
     try:
         b = make("ibkr", host=host, port=port, client_id=client_id, account_id=account_id)
@@ -202,9 +221,9 @@ def _login_schwab() -> None:
             border_style="cyan",
         )
     )
-    app_key = Prompt.ask("app key", password=True)
-    app_secret = Prompt.ask("app secret", password=True)
-    callback_url = Prompt.ask("callback url", default="https://127.0.0.1:8182/")
+    app_key = ask_secret("app key", env_var="SCHWAB_APP_KEY")
+    app_secret = ask_secret("app secret", env_var="SCHWAB_APP_SECRET")
+    callback_url = os.environ.get("SCHWAB_CALLBACK_URL") or ask_text("callback url", default="https://127.0.0.1:8182/")
 
     try:
         b = make("schwab", app_key=app_key, app_secret=app_secret, callback_url=callback_url)
@@ -219,7 +238,7 @@ def _login_schwab() -> None:
 
 
 def _login_paper() -> None:
-    starting = Prompt.ask("starting cash", default="100000")
+    starting = os.environ.get("PAPER_STARTING_CASH") or ask_text("starting cash", default="100000")
     keychain.save("paper", {"starting_cash": starting})
     keychain.set_default("paper")
     b = make("paper", starting_cash=Decimal(starting))
@@ -234,7 +253,7 @@ def logout(ctx: click.Context, broker_opt: str | None) -> None:
     """Clear stored creds for a broker."""
     broker = broker_opt or ctx.obj.get("broker")
     if not broker:
-        broker = Prompt.ask("broker to forget", choices=list(SUPPORTED))
+        broker = _prompt_choice("broker to forget", choices=list(SUPPORTED), default=SUPPORTED[0])
     keychain.clear(broker)
     if keychain.get_default() == broker:
         keychain.clear_default()

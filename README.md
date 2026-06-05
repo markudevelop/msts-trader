@@ -221,6 +221,38 @@ msts-trader --version
 - Active stop management (Hydra/Fusion-style watchers).
 - Automatic CSV polling. You paste each rebalance manually.
 
+## Troubleshooting
+
+### Can't paste or type during `msts-trader login` in VS Code / Cursor?
+
+VS Code and Cursor's integrated terminals don't always forward input to
+hidden-password prompts (Python's `getpass` returns immediately without
+reading). msts-trader detects this and **falls back to visible input
+with a warning**, so you can still paste your secrets — they'll just
+be displayed as you type.
+
+If you'd rather not have them displayed at all, three workarounds:
+
+1. **Run from a real terminal.** Open Terminal.app (macOS), iTerm, or
+   Windows Terminal and run `msts-trader login --broker tastytrade`
+   there. Hidden input works correctly outside VS Code.
+2. **Use environment variables** to skip the prompts entirely:
+   ```bash
+   export TT_PROVIDER_SECRET="..."
+   export TT_REFRESH_TOKEN="..."
+   export TT_ACCOUNT_ID="..."
+   msts-trader login --broker tastytrade
+   ```
+   Equivalents for other brokers: `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`
+   / `APCA_PAPER` (Alpaca), `IBKR_HOST` / `IBKR_PORT` / `IBKR_CLIENT_ID`
+   / `IBKR_ACCOUNT_ID` (IBKR), `SCHWAB_APP_KEY` / `SCHWAB_APP_SECRET`
+   / `SCHWAB_CALLBACK_URL` (Schwab), `PAPER_STARTING_CASH` (paper).
+3. **Pipe the values in.** When stdin isn't a TTY, msts-trader reads
+   each prompt as a single line, so:
+   ```bash
+   printf '%s\n%s\n%s\n' "$SECRET" "$TOKEN" "$ACCT" | msts-trader login --broker tastytrade
+   ```
+
 ## Security
 
 - Your broker credentials live only in your OS keychain on your own
