@@ -52,3 +52,44 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create a release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Extract changelog section for this tag
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Pull the section for this version out of CHANGELOG.md (between
+          # its heading and the next "## [" heading). Fall back to a generic
+          # message if the section isn't found.
+          if [ -f CHANGELOG.md ]; then
+            awk -v ver="## [$VERSION]" '
+              $0 ~ ver {capture=1; next}
+              /^## \[/ {if (capture) exit}
+              capture {print}
+            ' CHANGELOG.md > _notes.md
+          fi
+          if [ ! -s _notes.md ]; then
+            echo "See CHANGELOG.md for details." > _notes.md
+          fi
+          echo "notes_file=_notes.md" >> "$GITHUB_OUTPUT"
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "${{ steps.notes.outputs.notes_file }}" \
+            dist/*

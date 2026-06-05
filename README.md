@@ -324,6 +324,12 @@ responsible for the CSV you paste and the rebalance you confirm. Past
 performance of any signal source is not indicative of future results.
 The author makes no warranty of any kind; use at your own risk.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full version history. Each
+released tag also has a [GitHub Release](https://github.com/markudevelop/msts-trader/releases)
+with the same notes and the built wheel attached.
+
 ## Development
 
 ```bash
