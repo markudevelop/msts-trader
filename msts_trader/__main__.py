@@ -136,7 +136,15 @@ def _fetch_url_or_exit(url: str) -> str:
         sys.exit(1)
     try:
         with urllib.request.urlopen(url, timeout=20) as resp:  # noqa: S310 (scheme checked above)
-            return resp.read().decode("utf-8")
+            # Cap at 5 MB — a weights CSV is tiny; this guards against a
+            # misconfigured URL streaming something huge.
+            data = resp.read(5 * 1024 * 1024 + 1)
+        if len(data) > 5 * 1024 * 1024:
+            c.print(f"[red]✗ {url} returned more than 5 MB — refusing (is this really a CSV?).[/red]")
+            sys.exit(1)
+        return data.decode("utf-8")
+    except SystemExit:
+        raise
     except Exception as e:
         c.print(f"[red]✗ could not fetch {url}:[/red] {e}")
         sys.exit(1)
@@ -210,6 +218,8 @@ def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None) ->
         _login_ibkr()
     elif broker == "schwab":
         _login_schwab()
+    elif broker == "hyperliquid":
+        _login_hyperliquid()
     elif broker == "paper":
         _login_paper()
     else:
@@ -343,6 +353,35 @@ def _login_schwab() -> None:
     keychain.save("schwab", {"app_key": app_key, "app_secret": app_secret, "callback_url": callback_url, "account_hash": b._account_hash})
     keychain.set_default("schwab")
     c.print(f"[green]✓ stored.[/green] schwab account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
+
+
+def _login_hyperliquid() -> None:
+    c.print(
+        Panel.fit(
+            "[bold]Hyperliquid setup (experimental — crypto perps)[/bold]\n\n"
+            "1. Create an API wallet at [cyan]https://app.hyperliquid.xyz/API[/cyan]\n"
+            "2. Copy its [bold]private key[/bold] (hex)\n"
+            "3. Optionally provide your main [bold]account address[/bold]\n"
+            "   (defaults to the API wallet's address)\n\n"
+            "[yellow]Test on testnet first (answer yes below) with tiny size.[/yellow]",
+            border_style="cyan",
+        )
+    )
+    private_key = ask_secret("private key", env_var="HL_PRIVATE_KEY")
+    account_address = (env_value("HL_ACCOUNT_ADDRESS") or ask_text("account address (optional)", default="", allow_blank=True)).strip() or None
+    raw = env_value("HL_TESTNET")
+    testnet = raw.lower() in {"1", "true", "yes"} if raw is not None else ask_yes_no("use testnet?", default=True)
+
+    try:
+        b = make("hyperliquid", private_key=private_key, account_address=account_address, testnet=testnet)
+        bal = b.balances()
+    except Exception as e:
+        c.print(f"[red]✗ {explain_login_error('hyperliquid', e)}[/red]")
+        sys.exit(1)
+
+    keychain.save("hyperliquid", {"private_key": private_key, "account_address": account_address, "testnet": testnet})
+    keychain.set_default("hyperliquid")
+    c.print(f"[green]✓ stored.[/green] hyperliquid {'(testnet)' if testnet else '(mainnet)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
 
 
 def _login_paper() -> None:
@@ -555,7 +594,8 @@ def rebalance(
             print(json.dumps({"error": "refusing to execute without --yes in JSON/non-interactive mode"}))
             sys.exit(1)
         sent, failed, results = _execute(b, preview)
-        runstate.record(fp)
+        if sent > 0 and failed == 0:
+            runstate.record(fp)  # only mark done on clean success, so a partial run can re-complete
         notifications.notify(
             notifications.format_summary(b.name, b.account_id, sent, failed, preview.orders),
             notify_url=notify_url,
@@ -584,7 +624,8 @@ def rebalance(
             sys.exit(0)
 
     sent, failed, _ = _execute(b, preview)
-    runstate.record(fp)
+    if sent > 0 and failed == 0:
+        runstate.record(fp)  # only mark done on clean success, so a partial run can re-complete
 
     # Notify (best-effort, never raises).
     summary = notifications.format_summary(b.name, b.account_id, sent, failed, preview.orders)
@@ -647,7 +688,11 @@ def _execute(broker, preview):
     for i, o in enumerate(preview.orders, 1):
         say(f"[{i}/{total}] {o.ticker} {o.side.value} {o.quantity:.2f} @ MKT ...", end=" ")
         try:
-            result = retry.with_retry(lambda o=o: broker.place_market(o, dry_run=False))
+            # NOT retried: a market order is not idempotent. If submission
+            # times out after the broker accepted it, a retry would double
+            # the fill. On a transient error we report and move on; the
+            # drift gate self-corrects on the next run.
+            result = broker.place_market(o, dry_run=False)
         except Exception as e:
             result = {"status": "error", "reason": str(e), "ticker": o.ticker}
         status = result.get("status", "?")

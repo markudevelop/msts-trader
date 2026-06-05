@@ -12,6 +12,29 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.5.1] — 2026-06-05
+
+Production-readiness audit fixes.
+
+### Fixed
+- **Market orders are no longer retried** (important). v0.5.0 wrapped
+  `place_market` in the retry helper — but a market order is not
+  idempotent, so a transient error *after* the broker accepted it would
+  double the fill. Orders now submit exactly once; reads
+  (balances/positions/quote) keep their retry. The drift gate
+  self-corrects a missed fill on the next run.
+- **Idempotency records only on clean success.** A run where some/all
+  orders failed no longer marks the targets "done for today", so a
+  re-run can complete the remaining orders (previously blocked as a
+  duplicate unless `--force`).
+- **`login --broker hyperliquid`** now works (was "unknown broker" —
+  Hyperliquid was env/creds-file only). Added the login wizard.
+- **`--csv-url` size cap** (5 MB) so a misconfigured URL can't stream
+  something huge into the parser.
+
+### Tests
+- 195 total. New: place_market-not-retried safety test.
+
 ## [0.5.0] — 2026-06-05
 
 ### Added
@@ -291,7 +314,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/markudevelop/msts-trader/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/markudevelop/msts-trader/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/markudevelop/msts-trader/compare/v0.3.8...v0.4.0
 [0.3.8]: https://github.com/markudevelop/msts-trader/compare/v0.3.7...v0.3.8
