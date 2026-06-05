@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "msts-trader"
+version = "0.1.0"
+description = "Paste a target-weights CSV, preview the rebalance, execute it on your Tastytrade account."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+authors = [{ name = "markudevelop" }]
+keywords = ["trading", "tastytrade", "rebalance", "portfolio", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "tastytrade==11.0.4",
+    "click>=8.1",
+    "rich>=13.7",
+    "keyring>=24",
+    "pydantic>=2.5",
+    "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+msts-trader = "msts_trader.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/markudevelop/msts-trader"
+Issues = "https://github.com/markudevelop/msts-trader/issues"
+
+[tool.setuptools.packages.find]
+include = ["msts_trader*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
