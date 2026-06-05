@@ -10,7 +10,6 @@ Subcommands:
 """
 from __future__ import annotations
 
-import os
 import sys
 from decimal import Decimal
 
@@ -22,11 +21,13 @@ from rich.table import Table
 
 from . import __version__, fill_log, keychain
 from .brokers import SUPPORTED, BrokerError, make
+from .creds_file import CredsFileError, load_into_env
 from .csv_parser import CSVParseError, parse_csv
 from .diff import build_preview
+from .login_errors import explain_login_error
 from .market_hours import market_status
 from .models import Side
-from .prompts import ask_secret, ask_text, ask_yes_no
+from .prompts import ask_secret, ask_text, ask_yes_no, env_value
 
 c = Console()
 
@@ -88,9 +89,23 @@ def main(ctx: click.Context, broker: str | None) -> None:
 
 @main.command()
 @_BROKER_OPT
+@click.option(
+    "--creds-file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Load credentials from a JSON or KEY=VALUE file instead of typing them.",
+)
 @click.pass_context
-def login(ctx: click.Context, broker_opt: str | None) -> None:
+def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -> None:
     """Store broker creds in OS keychain."""
+    if creds_file:
+        try:
+            keys = load_into_env(creds_file)
+        except CredsFileError as e:
+            c.print(f"[red]✗ could not read creds file:[/red] {e}")
+            sys.exit(1)
+        c.print(f"[green]✓ loaded {len(keys)} value(s) from {creds_file}[/green]")
+
     broker = (
         broker_opt
         or ctx.obj.get("broker")
@@ -120,21 +135,22 @@ def _login_tastytrade() -> None:
             "3. Run their authorization flow → copy [bold]refresh token[/bold]\n"
             "4. Find your [bold]account number[/bold] in Tastytrade dashboard "
             "(or leave blank to auto-pick first account)\n\n"
-            "[dim]Scripted setup: export TT_PROVIDER_SECRET / TT_REFRESH_TOKEN / "
-            "TT_ACCOUNT_ID in your shell, then run --from-env.[/dim]",
+            "[dim]Avoid typing: put TT_PROVIDER_SECRET / TT_REFRESH_TOKEN / "
+            "TT_ACCOUNT_ID in a file and run with --creds-file, or export them "
+            "as environment variables first.[/dim]",
             border_style="cyan",
         )
     )
     provider_secret = ask_secret("provider secret", env_var="TT_PROVIDER_SECRET")
     refresh_token = ask_secret("refresh token", env_var="TT_REFRESH_TOKEN")
-    account_id = os.environ.get("TT_ACCOUNT_ID") or ask_text("account id (optional)", default="", allow_blank=True)
+    account_id = env_value("TT_ACCOUNT_ID") or ask_text("account id (optional)", default="", allow_blank=True)
     account_id = account_id.strip() or None
 
     try:
         b = make("tastytrade", provider_secret=provider_secret, refresh_token=refresh_token, account_id=account_id)
         bal = b.balances()
     except Exception as e:
-        c.print(f"[red]✗ login failed:[/red] {e}")
+        c.print(f"[red]✗ {explain_login_error('tastytrade', e)}[/red]")
         sys.exit(1)
 
     keychain.save("tastytrade", {
@@ -154,14 +170,15 @@ def _login_alpaca() -> None:
             "2. Generate an API key pair under your account settings\n"
             "3. Paste the key id and secret below\n"
             "4. Choose paper or live mode\n\n"
-            "[dim]Scripted setup: export APCA_API_KEY_ID / APCA_API_SECRET_KEY "
-            "/ APCA_PAPER, then run --from-env.[/dim]",
+            "[dim]Avoid typing: put APCA_API_KEY_ID / APCA_API_SECRET_KEY / "
+            "APCA_PAPER in a file and run with --creds-file, or export them "
+            "as environment variables first.[/dim]",
             border_style="cyan",
         )
     )
     api_key = ask_secret("api key id", env_var="APCA_API_KEY_ID")
     secret_key = ask_secret("secret key", env_var="APCA_API_SECRET_KEY")
-    env_paper = os.environ.get("APCA_PAPER")
+    env_paper = env_value("APCA_PAPER")
     if env_paper is not None:
         paper = env_paper.lower() in {"1", "true", "yes", "paper"}
     else:
@@ -171,7 +188,7 @@ def _login_alpaca() -> None:
         b = make("alpaca", api_key=api_key, secret_key=secret_key, paper=paper)
         bal = b.balances()
     except Exception as e:
-        c.print(f"[red]✗ login failed:[/red] {e}")
+        c.print(f"[red]✗ {explain_login_error('alpaca', e)}[/red]")
         sys.exit(1)
 
     keychain.save("alpaca", {"api_key": api_key, "secret_key": secret_key, "paper": paper})
@@ -192,16 +209,16 @@ def _login_ibkr() -> None:
             border_style="cyan",
         )
     )
-    host = os.environ.get("IBKR_HOST") or ask_text("host", default="127.0.0.1")
-    port = int(os.environ.get("IBKR_PORT") or ask_text("port", default="4002"))
-    client_id = int(os.environ.get("IBKR_CLIENT_ID") or ask_text("client id (any free int)", default="17"))
-    account_id = (os.environ.get("IBKR_ACCOUNT_ID") or ask_text("account id (optional)", default="", allow_blank=True)).strip() or None
+    host = env_value("IBKR_HOST") or ask_text("host", default="127.0.0.1")
+    port = int(env_value("IBKR_PORT") or ask_text("port", default="4002"))
+    client_id = int(env_value("IBKR_CLIENT_ID") or ask_text("client id (any free int)", default="17"))
+    account_id = (env_value("IBKR_ACCOUNT_ID") or ask_text("account id (optional)", default="", allow_blank=True)).strip() or None
 
     try:
         b = make("ibkr", host=host, port=port, client_id=client_id, account_id=account_id)
         bal = b.balances()
     except Exception as e:
-        c.print(f"[red]✗ login failed:[/red] {e}")
+        c.print(f"[red]✗ {explain_login_error('ibkr', e)}[/red]")
         sys.exit(1)
 
     keychain.save("ibkr", {"host": host, "port": port, "client_id": client_id, "account_id": account_id or b.account_id})
@@ -223,13 +240,13 @@ def _login_schwab() -> None:
     )
     app_key = ask_secret("app key", env_var="SCHWAB_APP_KEY")
     app_secret = ask_secret("app secret", env_var="SCHWAB_APP_SECRET")
-    callback_url = os.environ.get("SCHWAB_CALLBACK_URL") or ask_text("callback url", default="https://127.0.0.1:8182/")
+    callback_url = env_value("SCHWAB_CALLBACK_URL") or ask_text("callback url", default="https://127.0.0.1:8182/")
 
     try:
         b = make("schwab", app_key=app_key, app_secret=app_secret, callback_url=callback_url)
         bal = b.balances()
     except Exception as e:
-        c.print(f"[red]✗ login failed:[/red] {e}")
+        c.print(f"[red]✗ {explain_login_error('schwab', e)}[/red]")
         sys.exit(1)
 
     keychain.save("schwab", {"app_key": app_key, "app_secret": app_secret, "callback_url": callback_url, "account_hash": b._account_hash})
@@ -238,7 +255,7 @@ def _login_schwab() -> None:
 
 
 def _login_paper() -> None:
-    starting = os.environ.get("PAPER_STARTING_CASH") or ask_text("starting cash", default="100000")
+    starting = env_value("PAPER_STARTING_CASH") or ask_text("starting cash", default="100000")
     keychain.save("paper", {"starting_cash": starting})
     keychain.set_default("paper")
     b = make("paper", starting_cash=Decimal(starting))

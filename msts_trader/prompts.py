@@ -31,6 +31,22 @@ def _is_vscode_like() -> bool:
     )
 
 
+def _is_hidden_input_flaky() -> bool:
+    """Terminals where getpass / hidden input is known to drop paste & typing.
+
+    Covers VS Code / Cursor integrated terminals and Windows Terminal
+    (WT_SESSION), plus any Windows console (getpass on Windows reads via
+    msvcrt and silently swallows pasted input in several configurations).
+    """
+    if _is_vscode_like():
+        return True
+    if os.environ.get("WT_SESSION"):
+        return True
+    if sys.platform.startswith("win"):
+        return True
+    return False
+
+
 def _is_interactive() -> bool:
     try:
         return sys.stdin.isatty() and sys.stdout.isatty()
@@ -58,16 +74,41 @@ def ask_text(prompt: str, default: Optional[str] = None, allow_blank: bool = Tru
             return line
 
 
+def strip_quotes(value: str) -> str:
+    """Strip a single matching pair of surrounding quotes.
+
+    Windows `set VAR="x"` (cmd) captures the quotes into the value, and
+    creds files often quote values too. We don't want quotes inside a
+    secret, so peel one matching pair.
+    """
+    v = value.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+        return v[1:-1]
+    return v
+
+
+def env_value(name: str) -> Optional[str]:
+    """Read an env var, strip surrounding quotes and whitespace.
+
+    Returns None for missing or whitespace-only values.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    cleaned = strip_quotes(raw)
+    return cleaned or None
+
+
 def ask_secret(prompt: str, *, env_var: Optional[str] = None) -> str:
     """Hidden prompt with safe fallback.
 
     If `env_var` is set in the environment, use it directly (no prompt).
     Otherwise try `getpass.getpass`; if that returns empty (the typical
-    VS Code / Cursor failure mode), retry with a visible prompt and warn
-    the user that the input will be displayed.
+    VS Code / Cursor / Windows-Terminal failure mode), retry with a
+    visible prompt and warn the user that the input will be displayed.
     """
     if env_var:
-        val = os.environ.get(env_var)
+        val = env_value(env_var)
         if val:
             return val
 
@@ -76,6 +117,20 @@ def ask_secret(prompt: str, *, env_var: Optional[str] = None) -> str:
         sys.stdout.write(f"{prompt}: ")
         sys.stdout.flush()
         return _read_line()
+
+    # On terminals where hidden input is known to drop paste/typing
+    # (VS Code, Cursor, Windows Terminal, any Windows console), skip the
+    # dead getpass prompt entirely and go straight to visible input so the
+    # user isn't left staring at an unresponsive cursor.
+    if _is_hidden_input_flaky():
+        sys.stderr.write(
+            "\n[notice] this terminal doesn't reliably accept hidden/pasted "
+            "input, so the value will be shown as you type or paste it. "
+            "(Use --creds-file to avoid typing secrets entirely — see the "
+            "README.)\n"
+        )
+        sys.stderr.flush()
+        return ask_text(f"{prompt} (visible)", allow_blank=False)
 
     import getpass  # imported lazily so non-interactive paths don't pay for it
 

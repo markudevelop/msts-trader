@@ -223,35 +223,89 @@ msts-trader --version
 
 ## Troubleshooting
 
-### Can't paste or type during `msts-trader login` in VS Code / Cursor?
+### Can't paste or type during `msts-trader login`?
 
-VS Code and Cursor's integrated terminals don't always forward input to
-hidden-password prompts (Python's `getpass` returns immediately without
-reading). msts-trader detects this and **falls back to visible input
-with a warning**, so you can still paste your secrets — they'll just
-be displayed as you type.
+Some terminals — VS Code, Cursor, and **Windows Terminal / Windows
+consoles** — don't reliably forward input to hidden-password prompts
+(Python's `getpass`). The cursor sits there and nothing registers.
 
-If you'd rather not have them displayed at all, three workarounds:
+msts-trader detects these terminals and switches to **visible input**
+automatically (you'll see a `[notice]`), so you can paste your secret —
+it's just shown on screen as you type. But the cleanest fix is to not
+type secrets at all:
 
-1. **Run from a real terminal.** Open Terminal.app (macOS), iTerm, or
-   Windows Terminal and run `msts-trader login --broker tastytrade`
-   there. Hidden input works correctly outside VS Code.
-2. **Use environment variables** to skip the prompts entirely:
-   ```bash
-   export TT_PROVIDER_SECRET="..."
-   export TT_REFRESH_TOKEN="..."
-   export TT_ACCOUNT_ID="..."
-   msts-trader login --broker tastytrade
-   ```
-   Equivalents for other brokers: `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`
-   / `APCA_PAPER` (Alpaca), `IBKR_HOST` / `IBKR_PORT` / `IBKR_CLIENT_ID`
-   / `IBKR_ACCOUNT_ID` (IBKR), `SCHWAB_APP_KEY` / `SCHWAB_APP_SECRET`
-   / `SCHWAB_CALLBACK_URL` (Schwab), `PAPER_STARTING_CASH` (paper).
-3. **Pipe the values in.** When stdin isn't a TTY, msts-trader reads
-   each prompt as a single line, so:
-   ```bash
-   printf '%s\n%s\n%s\n' "$SECRET" "$TOKEN" "$ACCT" | msts-trader login --broker tastytrade
-   ```
+#### Best: use a credentials file (`--creds-file`)
+
+Create a small file — JSON or `KEY=VALUE` — with your credentials:
+
+`tt_creds.json`
+```json
+{
+  "TT_PROVIDER_SECRET": "your-provider-secret",
+  "TT_REFRESH_TOKEN": "your-refresh-token",
+  "TT_ACCOUNT_ID": "your-account-number"
+}
+```
+
+or `tt_creds.env`
+```
+TT_PROVIDER_SECRET=your-provider-secret
+TT_REFRESH_TOKEN=your-refresh-token
+TT_ACCOUNT_ID=your-account-number
+```
+
+then:
+
+```bash
+msts-trader login --broker tastytrade --creds-file tt_creds.json
+```
+
+No prompts, no terminal quirks, works identically on every OS. Delete
+the file afterwards — the credentials are now in your OS keychain.
+
+Lowercase keys (`provider_secret`, `api_key`, etc.) also work. For
+Alpaca use `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` / `APCA_PAPER`;
+for IBKR `IBKR_HOST` / `IBKR_PORT` / `IBKR_CLIENT_ID`; for Schwab
+`SCHWAB_APP_KEY` / `SCHWAB_APP_SECRET`.
+
+#### Or: set environment variables
+
+Mind the shell — this trips people up:
+
+- **macOS / Linux (bash/zsh):**
+  ```bash
+  export TT_PROVIDER_SECRET="..."
+  export TT_REFRESH_TOKEN="..."
+  export TT_ACCOUNT_ID="..."
+  ```
+- **Windows PowerShell** (the Windows Terminal default — `export` and
+  `set` do NOT work here):
+  ```powershell
+  $env:TT_PROVIDER_SECRET="..."
+  $env:TT_REFRESH_TOKEN="..."
+  $env:TT_ACCOUNT_ID="..."
+  ```
+- **Windows cmd.exe** (do NOT wrap values in quotes — cmd keeps them):
+  ```cmd
+  set TT_PROVIDER_SECRET=...
+  set TT_REFRESH_TOKEN=...
+  set TT_ACCOUNT_ID=...
+  ```
+
+Then run `msts-trader login --broker tastytrade` in the **same** window.
+(msts-trader strips accidental surrounding quotes, but PowerShell vs cmd
+syntax still matters.)
+
+### `login failed: invalid_grant / Grant revoked`
+
+This is Tastytrade telling you the **refresh token is no longer valid** —
+it was regenerated, the OAuth grant was revoked, or it expired from
+inactivity. It is not a bug in msts-trader; the token simply needs to be
+re-minted:
+
+1. https://developer.tastytrade.com → My Apps → your app
+2. Run the OAuth authorization flow again to get a **new refresh token**
+3. `msts-trader login --broker tastytrade` (or `--creds-file`) with the new token
 
 ## Security
 
