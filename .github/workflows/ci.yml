@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: ruff
+        run: ruff check msts_trader
+      - name: import smoke
+        run: |
+          python -c "from msts_trader import tasty, diff, csv_parser, market_hours, models, keychain, fill_log; print('ok')"
+      - name: csv + diff smoke
+        run: |
+          python -c "
+          from decimal import Decimal
+          from msts_trader.csv_parser import parse_csv
+          from msts_trader.diff import build_preview
+          from msts_trader.models import Position
+          t = parse_csv('ticker,weight\nSPY,0.5\nSHV,0.5\n')
+          assert len(t) == 2
+          pos = {'SHV': Position(ticker='SHV', quantity=Decimal('10'), price=Decimal('100'))}
+          q = {'SPY': Decimal('500'), 'SHV': Decimal('110')}
+          p = build_preview(t, pos, Decimal('10000'), Decimal('9000'), Decimal('9500'), q)
+          assert len(p.orders) == 2
+          print('smoke ok')
+          "
+      - name: cli renders
+        run: msts-trader --version

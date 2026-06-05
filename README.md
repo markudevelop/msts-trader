@@ -37,6 +37,14 @@ pip install msts-trader
 
 Python ≥3.11 required.
 
+Install from source (until a PyPI release lands):
+
+```bash
+git clone https://github.com/markudevelop/msts-trader.git
+cd msts-trader
+pip install -e .
+```
+
 ## One-time setup
 
 You need Tastytrade OAuth credentials. **This is your app, not ours** — we never see your keys.
