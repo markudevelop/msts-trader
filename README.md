@@ -36,6 +36,7 @@ Done. tastytrade: sent 4, failed 0
 | Paper       | shipped, tested          | local file                | built-in |
 | Tastytrade  | shipped, **live-tested** | OAuth refresh token       | built-in |
 | Alpaca      | shipped, **live-tested** | API key + secret          | built-in |
+| Tradier     | shipped, beta            | bearer token (REST)       | built-in (free sandbox to test) |
 | IBKR        | shipped, **live-tested** | TWS / IB Gateway socket   | `pip install "msts-trader[ibkr]"` |
 | Schwab      | shipped, beta            | OAuth2 + browser callback | `pip install "msts-trader[schwab]"` |
 | Hyperliquid | shipped, **experimental**| API-wallet private key    | `pip install "msts-trader[hyperliquid]"` |
@@ -43,8 +44,9 @@ Done. tastytrade: sent 4, failed 0
 - **Live-tested** = connect / balances / positions / quotes / order path
   verified against a real account (Tastytrade & Alpaca filled real
   1-share orders; IBKR verified read + dry-run).
-- **Beta** (Schwab) = passes structural conformance tests in CI but no
-  live fill confirmed by the author.
+- **Beta** (Schwab, Tradier) = parsing logic is unit-tested (Tradier
+  against mocked HTTP) but no live fill confirmed by the author. Tradier
+  has a free sandbox (`TRADIER_SANDBOX=1`) — easy to verify yourself.
 - **Experimental** (Hyperliquid) = crypto perps DEX; the adapter is built
   on the public SDK but has not been run against a live account. Test on
   testnet (`HL_TESTNET=1`) with tiny size first.
@@ -114,6 +116,18 @@ msts-trader login --broker alpaca
 ```
 
 You choose paper vs live at login time.
+
+### Tradier
+
+```bash
+msts-trader login --broker tradier
+```
+
+Get an access token at https://developer.tradier.com — a **free sandbox**
+token works for end-to-end testing. Your account number is
+auto-discovered if you leave it blank. Choose sandbox or production at
+login. Headless: `TRADIER_ACCESS_TOKEN` / `TRADIER_ACCOUNT_ID` /
+`TRADIER_SANDBOX`.
 
 ### IBKR
 
@@ -311,8 +325,8 @@ Ready-to-use templates are in [`examples/`](examples/):
 
 **Broker notes for automation:**
 
-- **Tastytrade** and **Alpaca** are pure REST/OAuth → work in GitHub
-  Actions or any server.
+- **Tastytrade**, **Alpaca**, and **Tradier** are pure REST/OAuth → work
+  in GitHub Actions or any server.
 - **IBKR** needs a running TWS / IB Gateway on a machine you control →
   use cron on that machine, not GitHub Actions.
 

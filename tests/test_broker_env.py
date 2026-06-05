@@ -8,11 +8,12 @@ TT = ("TT_PROVIDER_SECRET", "TT_REFRESH_TOKEN", "TT_ACCOUNT_ID")
 ALP = ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "APCA_PAPER")
 IB = ("IBKR_HOST", "IBKR_PORT", "IBKR_CLIENT_ID", "IBKR_ACCOUNT_ID")
 SC = ("SCHWAB_APP_KEY", "SCHWAB_APP_SECRET", "SCHWAB_CALLBACK_URL")
+TR = ("TRADIER_ACCESS_TOKEN", "TRADIER_ACCOUNT_ID", "TRADIER_SANDBOX")
 
 
 @pytest.fixture(autouse=True)
 def clear_env(monkeypatch):
-    for v in TT + ALP + IB + SC + ("PAPER_STARTING_CASH",):
+    for v in TT + ALP + IB + SC + TR + ("PAPER_STARTING_CASH",):
         monkeypatch.delenv(v, raising=False)
 
 
@@ -71,6 +72,23 @@ def test_schwab_from_env(monkeypatch):
     monkeypatch.setenv("SCHWAB_APP_SECRET", "as")
     out = broker_kwargs_from_env("schwab")
     assert out["app_key"] == "ak" and out["callback_url"] == "https://127.0.0.1:8182/"
+
+
+def test_tradier_from_env(monkeypatch):
+    monkeypatch.setenv("TRADIER_ACCESS_TOKEN", "tok")
+    monkeypatch.setenv("TRADIER_ACCOUNT_ID", "VA123")
+    monkeypatch.setenv("TRADIER_SANDBOX", "1")
+    out = broker_kwargs_from_env("tradier")
+    assert out == {"access_token": "tok", "account_id": "VA123", "sandbox": True}
+
+
+def test_tradier_sandbox_default_false_when_absent(monkeypatch):
+    monkeypatch.setenv("TRADIER_ACCESS_TOKEN", "tok")
+    assert broker_kwargs_from_env("tradier")["sandbox"] is False
+
+
+def test_tradier_absent_returns_none():
+    assert broker_kwargs_from_env("tradier") is None
 
 
 def test_paper_from_env(monkeypatch):

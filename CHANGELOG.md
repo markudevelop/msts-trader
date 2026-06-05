@@ -8,7 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the project is pre-1.0, minor versions (0.x.0) may introduce
 behaviour changes; patch versions (0.x.y) are fixes and docs.
 
-## [Unreleased]
+## [0.7.0] — 2026-06-05
+
+### Added
+- **Tradier adapter** (beta) — stdlib-only (urllib, no new dependency).
+  Works against production or the free Tradier **sandbox**
+  (`TRADIER_SANDBOX=1`), so it's easy to verify end-to-end without real
+  money. Auto-discovers the account number; whole-share equity market
+  orders. Login wizard + headless env (`TRADIER_ACCESS_TOKEN` /
+  `TRADIER_ACCOUNT_ID` / `TRADIER_SANDBOX`).
+
+### Tests
+- 242 total (+12 Tradier): parsing verified against mocked HTTP —
+  balances, BP fallbacks, positions (list / single-object / "null"),
+  quotes (list / single / zero-skip), order preview & rejection.
+
+## [Unreleased — folded into 0.7.0]
 
 ### Tests
 - Coverage pass for previously-untested pure helpers and edge branches
@@ -363,7 +378,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/markudevelop/msts-trader/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/markudevelop/msts-trader/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/markudevelop/msts-trader/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/markudevelop/msts-trader/compare/v0.5.1...v0.5.2

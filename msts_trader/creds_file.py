@@ -30,6 +30,8 @@ _ALIASES = {
     "api_key_id": "APCA_API_KEY_ID",
     "secret_key": "APCA_API_SECRET_KEY",
     "paper": "APCA_PAPER",
+    "access_token": "TRADIER_ACCESS_TOKEN",
+    "sandbox": "TRADIER_SANDBOX",
     "app_key": "SCHWAB_APP_KEY",
     "app_secret": "SCHWAB_APP_SECRET",
     "callback_url": "SCHWAB_CALLBACK_URL",
@@ -105,6 +107,13 @@ def broker_kwargs(broker: str, get) -> dict | None:
             raw = e("APCA_PAPER")
             paper = True if raw is None else raw.lower() in {"1", "true", "yes", "paper"}
             return {"api_key": k, "secret_key": s, "paper": paper}
+        return None
+    if broker == "tradier":
+        tok = e("TRADIER_ACCESS_TOKEN")
+        if tok:
+            raw = e("TRADIER_SANDBOX")
+            sandbox = bool(raw) and raw.lower() in {"1", "true", "yes", "sandbox"}
+            return {"access_token": tok, "account_id": e("TRADIER_ACCOUNT_ID"), "sandbox": sandbox}
         return None
     if broker == "ibkr":
         host, port = e("IBKR_HOST"), e("IBKR_PORT")

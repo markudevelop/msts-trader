@@ -23,9 +23,11 @@ def _broker_classes():
     from msts_trader.brokers.paper import Paper
     from msts_trader.brokers.schwab import Schwab
     from msts_trader.brokers.tastytrade import Tastytrade
+    from msts_trader.brokers.tradier import Tradier
     return {
         "tastytrade": Tastytrade,
         "alpaca": Alpaca,
+        "tradier": Tradier,
         "ibkr": IBKR,
         "schwab": Schwab,
         "hyperliquid": Hyperliquid,

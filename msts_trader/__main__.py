@@ -214,6 +214,8 @@ def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None) ->
         _login_tastytrade()
     elif broker == "alpaca":
         _login_alpaca()
+    elif broker == "tradier":
+        _login_tradier()
     elif broker == "ibkr":
         _login_ibkr()
     elif broker == "schwab":
@@ -295,6 +297,36 @@ def _login_alpaca() -> None:
     keychain.save("alpaca", {"api_key": api_key, "secret_key": secret_key, "paper": paper})
     keychain.set_default("alpaca")
     c.print(f"[green]✓ stored.[/green] alpaca {'(paper)' if paper else '(live)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
+
+
+def _login_tradier() -> None:
+    c.print(
+        Panel.fit(
+            "[bold]Tradier setup[/bold]\n\n"
+            "1. Get an access token at [cyan]https://developer.tradier.com[/cyan]\n"
+            "   (a free [bold]sandbox[/bold] token is great for testing)\n"
+            "2. Your [bold]account number[/bold] is optional — auto-discovered\n"
+            "3. Choose sandbox or production\n\n"
+            "[dim]Headless: TRADIER_ACCESS_TOKEN / TRADIER_ACCOUNT_ID / "
+            "TRADIER_SANDBOX via --creds-file or env.[/dim]",
+            border_style="cyan",
+        )
+    )
+    access_token = ask_secret("access token", env_var="TRADIER_ACCESS_TOKEN")
+    account_id = (env_value("TRADIER_ACCOUNT_ID") or ask_text("account number (optional)", default="", allow_blank=True)).strip() or None
+    raw = env_value("TRADIER_SANDBOX")
+    sandbox = raw.lower() in {"1", "true", "yes", "sandbox"} if raw is not None else ask_yes_no("sandbox?", default=True)
+
+    try:
+        b = make("tradier", access_token=access_token, account_id=account_id, sandbox=sandbox)
+        bal = b.balances()
+    except Exception as e:
+        c.print(f"[red]✗ {explain_login_error('tradier', e)}[/red]")
+        sys.exit(1)
+
+    keychain.save("tradier", {"access_token": access_token, "account_id": account_id or b.account_id, "sandbox": sandbox})
+    keychain.set_default("tradier")
+    c.print(f"[green]✓ stored.[/green] tradier {'(sandbox)' if sandbox else '(production)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
 
 
 def _login_ibkr() -> None:
