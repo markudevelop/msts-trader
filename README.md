@@ -31,19 +31,19 @@ Done.  sent: 4  ·  failed: 0  ·  log: ~/.msts-trader/fills/
 
 ## Supported brokers
 
-| Broker     | Status                | Auth                      | Notes |
-|------------|-----------------------|---------------------------|-------|
-| Paper      | shipped, tested       | local file                | $100k starting cash, no real fills, 14 unit tests |
-| Tastytrade | shipped, live-tested  | OAuth refresh token       | indefinite token, BYO OAuth app |
-| Alpaca     | shipped, beta         | API key + secret          | paper or live, fractional supported, **awaiting live-fill confirmation** |
-| IBKR       | shipped, beta         | TWS / IB Gateway socket   | `pip install "msts-trader[ibkr]"`, works with local or Dockerised Gateway, **awaiting live-fill confirmation** |
-| Schwab     | shipped, beta         | OAuth2 + browser callback | `pip install "msts-trader[schwab]"`, 7-day refresh, **awaiting live-fill confirmation** |
+| Broker     | Status                  | Auth                      | Notes |
+|------------|-------------------------|---------------------------|-------|
+| Paper      | shipped, tested         | local file                | $100k starting cash, no real fills, 14 unit tests |
+| Tastytrade | shipped, **live-tested** | OAuth refresh token       | indefinite token, BYO OAuth app — connect / balances / positions / quotes / dry-run all confirmed against a real account |
+| Alpaca     | shipped, **live-tested** | API key + secret          | paper or live, fractional supported — end-to-end confirmed on a paper account |
+| IBKR       | shipped, beta            | TWS / IB Gateway socket   | `pip install "msts-trader[ibkr]"`, works with local or Dockerised Gateway, **awaiting live-fill confirmation** |
+| Schwab     | shipped, beta            | OAuth2 + browser callback | `pip install "msts-trader[schwab]"`, 7-day refresh, **awaiting live-fill confirmation** |
 
-**Beta status:** Alpaca, IBKR, and Schwab adapters pass structural
-protocol conformance tests in CI (signatures, attributes, error
-handling) but have not yet been verified end-to-end against a real
-brokerage account by the author. Try them in paper mode first, or
-file an issue with a fill report if you run them live.
+**Beta status:** IBKR and Schwab adapters pass structural protocol
+conformance tests in CI (signatures, attributes, error handling) but
+have not yet been verified end-to-end against a real brokerage account
+by the author. Try them in paper mode first, or file an issue with a
+fill report if you run them live.
 
 Open a GitHub issue if you want one prioritised.
 
