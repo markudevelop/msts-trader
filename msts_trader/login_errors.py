@@ -57,6 +57,16 @@ def explain_login_error(broker: str, err: Exception) -> str:
                 "tickers), trade UCITS/EU-domiciled equivalents instead, or ask "
                 "IBKR about elective-professional classification."
             )
+        if "10349" in low or "order preset" in low:
+            return (
+                "IBKR cancelled the order because of an account Order Preset "
+                "(Error 10349, 'TIF was set to DAY based on order preset').\n"
+                "This is the TWS Order PRESETS config, NOT the 'Bypass Order "
+                "Precautions' setting. Fix in TWS / IB Gateway: Global "
+                "Configuration → Presets → (Stocks) — clear the conflicting TIF "
+                "/ algo override, or set it to a plain DAY market order. Some "
+                "managed accounts force an algo (e.g. Adaptive) on market orders."
+            )
         if "connect" in low or "refused" in low or "timeout" in low:
             return (
                 "Couldn't reach TWS / IB Gateway.\n"

@@ -226,17 +226,24 @@ class IBKR:
 def _reject_reason(trade) -> str | None:
     """Extract the meaningful rejection message from an ib_insync trade log.
 
-    Skips the cosmetic 10349 ("TIF set to DAY based on order preset") note.
-    Returns e.g. "IBKR 201: ... does not have a KID ..." for EU PRIIPs blocks.
+    Prefers a specific error (e.g. 201 KID/PRIIPs) over the generic 10349
+    "TIF set to DAY based on order preset" — but if 10349 is the only thing
+    present (as for a plain stock cancelled by an account order preset), we
+    surface it rather than returning a bare "Cancelled" with no reason.
     """
-    reason = None
+    specific = None
+    fallback = None
     for le in getattr(trade, "log", []) or []:
         code = getattr(le, "errorCode", 0) or 0
-        if code in (0, 10349):
+        if code == 0:
             continue
         msg = (getattr(le, "message", "") or "").replace("<br>", " ").strip()
-        reason = f"IBKR {code}: {msg}"
-    return reason
+        entry = f"IBKR {code}: {msg}"
+        if code == 10349:
+            fallback = entry + " (check TWS → Global Configuration → Presets)"
+        else:
+            specific = entry
+    return specific or fallback
 
 
 def _f(v) -> float | None:

@@ -12,6 +12,23 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.3.8] — 2026-06-05
+
+### Fixed
+- IBKR `_reject_reason` now surfaces Error **10349** ("TIF set to DAY
+  based on order preset") when it's the only log entry, instead of
+  returning a bare `Cancelled`. A live 1-share TSLA test confirmed a
+  plain US stock is cancelled by an account Order Preset (10349 only,
+  no KID 201) — distinct from the ETF KID/PRIIPs block. The message now
+  points at TWS → Global Configuration → Presets.
+- `login_errors` maps 10349 / "order preset" to that fix, clarifying it
+  is the Order PRESETS config, not the "Bypass Order Precautions" toggle.
+
+### Notes
+- Two separate IBKR blockers are now characterised: (1) US ETFs →
+  Error 201 KID/PRIIPs (EU retail), (2) US stocks → Error 10349 account
+  Order Preset. Tastytrade and Alpaca filled both SHV and TSLA fine.
+
 ## [0.3.7] — 2026-06-05
 
 ### Fixed
@@ -213,7 +230,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.3.7...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.3.8...HEAD
+[0.3.8]: https://github.com/markudevelop/msts-trader/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/markudevelop/msts-trader/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/markudevelop/msts-trader/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/markudevelop/msts-trader/compare/v0.3.4...v0.3.5
