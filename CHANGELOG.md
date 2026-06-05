@@ -12,6 +12,17 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.5.3] — 2026-06-05
+
+### Fixed
+- **Schwab would fail on the first real call.** The client was built with
+  schwab-py's default `enforce_enums=True`, which rejects the plain
+  string `"positions"` passed to `get_account(fields=["positions"])` —
+  so `balances()` and `positions()` raised. Now constructs the client
+  with `enforce_enums=False` so raw-string fields work. (Found by
+  reviewing the adapter against the live SDK signatures; order path
+  `place_order` / `equity_buy_market` / `.build()` verified correct.)
+
 ## [0.5.2] — 2026-06-05
 
 ### Added
@@ -324,7 +335,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/markudevelop/msts-trader/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/markudevelop/msts-trader/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/markudevelop/msts-trader/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/markudevelop/msts-trader/compare/v0.4.0...v0.5.0

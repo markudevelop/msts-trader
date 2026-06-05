@@ -52,8 +52,12 @@ class Schwab:
         if not _SCHWAB_OK:
             raise BrokerError("schwab-py not installed. Run: pip install schwab-py")
         TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # enforce_enums=False so we can pass plain strings like fields=["positions"]
+        # instead of schwab-py's Client.Account.Fields enums. Without this the
+        # default (enforce_enums=True) rejects the string and balances()/
+        # positions() fail on the first real call.
         if TOKEN_PATH.exists():
-            self._client = client_from_token_file(str(TOKEN_PATH), app_key, app_secret)
+            self._client = client_from_token_file(str(TOKEN_PATH), app_key, app_secret, enforce_enums=False)
         else:
             # easy_client opens a browser and runs the local callback listener
             self._client = easy_client(
@@ -61,6 +65,7 @@ class Schwab:
                 app_secret=app_secret,
                 callback_url=callback_url,
                 token_path=str(TOKEN_PATH),
+                enforce_enums=False,
             )
         self._account_hash = account_hash or self._discover_account_hash()
         self.account_id = self._account_hash[:8] + "…"  # display-safe truncation
