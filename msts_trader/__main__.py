@@ -72,6 +72,10 @@ def login(ctx: click.Context) -> None:
         _login_tastytrade()
     elif broker == "alpaca":
         _login_alpaca()
+    elif broker == "ibkr":
+        _login_ibkr()
+    elif broker == "schwab":
+        _login_schwab()
     elif broker == "paper":
         _login_paper()
     else:
@@ -136,6 +140,64 @@ def _login_alpaca() -> None:
     keychain.save("alpaca", {"api_key": api_key, "secret_key": secret_key, "paper": paper})
     keychain.set_default("alpaca")
     c.print(f"[green]✓ stored.[/green] alpaca {'(paper)' if paper else '(live)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
+
+
+def _login_ibkr() -> None:
+    c.print(
+        Panel.fit(
+            "[bold]IBKR setup[/bold]\n\n"
+            "1. Start [cyan]TWS[/cyan] or [cyan]IB Gateway[/cyan] (live or paper) — \n"
+            "   Configure → API → enable [bold]ActiveX and Socket Clients[/bold]\n"
+            "2. Note the API socket port:\n"
+            "     TWS live 7496 · TWS paper 7497\n"
+            "     Gateway live 4001 · Gateway paper 4002\n"
+            "3. Confirm host (default 127.0.0.1; remote/Docker = its IP)",
+            border_style="cyan",
+        )
+    )
+    host = Prompt.ask("host", default="127.0.0.1")
+    port = int(Prompt.ask("port", default="4002"))
+    client_id = int(Prompt.ask("client id (any free int)", default="17"))
+    account_id = Prompt.ask("account id (optional)", default="").strip() or None
+
+    try:
+        b = make("ibkr", host=host, port=port, client_id=client_id, account_id=account_id)
+        bal = b.balances()
+    except Exception as e:
+        c.print(f"[red]✗ login failed:[/red] {e}")
+        sys.exit(1)
+
+    keychain.save("ibkr", {"host": host, "port": port, "client_id": client_id, "account_id": account_id or b.account_id})
+    keychain.set_default("ibkr")
+    c.print(f"[green]✓ stored.[/green] ibkr account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
+
+
+def _login_schwab() -> None:
+    c.print(
+        Panel.fit(
+            "[bold]Schwab OAuth2 setup[/bold]\n\n"
+            "1. Register a developer app at [cyan]https://developer.schwab.com[/cyan]\n"
+            "2. Set the callback URL to [bold]https://127.0.0.1:8182/[/bold]\n"
+            "3. Copy your [bold]app key[/bold] and [bold]app secret[/bold]\n"
+            "4. A browser will open for authorization. Refresh token lasts\n"
+            "   [bold]7 days[/bold] — re-run this login when it expires.",
+            border_style="cyan",
+        )
+    )
+    app_key = Prompt.ask("app key", password=True)
+    app_secret = Prompt.ask("app secret", password=True)
+    callback_url = Prompt.ask("callback url", default="https://127.0.0.1:8182/")
+
+    try:
+        b = make("schwab", app_key=app_key, app_secret=app_secret, callback_url=callback_url)
+        bal = b.balances()
+    except Exception as e:
+        c.print(f"[red]✗ login failed:[/red] {e}")
+        sys.exit(1)
+
+    keychain.save("schwab", {"app_key": app_key, "app_secret": app_secret, "callback_url": callback_url, "account_hash": b._account_hash})
+    keychain.set_default("schwab")
+    c.print(f"[green]✓ stored.[/green] schwab account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
 
 
 def _login_paper() -> None:

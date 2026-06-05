@@ -26,9 +26,13 @@ jobs:
           pip install -e ".[dev]"
       - name: ruff
         run: ruff check msts_trader
-      - name: import smoke
+      - name: import smoke (core + bundled brokers)
         run: |
           python -c "from msts_trader import diff, csv_parser, market_hours, models, keychain, fill_log; from msts_trader.brokers import base, paper, alpaca, tastytrade; print('ok')"
+      - name: install + import optional brokers
+        run: |
+          pip install "ib_insync>=0.9.86" "nest_asyncio>=1.6" "schwab-py>=1.4"
+          python -c "from msts_trader.brokers import ibkr, schwab; print('optional brokers ok')"
       - name: csv + diff smoke
         run: |
           python -c "

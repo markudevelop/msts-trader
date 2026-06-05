@@ -36,10 +36,10 @@ Done.  sent: 4  ·  failed: 0  ·  log: ~/.msts-trader/fills/
 | Paper      | shipped  | local file               | $100k starting cash, no real fills |
 | Tastytrade | shipped  | OAuth refresh token       | indefinite token, BYO OAuth app |
 | Alpaca     | shipped  | API key + secret         | paper or live, fractional supported |
-| IBKR       | planned  | TWS / IB Gateway socket  | works with your local Gateway / Docker |
-| Schwab     | planned  | OAuth2 PKCE              | 7-day refresh, browser callback |
+| IBKR       | shipped  | TWS / IB Gateway socket  | needs `pip install msts-trader[ibkr]`; works with your local Gateway / Dockerised Gateway |
+| Schwab     | shipped  | OAuth2 + browser callback | needs `pip install msts-trader[schwab]`; 7-day refresh token |
 
-Open a GitHub issue if you want one bumped up the queue.
+Open a GitHub issue if you want one prioritised.
 
 ## Install
 
@@ -49,12 +49,23 @@ pip install msts-trader
 
 Python ≥3.11 required.
 
+### Optional brokers
+
+IBKR and Schwab require extra dependencies. Install them only if you
+plan to use that broker:
+
+```bash
+pip install "msts-trader[ibkr]"      # adds ib_insync + nest_asyncio
+pip install "msts-trader[schwab]"    # adds schwab-py
+pip install "msts-trader[all]"       # everything
+```
+
 Install from source:
 
 ```bash
 git clone https://github.com/markudevelop/msts-trader.git
 cd msts-trader
-pip install -e .
+pip install -e ".[all]"
 ```
 
 ## One-time setup
@@ -86,6 +97,39 @@ msts-trader login --broker alpaca
 ```
 
 You choose paper vs live at login time.
+
+### IBKR
+
+```bash
+pip install "msts-trader[ibkr]"
+msts-trader login --broker ibkr
+```
+
+You'll be asked for host, port, and client id of a running TWS or IB
+Gateway. Defaults:
+
+- TWS live: `127.0.0.1:7496`
+- TWS paper: `127.0.0.1:7497`
+- Gateway live: `127.0.0.1:4001`
+- Gateway paper: `127.0.0.1:4002`
+- Dockerised Gateway: usually `127.0.0.1:4002` (whatever you mapped)
+
+Before logging in, enable Configure → API → **Enable ActiveX and Socket
+Clients** in your TWS / Gateway. msts-trader connects, lists your
+managed accounts, and confirms NAV.
+
+### Schwab
+
+```bash
+pip install "msts-trader[schwab]"
+msts-trader login --broker schwab
+```
+
+Requires a Schwab Developer app (https://developer.schwab.com) with the
+callback URL set to `https://127.0.0.1:8182/`. msts-trader pops a
+browser window, you authorize, and the token JSON is written to
+`~/.msts-trader/schwab_token.json`. Schwab refresh tokens expire every
+7 days — re-run `msts-trader login --broker schwab` when that happens.
 
 ### Paper (offline simulator)
 

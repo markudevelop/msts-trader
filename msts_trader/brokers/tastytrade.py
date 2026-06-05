@@ -1,8 +1,8 @@
 """Tastytrade adapter — session, NAV, positions, market orders.
 
-Lifted patterns from msts-live's `core/brokers/tastytrade_broker.py`.
-No extended-hours chase fill (v1): the rebalance flow refuses to send
-outside RTH instead.
+Built on the public `tastytrade` Python SDK (https://pypi.org/project/tastytrade/).
+The rebalance flow refuses to send outside RTH instead of routing
+extended-hours limit chases.
 """
 from __future__ import annotations
 

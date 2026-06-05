@@ -1,7 +1,7 @@
 """Alpaca adapter — API key / secret, live or paper toggle.
 
-Uses the `alpaca-py` SDK. Lifted patterns from msts-live's
-`core/brokers/alpaca_broker.py`. Fractional shares supported.
+Built on the public `alpaca-py` SDK (https://pypi.org/project/alpaca-py/).
+Fractional shares supported on MARKET orders.
 """
 from __future__ import annotations
 
