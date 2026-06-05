@@ -19,7 +19,7 @@ import json
 import os
 from pathlib import Path
 
-from .prompts import strip_quotes
+from .prompts import env_value, strip_quotes
 
 # Map friendly / lowercase keys a user might write to the canonical env names.
 _ALIASES = {
@@ -82,6 +82,50 @@ def parse(text: str) -> dict[str, str]:
     if not out:
         raise CredsFileError("no key/value pairs found")
     return out
+
+
+def broker_kwargs_from_env(broker: str) -> dict | None:
+    """Build `make()` kwargs for a broker from environment variables.
+
+    Returns the kwargs dict if the required vars are present, else None
+    (so the caller can fall back to the OS keychain). This is what makes
+    fully headless runs possible: set the env (or load a --creds-file)
+    and rebalance without ever running an interactive `login`.
+    """
+    e = env_value
+    if broker == "tastytrade":
+        ps, rt = e("TT_PROVIDER_SECRET"), e("TT_REFRESH_TOKEN")
+        if ps and rt:
+            return {"provider_secret": ps, "refresh_token": rt, "account_id": e("TT_ACCOUNT_ID")}
+        return None
+    if broker == "alpaca":
+        k, s = e("APCA_API_KEY_ID"), e("APCA_API_SECRET_KEY")
+        if k and s:
+            raw = e("APCA_PAPER")
+            paper = True if raw is None else raw.lower() in {"1", "true", "yes", "paper"}
+            return {"api_key": k, "secret_key": s, "paper": paper}
+        return None
+    if broker == "ibkr":
+        host, port = e("IBKR_HOST"), e("IBKR_PORT")
+        if host or port:
+            return {
+                "host": host or "127.0.0.1",
+                "port": int(port or "4002"),
+                "client_id": int(e("IBKR_CLIENT_ID") or "17"),
+                "account_id": e("IBKR_ACCOUNT_ID"),
+            }
+        return None
+    if broker == "schwab":
+        k, s = e("SCHWAB_APP_KEY"), e("SCHWAB_APP_SECRET")
+        if k and s:
+            return {"app_key": k, "app_secret": s, "callback_url": e("SCHWAB_CALLBACK_URL") or "https://127.0.0.1:8182/"}
+        return None
+    if broker == "paper":
+        sc = e("PAPER_STARTING_CASH")
+        if sc:
+            return {"starting_cash": sc}
+        return None
+    return None
 
 
 def load_into_env(path: str | Path, *, overwrite: bool = False) -> list[str]:

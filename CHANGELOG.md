@@ -12,6 +12,32 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.4.0] — 2026-06-05
+
+### Added
+- **Fully headless operation** — run unattended from cron / GitHub
+  Actions with no paste, no confirm prompt, no interactive `login`, no
+  keychain:
+  - `rebalance` and `status` accept `--creds-file` (JSON or KEY=VALUE);
+    credentials also resolve from environment variables.
+  - `_load_broker` builds the broker from env / creds-file first, then
+    falls back to the OS keychain — so a box that never ran `login`
+    works as long as the env is set (`broker_kwargs_from_env`).
+  - `rebalance --csv-url URL` fetches the target CSV over http(s)
+    (stdlib, no new dependency), alongside the existing `--csv-file`.
+  - `--yes` continues to skip the confirmation for unattended runs.
+- **Automation templates** in `examples/`: `creds.example.json`,
+  `rebalance-cron.sh`, and `github-action-rebalance.yml`.
+
+### Docs
+- New "Headless / automated" README section. Notes that Tastytrade and
+  Alpaca run in GitHub Actions, while IBKR needs a local TWS / IB
+  Gateway (use cron on that machine).
+
+### Tests
+- +12 (`test_broker_env.py`) covering env-derived creds for every
+  broker, paper default, quote stripping, and missing-var fallbacks.
+
 ## [0.3.8] — 2026-06-05
 
 ### Fixed
@@ -230,7 +256,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.3.8...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/markudevelop/msts-trader/compare/v0.3.8...v0.4.0
 [0.3.8]: https://github.com/markudevelop/msts-trader/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/markudevelop/msts-trader/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/markudevelop/msts-trader/compare/v0.3.5...v0.3.6

@@ -21,7 +21,7 @@ from rich.table import Table
 
 from . import __version__, fill_log, keychain
 from .brokers import SUPPORTED, BrokerError, make
-from .creds_file import CredsFileError, load_into_env
+from .creds_file import CredsFileError, broker_kwargs_from_env, load_into_env
 from .csv_parser import CSVParseError, parse_csv
 from .diff import build_preview
 from .login_errors import explain_login_error
@@ -63,12 +63,48 @@ def _resolve_broker_name(ctx: click.Context, explicit: str | None) -> str:
     return stored
 
 
-def _load_broker(name: str):
+def _load_creds_file_or_exit(path: str) -> None:
     try:
-        creds = keychain.load(name)
-    except keychain.CredsMissingError as e:
-        c.print(f"[red]✗ {e}[/red]")
+        keys = load_into_env(path)
+    except CredsFileError as e:
+        c.print(f"[red]✗ could not read creds file:[/red] {e}")
         sys.exit(1)
+    c.print(f"[green]✓ loaded {len(keys)} value(s) from {path}[/green]")
+
+
+def _fetch_url_or_exit(url: str) -> str:
+    """Fetch CSV text from a URL using the stdlib (no extra dependency)."""
+    import urllib.request
+
+    if not url.lower().startswith(("http://", "https://")):
+        c.print(f"[red]✗ --csv-url must be http(s): {url}[/red]")
+        sys.exit(1)
+    try:
+        with urllib.request.urlopen(url, timeout=20) as resp:  # noqa: S310 (scheme checked above)
+            return resp.read().decode("utf-8")
+    except Exception as e:
+        c.print(f"[red]✗ could not fetch {url}:[/red] {e}")
+        sys.exit(1)
+
+
+def _load_broker(name: str):
+    """Build a broker from env/creds-file first (headless), else the keychain.
+
+    Env-derived creds (set directly or loaded via --creds-file) take
+    precedence so a cron job / GitHub Action never needs an interactive
+    `login`. Falls back to the OS keychain for the manual workflow.
+    """
+    creds = broker_kwargs_from_env(name)
+    if creds is None:
+        try:
+            creds = keychain.load(name)
+        except keychain.CredsMissingError:
+            c.print(
+                f"[red]✗ no credentials for {name!r}.[/red] Either run "
+                f"[bold]msts-trader login --broker {name}[/bold] (manual), or pass "
+                f"[bold]--creds-file[/bold] / set the env vars (headless)."
+            )
+            sys.exit(1)
     try:
         return make(name, **creds)
     except BrokerError as e:
@@ -303,9 +339,12 @@ def paper_reset() -> None:
 
 @main.command()
 @_BROKER_OPT
+@click.option("--creds-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Load credentials from a JSON or KEY=VALUE file (headless).")
 @click.pass_context
-def status(ctx: click.Context, broker_opt: str | None) -> None:
+def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -> None:
     """Show account NAV, positions, market status. No orders."""
+    if creds_file:
+        _load_creds_file_or_exit(creds_file)
     broker = _resolve_broker_name(ctx, broker_opt)
     b = _load_broker(broker)
     bal = b.balances()
@@ -338,9 +377,11 @@ def status(ctx: click.Context, broker_opt: str | None) -> None:
 @main.command()
 @_BROKER_OPT
 @click.option("--dry-run", is_flag=True, help="Preview only — never sends orders.")
-@click.option("--yes", "-y", is_flag=True, help="Skip the confirm prompt (auto-execute).")
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirm prompt (auto-execute). Required for unattended runs.")
 @click.option("--threshold", default=0.04, type=float, show_default=True, help="Drift threshold (fraction of NAV).")
-@click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Read CSV from file instead of stdin.")
+@click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Read the target CSV from a file instead of stdin.")
+@click.option("--csv-url", default=None, help="Fetch the target CSV from a URL instead of stdin.")
+@click.option("--creds-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Load credentials from a JSON or KEY=VALUE file (headless).")
 @click.pass_context
 def rebalance(
     ctx: click.Context,
@@ -349,8 +390,17 @@ def rebalance(
     yes: bool,
     threshold: float,
     csv_file: str | None,
+    csv_url: str | None,
+    creds_file: str | None,
 ) -> None:
-    """Default command. Paste a ticker,weight CSV → preview → confirm → execute."""
+    """Paste a ticker,weight CSV → preview → confirm → execute.
+
+    Manual: run with no flags, paste the CSV, confirm with y.
+    Headless: --broker NAME --creds-file creds.json --csv-file targets.csv --yes
+    (or use --csv-url and exported env vars). No prompts, no keychain needed.
+    """
+    if creds_file:
+        _load_creds_file_or_exit(creds_file)
     broker = _resolve_broker_name(ctx, broker_opt)
 
     ms = market_status()
@@ -362,9 +412,14 @@ def rebalance(
             c.print(f"[red]Market in {ms.status} session — v1 only supports RTH market orders.[/red]")
             sys.exit(2)
 
+    if csv_file and csv_url:
+        c.print("[red]✗ pass only one of --csv-file / --csv-url.[/red]")
+        sys.exit(1)
     if csv_file:
         with open(csv_file, encoding="utf-8") as f:
             csv_text = f.read()
+    elif csv_url:
+        csv_text = _fetch_url_or_exit(csv_url)
     else:
         c.print("\n[bold cyan]Paste CSV (ticker,weight), then Ctrl+D (Unix) or Ctrl+Z+Enter (Windows):[/bold cyan]")
         csv_text = sys.stdin.read()

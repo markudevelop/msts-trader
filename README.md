@@ -212,6 +212,52 @@ msts-trader --version
 - Shows the full plan and waits for `y` before sending anything.
 - Submits MARKET DAY orders. Logs results to `~/.msts-trader/fills/`.
 
+## Headless / automated (cron, GitHub Actions)
+
+Everything works two ways:
+
+- **Manual:** `msts-trader` → paste CSV → confirm with `y`.
+- **Headless:** drive it entirely from files / env vars + flags — no
+  paste, no confirm prompt, no interactive `login`, no keychain.
+
+The headless one-liner:
+
+```bash
+msts-trader rebalance \
+  --broker tastytrade \
+  --creds-file creds.json \
+  --csv-url https://example.com/your-weights.csv \
+  --yes
+```
+
+- `--creds-file` — JSON or `KEY=VALUE` file with your credentials (or
+  just export the env vars; both work). See
+  [`examples/creds.example.json`](examples/creds.example.json).
+- `--csv-file PATH` or `--csv-url URL` — the target weights, instead of
+  pasting.
+- `--yes` — skip the confirmation prompt (required for unattended runs).
+- `--dry-run` — preview only, never sends (great for a first test).
+
+Credentials resolve in this order: `--creds-file` / environment first,
+then the OS keychain. So a server or CI box that has never run `login`
+works as long as the env vars are set.
+
+Ready-to-use templates are in [`examples/`](examples/):
+
+- [`rebalance-cron.sh`](examples/rebalance-cron.sh) — a cron wrapper.
+- [`github-action-rebalance.yml`](examples/github-action-rebalance.yml)
+  — a scheduled GitHub Actions workflow.
+
+**Broker notes for automation:**
+
+- **Tastytrade** and **Alpaca** are pure REST/OAuth → work in GitHub
+  Actions or any server.
+- **IBKR** needs a running TWS / IB Gateway on a machine you control →
+  use cron on that machine, not GitHub Actions.
+
+The market-hours guard still applies: a headless run outside US regular
+hours exits without trading, so a daily schedule is safe.
+
 ## Leveraged weights
 
 Target weights are fractions of your account NAV. They **can sum to more
@@ -248,7 +294,7 @@ Two things to know for a **fresh account**:
 - Options, futures, crypto.
 - Multi-account or per-strategy ledger.
 - Active stop management (Hydra/Fusion-style watchers).
-- Automatic CSV polling. You paste each rebalance manually.
+- Scheduling itself (use cron / GitHub Actions — see Headless above).
 
 ## Troubleshooting
 

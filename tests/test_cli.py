@@ -57,10 +57,13 @@ def test_brokers_lists_supported():
         assert name in out
 
 
-def test_rebalance_without_creds_exits_clean():
+def test_rebalance_without_creds_exits_clean(monkeypatch):
+    # Ensure no env-derived creds leak in from the host shell.
+    for v in ("TT_PROVIDER_SECRET", "TT_REFRESH_TOKEN", "TT_ACCOUNT_ID"):
+        monkeypatch.delenv(v, raising=False)
     r = CliRunner().invoke(main, ["--broker", "tastytrade", "rebalance", "--dry-run"], input="ticker,weight\nSPY,1.0\n")
     assert r.exit_code != 0
-    assert "no stored creds" in r.output.lower() or "no creds" in r.output.lower()
+    assert "no credentials" in r.output.lower()
 
 
 def test_paper_rebalance_dry_run_end_to_end(tmp_path, monkeypatch):

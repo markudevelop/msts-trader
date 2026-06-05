@@ -1,0 +1,15 @@
+{
+  "_comment": "Copy to creds.json, fill in your own broker credentials, keep it private (chmod 600). Use with: msts-trader rebalance --broker tastytrade --creds-file creds.json --csv-url <url> --yes",
+
+  "TT_PROVIDER_SECRET": "your-tastytrade-provider-secret",
+  "TT_REFRESH_TOKEN": "your-tastytrade-refresh-token",
+  "TT_ACCOUNT_ID": "your-tastytrade-account-number",
+
+  "APCA_API_KEY_ID": "your-alpaca-key-id",
+  "APCA_API_SECRET_KEY": "your-alpaca-secret",
+  "APCA_PAPER": "false",
+
+  "IBKR_HOST": "127.0.0.1",
+  "IBKR_PORT": "4002",
+  "IBKR_CLIENT_ID": "17"
+}

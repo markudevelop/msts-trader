@@ -1,0 +1,50 @@
+# Unattended rebalance via GitHub Actions.
+#
+# Copy this into YOUR OWN private repo as .github/workflows/rebalance.yml.
+#
+# Add these repository secrets (Settings → Secrets and variables → Actions):
+#   TT_PROVIDER_SECRET, TT_REFRESH_TOKEN, TT_ACCOUNT_ID   (Tastytrade)
+#   — or APCA_API_KEY_ID / APCA_API_SECRET_KEY for Alpaca.
+#
+# NOTE: IBKR is NOT usable from GitHub Actions — it needs a running
+# TWS / IB Gateway on a machine you control. Use cron on that machine
+# instead (see rebalance-cron.sh). Tastytrade and Alpaca work here
+# because they are pure REST/OAuth.
+#
+# The schedule is UTC. 19:50 UTC ≈ 15:50 New York during EDT; adjust
+# across DST as needed, or just run it and rely on the RTH guard.
+
+name: rebalance
+
+on:
+  schedule:
+    - cron: "50 19 * * 1-5"   # weekdays, ~15:50 ET (EDT)
+  workflow_dispatch:           # allow manual runs from the Actions tab
+
+concurrency:
+  group: rebalance
+  cancel-in-progress: false
+
+jobs:
+  rebalance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install msts-trader
+        run: pip install --upgrade msts-trader
+
+      - name: Rebalance (Tastytrade)
+        env:
+          TT_PROVIDER_SECRET: ${{ secrets.TT_PROVIDER_SECRET }}
+          TT_REFRESH_TOKEN: ${{ secrets.TT_REFRESH_TOKEN }}
+          TT_ACCOUNT_ID: ${{ secrets.TT_ACCOUNT_ID }}
+        run: |
+          # Replace with a reachable static CSV of your target weights,
+          # or commit a targets.csv to this repo and use --csv-file targets.csv.
+          msts-trader rebalance \
+            --broker tastytrade \
+            --csv-url "https://example.com/your-weights.csv" \
+            --yes
