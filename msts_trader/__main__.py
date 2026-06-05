@@ -10,6 +10,7 @@ Subcommands:
 """
 from __future__ import annotations
 
+import json
 import sys
 from decimal import Decimal
 
@@ -19,7 +20,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm  # used for the post-preview Y/N (works fine in all terminals)
 from rich.table import Table
 
-from . import __version__, fill_log, keychain
+from . import __version__, config, fill_log, keychain, notifications, retry, runstate, safety
 from .brokers import SUPPORTED, BrokerError, make
 from .creds_file import CredsFileError, broker_kwargs_from_env, load_into_env
 from .csv_parser import CSVParseError, parse_csv
@@ -30,6 +31,60 @@ from .models import Side
 from .prompts import ask_secret, ask_text, ask_yes_no, env_value
 
 c = Console()
+
+# Set per-invocation by the rebalance command.
+_QUIET = False
+_JSON = False
+
+
+def say(msg: str = "", *, style: str | None = None, end: str = "\n") -> None:
+    """Print unless we're in --quiet or --json mode."""
+    if _QUIET or _JSON:
+        return
+    c.print(msg, style=style, end=end)
+
+
+def _fail(msg: str, code: int = 1):
+    """Emit an error (JSON-aware) and exit."""
+    if _JSON:
+        print(json.dumps({"error": msg}))
+    else:
+        c.print(f"[red]✗ {msg}[/red]")
+    sys.exit(code)
+
+
+def _load_config_or_exit(path: str | None) -> dict:
+    try:
+        return config.load(path)
+    except config.ConfigError as e:
+        _fail(str(e))
+
+
+def _emit_json(broker, preview, *, dry_run: bool, duplicate: bool) -> None:
+    gross = sum((row.target_pct for row in preview.rows), Decimal(0))
+    payload = {
+        "broker": broker.name,
+        "account_id": broker.account_id,
+        "nav": str(preview.nav),
+        "cash": str(preview.cash),
+        "buying_power": str(preview.buying_power),
+        "gross_exposure": str(gross),
+        "dry_run": dry_run,
+        "duplicate_today": duplicate,
+        "warnings": preview.warnings,
+        "blockers": preview.blockers,
+        "orders": [
+            {
+                "ticker": o.ticker,
+                "side": o.side.value,
+                "quantity": str(o.quantity),
+                "estimated_price": str(o.estimated_price) if o.estimated_price else None,
+                "notional": str(o.notional),
+            }
+            for o in preview.orders
+        ],
+    }
+    print(json.dumps(payload, default=str))
 
 
 _BROKER_OPT = click.option(
@@ -378,20 +433,34 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -
 @_BROKER_OPT
 @click.option("--dry-run", is_flag=True, help="Preview only — never sends orders.")
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirm prompt (auto-execute). Required for unattended runs.")
-@click.option("--threshold", default=0.04, type=float, show_default=True, help="Drift threshold (fraction of NAV).")
+@click.option("--threshold", default=None, type=float, help="Drift threshold (fraction of NAV). Default 0.04.")
 @click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Read the target CSV from a file instead of stdin.")
 @click.option("--csv-url", default=None, help="Fetch the target CSV from a URL instead of stdin.")
 @click.option("--creds-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Load credentials from a JSON or KEY=VALUE file (headless).")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False), default=None, help="Config file for defaults (TOML).")
+@click.option("--max-notional", type=float, default=None, help="Refuse if gross buys exceed this dollar amount.")
+@click.option("--max-stale-hours", type=float, default=None, help="Refuse if the CSV's `# asof:` time is older than this.")
+@click.option("--notify-url", default=None, help="Webhook (Discord/Slack/generic) to ping on execute.")
+@click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
+@click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON instead of tables.")
+@click.option("--quiet", "-q", is_flag=True, help="Minimal output (for cron logs).")
 @click.pass_context
 def rebalance(
     ctx: click.Context,
     broker_opt: str | None,
     dry_run: bool,
     yes: bool,
-    threshold: float,
+    threshold: float | None,
     csv_file: str | None,
     csv_url: str | None,
     creds_file: str | None,
+    config_path: str | None,
+    max_notional: float | None,
+    max_stale_hours: float | None,
+    notify_url: str | None,
+    force: bool,
+    json_out: bool,
+    quiet: bool,
 ) -> None:
     """Paste a ticker,weight CSV → preview → confirm → execute.
 
@@ -399,77 +468,134 @@ def rebalance(
     Headless: --broker NAME --creds-file creds.json --csv-file targets.csv --yes
     (or use --csv-url and exported env vars). No prompts, no keychain needed.
     """
+    cfg = _load_config_or_exit(config_path)
+    threshold = float(config.pick(threshold, cfg, "threshold", 0.04))
+    csv_file = config.pick(csv_file, cfg, "csv_file")
+    csv_url = config.pick(csv_url, cfg, "csv_url")
+    creds_file = config.pick(creds_file, cfg, "creds_file")
+    max_notional = config.pick(max_notional, cfg, "max_notional")
+    max_stale_hours = config.pick(max_stale_hours, cfg, "max_stale_hours")
+    notify_url = config.pick(notify_url, cfg, "notify_url")
+    quiet = bool(config.pick(True if quiet else None, cfg, "quiet", False))
+
+    global _QUIET, _JSON
+    _QUIET, _JSON = quiet, json_out
+
     if creds_file:
         _load_creds_file_or_exit(creds_file)
     broker = _resolve_broker_name(ctx, broker_opt)
 
     ms = market_status()
-    if broker != "paper":
+    if broker not in ("paper", "hyperliquid"):  # crypto trades 24/7
         if ms.status == "closed" and not dry_run:
-            c.print(f"[red]Market closed. Next open: {ms.next_open}.[/red]")
-            sys.exit(2)
+            _fail(f"Market closed. Next open: {ms.next_open}.", code=2)
         if ms.status in ("premarket", "afterhours") and not dry_run:
-            c.print(f"[red]Market in {ms.status} session — v1 only supports RTH market orders.[/red]")
-            sys.exit(2)
+            _fail(f"Market in {ms.status} session — only RTH market orders are supported.", code=2)
 
     if csv_file and csv_url:
-        c.print("[red]✗ pass only one of --csv-file / --csv-url.[/red]")
-        sys.exit(1)
+        _fail("pass only one of --csv-file / --csv-url.")
     if csv_file:
         with open(csv_file, encoding="utf-8") as f:
             csv_text = f.read()
     elif csv_url:
         csv_text = _fetch_url_or_exit(csv_url)
     else:
-        c.print("\n[bold cyan]Paste CSV (ticker,weight), then Ctrl+D (Unix) or Ctrl+Z+Enter (Windows):[/bold cyan]")
-        csv_text = sys.stdin.read()
+        if json_out or not sys.stdin.isatty():
+            csv_text = sys.stdin.read()
+        else:
+            say("\n[bold cyan]Paste CSV (ticker,weight), then Ctrl+D (Unix) or Ctrl+Z+Enter (Windows):[/bold cyan]")
+            csv_text = sys.stdin.read()
+
+    # Stale-CSV guard (before anything else touches the broker).
+    stale = safety.check_stale(csv_text, max_stale_hours)
+    if stale:
+        _fail(stale)
 
     try:
         targets = parse_csv(csv_text)
     except CSVParseError as e:
-        c.print(f"[red]✗ CSV parse error:[/red] {e}")
-        sys.exit(1)
+        _fail(f"CSV parse error: {e}")
 
-    c.print(f"[green]✓ loaded {len(targets)} targets.[/green]")
+    say(f"[green]✓ loaded {len(targets)} targets.[/green]")
 
     b = _load_broker(broker)
-    bal = b.balances()
-    pos = b.positions()
+    bal = retry.with_retry(b.balances)
+    pos = retry.with_retry(b.positions)
     universe = sorted({tg.ticker for tg in targets} | set(pos.keys()))
-    c.print(f"Quoting {len(universe)} symbols via {b.name}...", style="dim")
-    quotes = b.quote(universe)
+    say(f"Quoting {len(universe)} symbols via {b.name}...", style="dim")
+    quotes = retry.with_retry(lambda: b.quote(universe))
     for tk, p in pos.items():
         quotes.setdefault(tk, p.price)
 
     preview = build_preview(
-        targets=targets,
-        positions=pos,
-        nav=bal.nav,
-        cash=bal.cash,
-        buying_power=bal.buying_power,
-        quotes=quotes,
+        targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
+        buying_power=bal.buying_power, quotes=quotes,
         drift_threshold=Decimal(str(threshold)),
     )
+
+    # Extra safety cap on top of the engine's own checks.
+    cap_msg = safety.check_max_notional(preview.orders, Decimal(str(max_notional)) if max_notional else None)
+    if cap_msg:
+        preview.blockers.append(cap_msg)
+
+    # Idempotency: same targets already done today?
+    fp = runstate.fingerprint(b.name, b.account_id, targets)
+    duplicate = runstate.already_done(fp) and not force
+
+    # In JSON mode the single payload carries everything (orders, warnings,
+    # blockers, dry_run, duplicate); decide exit purely on those flags so we
+    # never print a second JSON object.
+    if json_out:
+        _emit_json(b, preview, dry_run=dry_run, duplicate=duplicate)
+        if preview.has_blockers:
+            sys.exit(1)
+        if dry_run or not preview.orders or duplicate:
+            return
+        if not yes:
+            print(json.dumps({"error": "refusing to execute without --yes in JSON/non-interactive mode"}))
+            sys.exit(1)
+        sent, failed, results = _execute(b, preview)
+        runstate.record(fp)
+        notifications.notify(
+            notifications.format_summary(b.name, b.account_id, sent, failed, preview.orders),
+            notify_url=notify_url,
+        )
+        print(json.dumps({"executed": True, "sent": sent, "failed": failed, "results": results}, default=str))
+        return
 
     _render_preview(preview, b.name, b.account_id, ms)
 
     if preview.has_blockers:
-        c.print("[red]✗ blockers present — refusing to execute.[/red]")
-        sys.exit(1)
+        _fail("blockers present — refusing to execute.")
     if not preview.orders:
-        c.print("[green]Nothing to do — portfolio within drift on every ticker.[/green]")
+        say("[green]Nothing to do — portfolio within drift on every ticker.[/green]")
         return
     if dry_run:
-        c.print("[yellow]--dry-run set, exiting without sending orders.[/yellow]")
+        say("[yellow]--dry-run set, exiting without sending orders.[/yellow]")
         return
-    if not yes and not Confirm.ask(f"\nExecute [bold]{len(preview.orders)}[/bold] orders on [bold]{b.name}[/bold]?", default=False):
-        c.print("[red]Cancelled.[/red]")
-        sys.exit(0)
+    if duplicate:
+        say("[yellow]Identical targets already executed today — skipping (use --force to override).[/yellow]")
+        return
+    if not yes:
+        if not sys.stdin.isatty():
+            _fail("refusing to execute without --yes in non-interactive mode.")
+        if not Confirm.ask(f"\nExecute [bold]{len(preview.orders)}[/bold] orders on [bold]{b.name}[/bold]?", default=False):
+            say("[red]Cancelled.[/red]")
+            sys.exit(0)
 
-    _execute(b, preview)
+    sent, failed, _ = _execute(b, preview)
+    runstate.record(fp)
+
+    # Notify (best-effort, never raises).
+    summary = notifications.format_summary(b.name, b.account_id, sent, failed, preview.orders)
+    channels = notifications.notify(summary, notify_url=notify_url)
+    if channels and not quiet:
+        say(f"[dim]notified: {', '.join(channels)}[/dim]")
 
 
 def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
+    if _QUIET:
+        return
     c.print(
         f"\n[bold]{broker_name}[/bold] · account {account_id}  ·  "
         f"NAV [green]${preview.nav:,.2f}[/green]  ·  "
@@ -513,26 +639,90 @@ def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
         c.print(f"[red]✗ {b}[/red]")
 
 
-def _execute(broker, preview) -> None:
+def _execute(broker, preview):
     total = len(preview.orders)
     sent = 0
     failed = 0
+    results = []
     for i, o in enumerate(preview.orders, 1):
-        c.print(f"[{i}/{total}] {o.ticker} {o.side.value} {o.quantity:.2f} @ MKT ...", end=" ")
+        say(f"[{i}/{total}] {o.ticker} {o.side.value} {o.quantity:.2f} @ MKT ...", end=" ")
         try:
-            result = broker.place_market(o, dry_run=False)
+            result = retry.with_retry(lambda o=o: broker.place_market(o, dry_run=False))
         except Exception as e:
             result = {"status": "error", "reason": str(e), "ticker": o.ticker}
         status = result.get("status", "?")
         if status in ("error", "skipped"):
             failed += 1
-            c.print(f"[red]{status.upper()}[/red] {result.get('reason', '')}")
+            say(f"[red]{status.upper()}[/red] {result.get('reason', '')}")
         else:
             sent += 1
-            c.print(f"[green]{status.upper()}[/green]  id={result.get('order_id', '?')}")
+            say(f"[green]{status.upper()}[/green]  id={result.get('order_id', '?')}")
+        results.append(result)
         fill_log.append({"event": "order", "broker": broker.name, **result, "side": o.side.value, "quantity": float(o.quantity)})
 
-    c.print(f"\n[bold]Done.[/bold]  sent: {sent}  ·  failed: {failed}  ·  log: {fill_log.log_dir()}")
+    # Always show a one-line summary (except in JSON mode) so even --quiet
+    # cron runs leave a trace.
+    if not _JSON:
+        c.print(f"[bold]Done.[/bold] {broker.name}: sent {sent}, failed {failed}")
+    return sent, failed, results
+
+
+@main.command()
+@_BROKER_OPT
+@click.option("--creds-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Load credentials from a file first.")
+@click.pass_context
+def doctor(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -> None:
+    """Health check: credentials, connectivity, market status, a sample quote."""
+    if creds_file:
+        _load_creds_file_or_exit(creds_file)
+
+    ms = market_status()
+    c.print(f"Market: [bold]{ms.status}[/bold]" + (f" · closes in {ms.minutes_to_close} min" if ms.minutes_to_close is not None else ""))
+
+    requested = (broker_opt or ctx.obj.get("broker") or "").lower().strip()
+    names = [requested] if requested else list(keychain.list_brokers()) or list(SUPPORTED)
+
+    table = Table(show_header=True, header_style="bold", title="Broker health")
+    table.add_column("Broker")
+    table.add_column("Creds")
+    table.add_column("Connect")
+    table.add_column("NAV", justify="right")
+    table.add_column("Positions", justify="right")
+    table.add_column("Quote SPY", justify="right")
+
+    for name in names:
+        has_creds = broker_kwargs_from_env(name) is not None or name in set(keychain.list_brokers())
+        creds_cell = "[green]✓[/green]" if has_creds else "[dim]—[/dim]"
+        conn = nav = npos = q = "[dim]—[/dim]"
+        if has_creds:
+            try:
+                b = _build_broker_quiet(name)
+                conn = "[green]✓[/green]"
+                try:
+                    nav = f"${b.balances().nav:,.0f}"
+                except Exception as e:
+                    nav = f"[red]err[/red] {str(e)[:30]}"
+                try:
+                    npos = str(len(b.positions()))
+                except Exception:
+                    npos = "[red]err[/red]"
+                try:
+                    qd = b.quote(["SPY"])
+                    q = f"${qd['SPY']:,.2f}" if qd.get("SPY") else "[yellow]none[/yellow]"
+                except Exception:
+                    q = "[red]err[/red]"
+            except Exception as e:
+                conn = f"[red]✗[/red] {str(e)[:40]}"
+        table.add_row(name, creds_cell, conn, nav, npos, q)
+    c.print(table)
+
+
+def _build_broker_quiet(name: str):
+    """Build a broker without the exit-on-error wrapper (for doctor)."""
+    creds = broker_kwargs_from_env(name)
+    if creds is None:
+        creds = keychain.load(name)
+    return make(name, **creds)
 
 
 if __name__ == "__main__":

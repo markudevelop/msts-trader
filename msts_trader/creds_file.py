@@ -120,6 +120,13 @@ def broker_kwargs_from_env(broker: str) -> dict | None:
         if k and s:
             return {"app_key": k, "app_secret": s, "callback_url": e("SCHWAB_CALLBACK_URL") or "https://127.0.0.1:8182/"}
         return None
+    if broker == "hyperliquid":
+        pk = e("HL_PRIVATE_KEY")
+        if pk:
+            raw = e("HL_TESTNET")
+            testnet = bool(raw) and raw.lower() in {"1", "true", "yes"}
+            return {"private_key": pk, "account_address": e("HL_ACCOUNT_ADDRESS"), "testnet": testnet}
+        return None
     if broker == "paper":
         sc = e("PAPER_STARTING_CASH")
         if sc:

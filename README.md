@@ -31,21 +31,31 @@ Done.  sent: 4  ·  failed: 0  ·  log: ~/.msts-trader/fills/
 
 ## Supported brokers
 
-| Broker     | Status                  | Auth                      | Notes |
-|------------|-------------------------|---------------------------|-------|
-| Paper      | shipped, tested         | local file                | $100k starting cash, no real fills, 14 unit tests |
-| Tastytrade | shipped, **live-tested** | OAuth refresh token       | indefinite token, BYO OAuth app — connect / balances / positions / quotes / dry-run all confirmed against a real account |
-| Alpaca     | shipped, **live-tested** | API key + secret          | paper or live, fractional supported — end-to-end confirmed on a paper account |
-| IBKR       | shipped, **live-tested** | TWS / IB Gateway socket   | `pip install "msts-trader[ibkr]"`, works with local or Dockerised Gateway — connect / balances / positions / quotes / dry-run confirmed against a real account |
-| Schwab     | shipped, beta            | OAuth2 + browser callback | `pip install "msts-trader[schwab]"`, 7-day refresh, **awaiting live-fill confirmation** |
+| Broker      | Status                   | Auth                      | Install |
+|-------------|--------------------------|---------------------------|---------|
+| Paper       | shipped, tested          | local file                | built-in |
+| Tastytrade  | shipped, **live-tested** | OAuth refresh token       | built-in |
+| Alpaca      | shipped, **live-tested** | API key + secret          | built-in |
+| IBKR        | shipped, **live-tested** | TWS / IB Gateway socket   | `pip install "msts-trader[ibkr]"` |
+| Schwab      | shipped, beta            | OAuth2 + browser callback | `pip install "msts-trader[schwab]"` |
+| Hyperliquid | shipped, **experimental**| API-wallet private key    | `pip install "msts-trader[hyperliquid]"` |
 
-**Beta status:** the Schwab adapter passes structural protocol
-conformance tests in CI (signatures, attributes, error handling) but
-has not yet been verified end-to-end against a real brokerage account
-by the author. Try it in paper mode first, or file an issue with a
-fill report if you run it live.
+- **Live-tested** = connect / balances / positions / quotes / order path
+  verified against a real account (Tastytrade & Alpaca filled real
+  1-share orders; IBKR verified read + dry-run).
+- **Beta** (Schwab) = passes structural conformance tests in CI but no
+  live fill confirmed by the author.
+- **Experimental** (Hyperliquid) = crypto perps DEX; the adapter is built
+  on the public SDK but has not been run against a live account. Test on
+  testnet (`HL_TESTNET=1`) with tiny size first.
 
-Open a GitHub issue if you want one prioritised.
+**IBKR + EU accounts:** an EU-regulated IBKR account cannot trade
+US-domiciled ETFs (KID/PRIIPs, Error 201). US stocks may still be
+cancelled by an account Order Preset (Error 10349 → fix in TWS Global
+Configuration → Presets). Tastytrade and Alpaca have neither limit.
+
+Open a GitHub issue to prioritise a broker (Tradier and a ccxt-based
+crypto adapter are likely next).
 
 ## Install
 
@@ -61,9 +71,10 @@ IBKR and Schwab require extra dependencies. Install them only if you
 plan to use that broker:
 
 ```bash
-pip install "msts-trader[ibkr]"      # adds ib_insync + nest_asyncio
-pip install "msts-trader[schwab]"    # adds schwab-py
-pip install "msts-trader[all]"       # everything
+pip install "msts-trader[ibkr]"         # adds ib_insync + nest_asyncio
+pip install "msts-trader[schwab]"       # adds schwab-py
+pip install "msts-trader[hyperliquid]"  # adds hyperliquid-python-sdk + eth-account
+pip install "msts-trader[all]"          # everything
 ```
 
 Install from source:
@@ -188,16 +199,61 @@ msts-trader rebalance --csv-file targets.csv          # read from a file
 msts-trader --broker paper rebalance --csv-file ...   # test against paper
 ```
 
+### Safety, automation & output flags
+
+```bash
+msts-trader rebalance --max-notional 60000   # refuse if gross buys exceed $60k
+msts-trader rebalance --max-stale-hours 36   # refuse if the CSV's `# asof:` is too old
+msts-trader rebalance --json                 # machine-readable output (one JSON object)
+msts-trader rebalance --quiet                # minimal output for cron logs
+msts-trader rebalance --notify-url <webhook> # Discord/Slack/generic ping on execute
+msts-trader rebalance --force                # run even if same targets already done today
+msts-trader rebalance --config my.toml       # load defaults from a config file
+```
+
+- **Idempotency:** identical targets won't trade twice in the same UTC day
+  unless you pass `--force` (guards against a cron + manual overlap).
+- **Stale guard:** add a `# asof: 2026-06-05T15:45:00Z` comment line to your
+  CSV and `--max-stale-hours` refuses to trade on old weights.
+- **Notifications:** set `--notify-url` or `MSTS_NOTIFY_URL`
+  (Discord/Slack/generic webhook), or `MSTS_TELEGRAM_TOKEN` +
+  `MSTS_TELEGRAM_CHAT_ID`. A failed webhook never blocks trading.
+- **Retries:** transient broker errors (429s, timeouts) are retried with
+  backoff; real errors fail fast.
+
+### Config file
+
+Set defaults once in `~/.msts-trader/config.toml` (or pass `--config`):
+
+```toml
+broker = "tastytrade"
+threshold = 0.04
+csv_url = "https://example.com/weights.csv"
+max_notional = 60000
+max_stale_hours = 36
+notify_url = "https://discord.com/api/webhooks/..."
+quiet = false
+```
+
+Resolution order for any setting: CLI flag > environment > config file > default.
+
 ### Other commands
 
 ```bash
 msts-trader status                  # NAV, positions, market status (default broker)
-msts-trader --broker alpaca status  # other broker
+msts-trader status --creds-file x   # headless status, no keychain
+msts-trader doctor                  # health-check creds/connectivity/market for each broker
+msts-trader doctor --broker ibkr    # check one broker
 msts-trader brokers                 # list supported + configured brokers
 msts-trader logout --broker alpaca  # clear stored creds for one broker
 msts-trader paper-reset             # reset paper book to starting cash
 msts-trader --version
 ```
+
+`doctor` is the fastest way to diagnose a broker: it shows, per broker,
+whether credentials are present, whether it connects, your NAV, position
+count, and a sample SPY quote — so permission/connectivity problems
+(like the IBKR KID block) surface immediately.
 
 ## What it does
 

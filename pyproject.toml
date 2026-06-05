@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "msts-trader"
-version = "0.4.0"
-description = "Paste a target-weights CSV, preview the rebalance, execute it on your brokerage account. Tastytrade + Alpaca + IBKR + Schwab + paper."
+version = "0.5.0"
+description = "Paste a target-weights CSV, preview the rebalance, execute it on your brokerage account. Tastytrade + Alpaca + IBKR + Schwab + Hyperliquid + paper."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 authors = [{ name = "markudevelop" }]
-keywords = ["trading", "tastytrade", "alpaca", "ibkr", "schwab", "rebalance", "portfolio", "cli"]
+keywords = ["trading", "tastytrade", "alpaca", "ibkr", "schwab", "hyperliquid", "rebalance", "portfolio", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -34,7 +34,8 @@ dependencies = [
 [project.optional-dependencies]
 ibkr = ["ib_insync>=0.9.86", "nest_asyncio>=1.6"]
 schwab = ["schwab-py>=1.4"]
-all = ["ib_insync>=0.9.86", "nest_asyncio>=1.6", "schwab-py>=1.4"]
+hyperliquid = ["hyperliquid-python-sdk>=0.9", "eth-account>=0.10"]
+all = ["ib_insync>=0.9.86", "nest_asyncio>=1.6", "schwab-py>=1.4", "hyperliquid-python-sdk>=0.9", "eth-account>=0.10"]
 dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
 
 [tool.pytest.ini_options]

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from .base import Balances, Broker, BrokerError
 
-SUPPORTED = ("tastytrade", "alpaca", "ibkr", "schwab", "paper")
+SUPPORTED = ("tastytrade", "alpaca", "ibkr", "schwab", "hyperliquid", "paper")
 
 
 def make(name: str, **creds) -> Broker:
@@ -25,6 +25,9 @@ def make(name: str, **creds) -> Broker:
     if name == "schwab":
         from .schwab import Schwab
         return Schwab(**creds)
+    if name == "hyperliquid":
+        from .hyperliquid import Hyperliquid
+        return Hyperliquid(**creds)
     if name == "paper":
         from .paper import Paper
         return Paper(**creds)

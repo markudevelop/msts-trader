@@ -18,6 +18,7 @@ REQUIRED_METHODS = ("balances", "positions", "quote", "place_market")
 
 def _broker_classes():
     from msts_trader.brokers.alpaca import Alpaca
+    from msts_trader.brokers.hyperliquid import Hyperliquid
     from msts_trader.brokers.ibkr import IBKR
     from msts_trader.brokers.paper import Paper
     from msts_trader.brokers.schwab import Schwab
@@ -27,6 +28,7 @@ def _broker_classes():
         "alpaca": Alpaca,
         "ibkr": IBKR,
         "schwab": Schwab,
+        "hyperliquid": Hyperliquid,
         "paper": Paper,
     }
 

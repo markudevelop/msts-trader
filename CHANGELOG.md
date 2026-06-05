@@ -12,6 +12,41 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.5.0] — 2026-06-05
+
+### Added
+- **Notifications** — ping a Discord / Slack / generic webhook (or a
+  Telegram bot) on execute. `--notify-url` or `MSTS_NOTIFY_URL` /
+  `MSTS_TELEGRAM_TOKEN` + `MSTS_TELEGRAM_CHAT_ID`. Failures never block
+  trading. Essential for unattended runs.
+- **`doctor` command** — per-broker health check: creds present?
+  connects? NAV, position count, sample SPY quote. Surfaces
+  permission/connectivity problems (e.g. the IBKR KID block) instantly.
+- **`--json`** — machine-readable single-object output for rebalance
+  (and structured exit), for logging / piping in automation.
+- **`--quiet`** — minimal output for cron logs (still prints a one-line
+  summary and errors).
+- **`--max-notional`** — refuse if gross buys exceed a dollar cap.
+- **`--max-stale-hours`** + CSV `# asof: <iso>` — refuse to trade on
+  stale weights.
+- **Idempotency guard** — identical targets won't execute twice in the
+  same UTC day unless `--force` (cron + manual overlap protection).
+- **Retry/backoff** — transient broker errors (429s, timeouts, resets)
+  are retried; real errors fail fast.
+- **Config file** — `~/.msts-trader/config.toml` (or `--config`) for
+  defaults: broker, threshold, csv source, limits, notify URL, quiet.
+  Resolution: CLI > env > config > default.
+- **Hyperliquid adapter** (experimental) — crypto perps DEX via the
+  public SDK. `pip install "msts-trader[hyperliquid]"`. Not yet
+  live-verified; test on testnet (`HL_TESTNET=1`) with tiny size.
+
+### Tests
+- 194 total (+41): safety, retry, runstate, config, notifications, env
+  creds, plus Hyperliquid protocol conformance.
+
+### Notes
+- Crypto brokers (hyperliquid) skip the RTH market-hours guard (24/7).
+
 ## [0.4.0] — 2026-06-05
 
 ### Added
@@ -256,7 +291,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/markudevelop/msts-trader/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/markudevelop/msts-trader/compare/v0.3.8...v0.4.0
 [0.3.8]: https://github.com/markudevelop/msts-trader/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/markudevelop/msts-trader/compare/v0.3.6...v0.3.7
