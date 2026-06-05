@@ -45,9 +45,15 @@ def test_rejects_negative_weight():
         parse_csv("ticker,weight\nSPY,-0.1\n")
 
 
-def test_rejects_weight_over_one():
-    with pytest.raises(CSVParseError, match="expected fraction"):
+def test_rejects_weight_pasted_as_percent():
+    with pytest.raises(CSVParseError, match="exceeds 3.0"):
         parse_csv("ticker,weight\nSPY,42\n")
+
+
+def test_allows_leveraged_single_position_under_3x():
+    # A single position up to 3.0 (300%) is allowed for leveraged books.
+    out = parse_csv("ticker,weight\nQQQ,1.5\n")
+    assert out[0].weight == Decimal("1.5")
 
 
 def test_rejects_non_numeric_weight():

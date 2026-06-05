@@ -36,14 +36,14 @@ Done.  sent: 4  ·  failed: 0  ·  log: ~/.msts-trader/fills/
 | Paper      | shipped, tested         | local file                | $100k starting cash, no real fills, 14 unit tests |
 | Tastytrade | shipped, **live-tested** | OAuth refresh token       | indefinite token, BYO OAuth app — connect / balances / positions / quotes / dry-run all confirmed against a real account |
 | Alpaca     | shipped, **live-tested** | API key + secret          | paper or live, fractional supported — end-to-end confirmed on a paper account |
-| IBKR       | shipped, beta            | TWS / IB Gateway socket   | `pip install "msts-trader[ibkr]"`, works with local or Dockerised Gateway, **awaiting live-fill confirmation** |
+| IBKR       | shipped, **live-tested** | TWS / IB Gateway socket   | `pip install "msts-trader[ibkr]"`, works with local or Dockerised Gateway — connect / balances / positions / quotes / dry-run confirmed against a real account |
 | Schwab     | shipped, beta            | OAuth2 + browser callback | `pip install "msts-trader[schwab]"`, 7-day refresh, **awaiting live-fill confirmation** |
 
-**Beta status:** IBKR and Schwab adapters pass structural protocol
+**Beta status:** the Schwab adapter passes structural protocol
 conformance tests in CI (signatures, attributes, error handling) but
-have not yet been verified end-to-end against a real brokerage account
-by the author. Try them in paper mode first, or file an issue with a
-fill report if you run them live.
+has not yet been verified end-to-end against a real brokerage account
+by the author. Try it in paper mode first, or file an issue with a
+fill report if you run it live.
 
 Open a GitHub issue if you want one prioritised.
 
@@ -211,6 +211,35 @@ msts-trader --version
   broker supports fractional MARKET orders.
 - Shows the full plan and waits for `y` before sending anything.
 - Submits MARKET DAY orders. Logs results to `~/.msts-trader/fills/`.
+
+## Leveraged weights
+
+Target weights are fractions of your account NAV. They **can sum to more
+than 1.0** — that's leverage. For example a book that sums to 1.60
+(160% gross exposure, 1.60x) sizes each position at `weight × NAV`, and
+the amount over 100% is financed on margin:
+
+```csv
+ticker,weight
+QQQ,0.3123
+GLD,0.2537
+TBT,0.1480
+...        # sums to ~1.60 = 160% gross
+```
+
+The preview shows `Gross target exposure: 160% (1.60x)` and warns that it
+needs a margin account with sufficient buying power. The broker's own
+pre-flight (e.g. Tastytrade) will scale the order set down if your
+buying power is short.
+
+Two things to know for a **fresh account**:
+
+- Positions smaller than the drift threshold (default **4% of NAV**)
+  won't be established on the first run — they look "within drift" of a
+  zero holding. For initial setup of a book with small sleeves, lower it:
+  `msts-trader rebalance --threshold 0.01`.
+- A single weight above 3.0 (300%) is rejected as a likely
+  percentage-paste mistake (e.g. `31.23` instead of `0.3123`).
 
 ## What it does NOT do (v0.2)
 

@@ -48,8 +48,15 @@ def parse_csv(text: str) -> list[Target]:
             raise CSVParseError(f"line {i}: weight {raw_w!r} is not a number")
         if w < 0:
             raise CSVParseError(f"line {i}: negative weight {w} for {tkr} (shorts unsupported in v1)")
-        if w > 1:
-            raise CSVParseError(f"line {i}: weight {w} > 1 for {tkr} (expected fraction, not percent)")
+        # Weights are fractions of NAV. A single position above ~300% is
+        # almost certainly a percentage pasted as a whole number (e.g. 31.23
+        # instead of 0.3123); reject those. Leveraged single positions up to
+        # 3.0 are allowed — overall book leverage (sum > 1) is fine.
+        if w > 3:
+            raise CSVParseError(
+                f"line {i}: weight {w} for {tkr} exceeds 3.0 (300%). "
+                f"If these are percentages, divide by 100 (e.g. 31.23 -> 0.3123)."
+            )
         seen.add(tkr)
         targets.append(Target(ticker=tkr, weight=w))
 

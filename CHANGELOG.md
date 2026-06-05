@@ -12,6 +12,52 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.3.6] — 2026-06-05
+
+### Added
+- **Leverage support.** Target weights may now sum to more than 1.0 —
+  that's gross exposure / leverage (e.g. 1.60 = 160% gross, financed on
+  margin), which is how the production books are actually sized. Each
+  position is sized at `weight × NAV`. The preview shows a "Gross target
+  exposure: 160% (1.60x)" line and a margin warning. Previously any CSV
+  summing past 1.05 was hard-blocked as "malformed" — that would have
+  **rejected real leveraged books outright**.
+- **IBKR dry-run = real what-if.** `place_market(dry_run=True)` on IBKR
+  now calls `whatIfOrder` and returns the broker's margin / commission
+  preview instead of a local stub. (Alpaca has no what-if API, so its
+  dry-run stays a local no-op; Tastytrade's dry-run already hits its
+  real validation endpoint.)
+
+### Fixed
+- **IBKR `quote()` reliability** (found during a live dry-run): the old
+  `reqMktData` + fixed-sleep approach often returned only one of several
+  symbols and emitted a noisy `Error 300: Can't find EId`. Rewrote
+  `quote()` to use batched `reqTickers` (blocks until each snapshot
+  populates, cancels cleanly) with a delayed-data fallback
+  (`reqMarketDataType(3)`). Verified live: SPY / SHV / GLD all return.
+
+### Changed
+- CSV parser per-ticker cap raised from 1.0 to 3.0 (allows leveraged
+  single positions; still rejects percentages-pasted-as-whole-numbers).
+- `diff.build_preview` blocks only at >5.0x gross (almost certainly
+  percentages), warns on any leverage above 1.01x, and keeps the
+  cash-drag warning under 0.5x.
+- IBKR promoted to **live-tested** in the support matrix after an
+  end-to-end read + dry-run against a real TWS account.
+
+### Known issues
+- IBKR market orders can be cancelled by TWS with `Error 10349` ("Order
+  TIF was set to DAY based on order preset") when the account has API
+  order precautions enabled. Enable **Global Configuration → API →
+  Precautions → "Bypass Order Precautions for API Orders"** in TWS / IB
+  Gateway, or a future release will add a marketable-limit fallback.
+
+### Tests
+- 141 total. New leverage cases include the real 160% production book
+  (15 tickers, sum 1.60) building without blockers, and the note that
+  sleeves under the 4% drift threshold need a lower `--threshold` on a
+  fresh account.
+
 ## [0.3.5] — 2026-06-05
 
 ### Added
@@ -145,7 +191,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/markudevelop/msts-trader/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/markudevelop/msts-trader/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/markudevelop/msts-trader/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/markudevelop/msts-trader/compare/v0.3.2...v0.3.3

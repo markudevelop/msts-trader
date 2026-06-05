@@ -14,6 +14,7 @@ from .models import Order, Position, Preview, RebalanceRow, Side, Target
 
 DRIFT_THRESHOLD = Decimal("0.04")  # 4%
 MIN_ORDER_DOLLARS = Decimal("1")   # ignore sub-$1 dust
+MAX_SANE_GROSS = Decimal("5.0")    # >500% gross => almost certainly percentages, not weights
 
 
 def build_preview(
@@ -38,8 +39,23 @@ def build_preview(
 
     # Sanity: weight sum
     total = sum(target_map.values(), Decimal(0))
-    if total > Decimal("1.05"):
-        blockers.append(f"Target weights sum to {total:.4f} (>1.05). CSV looks malformed.")
+    # Weights are fractions of NAV. A book can intentionally sum to more
+    # than 1.0 — that's leverage (e.g. 1.60 = 160% gross exposure, financed
+    # on margin). Only block absurd totals that almost certainly mean the
+    # weights were pasted as percentages.
+    if total > MAX_SANE_GROSS:
+        blockers.append(
+            f"Target weights sum to {total:.2f} ({total * 100:.0f}% gross) — over "
+            f"{MAX_SANE_GROSS:.0f}x. This usually means the weights were pasted as "
+            f"percentages instead of fractions (e.g. 31.23 should be 0.3123)."
+        )
+    elif total > Decimal("1.01"):
+        warnings.append(
+            f"Leveraged book: {total * 100:.0f}% gross exposure ({total:.2f}x). "
+            f"Each position is sized at weight x NAV; the amount over 100% is "
+            f"financed on margin, so this needs a margin account with enough "
+            f"buying power."
+        )
     elif total < Decimal("0.5") and len(targets) > 1:
         warnings.append(f"Target weights sum to only {total:.4f} (<0.5). Cash drag is large — verify CSV.")
 

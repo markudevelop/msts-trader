@@ -105,39 +105,91 @@ class IBKR:
         return out
 
     def quote(self, tickers: Iterable[str]) -> dict[str, Decimal]:
+        """Batch snapshot quotes via reqTickers (blocks until data arrives).
+
+        reqTickers is far more reliable than reqMktData + a fixed sleep: it
+        waits for each snapshot to populate and cancels cleanly (no
+        "Error 300: can't find EId" from double-cancellation). If the
+        account lacks real-time data for a symbol, we retry once in
+        delayed mode (reqMarketDataType 3) so quotes still come through.
+        """
         symbols = sorted({t.upper() for t in tickers})
-        out: dict[str, Decimal] = {}
+        if not symbols:
+            return {}
+
+        contracts = []
         for sym in symbols:
             try:
                 ct = Stock(sym, "SMART", "USD")
                 self._ib.qualifyContracts(ct)
-                ticker = self._ib.reqMktData(ct, snapshot=True)
-                self._ib.sleep(0.6)  # give the snapshot time to arrive
-                px = (
-                    _f(ticker.last) or _f(ticker.marketPrice()) or _f(ticker.close)
-                    or _midpoint(ticker.bid, ticker.ask)
-                )
-                if px is not None and px > 0:
-                    out[sym] = Decimal(str(px))
+                contracts.append((sym, ct))
             except Exception:
                 continue
-            finally:
-                try:
-                    self._ib.cancelMktData(ct)
-                except Exception:
-                    pass
+
+        out: dict[str, Decimal] = {}
+        if not contracts:
+            return out
+
+        def _collect(market_data_type: int) -> list[str]:
+            """Request tickers under a market-data type; return symbols still missing."""
+            try:
+                self._ib.reqMarketDataType(market_data_type)
+            except Exception:
+                pass
+            missing: list[str] = []
+            pending = [(s, c) for s, c in contracts if s not in out]
+            try:
+                tickers_ = self._ib.reqTickers(*[c for _, c in pending])
+            except Exception:
+                return [s for s, _ in pending]
+            by_symbol = {t.contract.symbol: t for t in tickers_}
+            for sym, _ in pending:
+                t = by_symbol.get(sym)
+                px = None
+                if t is not None:
+                    px = (
+                        _f(t.last) or _f(t.close) or _f(t.marketPrice())
+                        or _midpoint(t.bid, t.ask)
+                    )
+                if px is not None and px > 0:
+                    out[sym] = Decimal(str(px))
+                else:
+                    missing.append(sym)
+            return missing
+
+        # 1) live data; 2) anything still missing → delayed (type 3).
+        still_missing = _collect(1)
+        if still_missing:
+            _collect(3)
         return out
 
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
         qty = float(round(float(order.quantity), 4))
         if qty <= 0:
             return {"status": "skipped", "reason": "qty<=0", "ticker": order.ticker}
-        if dry_run:
-            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value, "quantity": qty, "dry_run": True}
 
         ct = Stock(order.ticker, "SMART", "USD")
         self._ib.qualifyContracts(ct)
         action = "BUY" if order.side == Side.BUY else "SELL"
+
+        if dry_run:
+            # Real broker-side validation via what-if: returns margin and
+            # commission impact without ever transmitting the order.
+            whatif = MarketOrder(action, qty, account=self.account_id)
+            base = {"status": "dry-run", "ticker": order.ticker, "side": order.side.value, "quantity": qty, "dry_run": True}
+            try:
+                state = self._ib.whatIfOrder(ct, whatif)
+                base.update(
+                    init_margin_change=_f(getattr(state, "initMarginChange", None)),
+                    maint_margin_change=_f(getattr(state, "maintMarginChange", None)),
+                    equity_with_loan_change=_f(getattr(state, "equityWithLoanChange", None)),
+                    commission=_f(getattr(state, "commission", None)) or _f(getattr(state, "maxCommission", None)),
+                    commission_currency=getattr(state, "commissionCurrency", None),
+                )
+            except Exception as e:
+                base["note"] = f"what-if unavailable: {e}"
+            return base
+
         mkt = MarketOrder(action, qty, account=self.account_id)
         try:
             trade = self._ib.placeOrder(ct, mkt)

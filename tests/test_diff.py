@@ -93,8 +93,73 @@ def test_no_quote_skips_with_warning():
     assert any("no quote" in w for w in p.warnings)
 
 
-def test_weights_over_one_blocks():
+def test_leveraged_book_warns_not_blocks():
+    # A real leveraged book sums to >1 (here 1.30 = 130% gross). It must NOT
+    # be blocked — it should warn that it's leveraged and proceed.
     targets = [Target(ticker="SPY", weight=Decimal("0.7")), Target(ticker="GLD", weight=Decimal("0.6"))]
+    p = build_preview(
+        targets=targets,
+        positions={},
+        nav=Decimal("50000"),
+        cash=Decimal("50000"),
+        buying_power=Decimal("100000"),
+        quotes={"SPY": Decimal("500"), "GLD": Decimal("200")},
+    )
+    assert not p.has_blockers
+    assert any("leveraged book" in w.lower() for w in p.warnings)
+    # Sizing is weight x NAV: SPY 0.7*50k=35k@500=70sh, GLD 0.6*50k=30k@200=150sh
+    by_t = {o.ticker: o for o in p.orders}
+    assert by_t["SPY"].quantity == Decimal("70.00")
+    assert by_t["GLD"].quantity == Decimal("150.00")
+
+
+def test_real_160pct_leveraged_book(basic_quotes):
+    # The user's actual production weights sum to ~1.60 (160% gross / 1.6x).
+    weights = {
+        "QQQ": "0.3123", "GLD": "0.2537", "TBT": "0.1480", "SPY": "0.1178",
+        "EEM": "0.1125", "ORR": "0.1080", "XLP": "0.0948", "EWJ": "0.0810",
+        "SMH": "0.0675", "XLK": "0.0675", "USDU": "0.0671", "IWM": "0.0553",
+        "DXJ": "0.0540", "UUP": "0.0503", "PDBC": "0.0124",
+    }
+    targets = [Target(ticker=t, weight=Decimal(w)) for t, w in weights.items()]
+    quotes = {t: Decimal("100") for t in weights}
+    p = build_preview(
+        targets=targets,
+        positions={},
+        nav=Decimal("100000"),
+        cash=Decimal("100000"),
+        buying_power=Decimal("250000"),
+        quotes=quotes,
+    )
+    assert not p.has_blockers
+    # 14 of 15 size up; PDBC (1.24% of NAV) is below the 4% drift gate on a
+    # fresh account, so it's skipped. Use a lower --threshold for initial setup.
+    assert len(p.orders) == 14
+    ordered = {o.ticker for o in p.orders}
+    assert "PDBC" not in ordered
+    assert "QQQ" in ordered and p.orders[0].quantity == Decimal("312.30")  # 0.3123*100k/100
+    assert any("160% gross" in w or "leveraged book" in w.lower() for w in p.warnings)
+
+
+def test_leveraged_book_low_threshold_captures_small_sleeve():
+    # With a tighter threshold, even the 1.24% PDBC sleeve is established.
+    targets = [Target(ticker="PDBC", weight=Decimal("0.0124")), Target(ticker="QQQ", weight=Decimal("0.3123"))]
+    p = build_preview(
+        targets=targets,
+        positions={},
+        nav=Decimal("100000"),
+        cash=Decimal("100000"),
+        buying_power=Decimal("250000"),
+        quotes={"PDBC": Decimal("100"), "QQQ": Decimal("100")},
+        drift_threshold=Decimal("0.01"),
+    )
+    ordered = {o.ticker for o in p.orders}
+    assert "PDBC" in ordered
+
+
+def test_absurd_gross_blocks_as_percentages():
+    # Weights summing past 5x almost certainly means percentages were pasted.
+    targets = [Target(ticker="SPY", weight=Decimal("3.0")), Target(ticker="GLD", weight=Decimal("3.0"))]
     p = build_preview(
         targets=targets,
         positions={},
@@ -104,7 +169,7 @@ def test_weights_over_one_blocks():
         quotes={"SPY": Decimal("500"), "GLD": Decimal("200")},
     )
     assert p.has_blockers
-    assert any("malformed" in b for b in p.blockers)
+    assert any("percentages" in b.lower() for b in p.blockers)
 
 
 def test_zero_nav_blocks():

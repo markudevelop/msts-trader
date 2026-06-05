@@ -420,6 +420,9 @@ def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
         f"NAV [green]${preview.nav:,.2f}[/green]  ·  "
         f"cash ${preview.cash:,.2f}  ·  BP ${preview.buying_power:,.2f}"
     )
+    gross = sum((row.target_pct for row in preview.rows), Decimal(0))
+    if gross > Decimal("1.01"):
+        c.print(f"Gross target exposure: [bold]{gross * 100:.0f}%[/bold] ([bold]{gross:.2f}x[/bold] leverage — uses margin)")
     if ms.minutes_to_close is not None:
         marker = "[red]" if ms.minutes_to_close < 5 else "[yellow]" if ms.minutes_to_close < 15 else "[green]"
         c.print(f"Market: open  ·  closes in {marker}{ms.minutes_to_close} min[/]")
