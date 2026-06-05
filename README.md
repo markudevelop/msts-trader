@@ -31,13 +31,19 @@ Done.  sent: 4  ·  failed: 0  ·  log: ~/.msts-trader/fills/
 
 ## Supported brokers
 
-| Broker     | Status   | Auth                     | Notes |
-|------------|----------|--------------------------|-------|
-| Paper      | shipped  | local file               | $100k starting cash, no real fills |
-| Tastytrade | shipped  | OAuth refresh token       | indefinite token, BYO OAuth app |
-| Alpaca     | shipped  | API key + secret         | paper or live, fractional supported |
-| IBKR       | shipped  | TWS / IB Gateway socket  | needs `pip install msts-trader[ibkr]`; works with your local Gateway / Dockerised Gateway |
-| Schwab     | shipped  | OAuth2 + browser callback | needs `pip install msts-trader[schwab]`; 7-day refresh token |
+| Broker     | Status                | Auth                      | Notes |
+|------------|-----------------------|---------------------------|-------|
+| Paper      | shipped, tested       | local file                | $100k starting cash, no real fills, 14 unit tests |
+| Tastytrade | shipped, live-tested  | OAuth refresh token       | indefinite token, BYO OAuth app |
+| Alpaca     | shipped, beta         | API key + secret          | paper or live, fractional supported, **awaiting live-fill confirmation** |
+| IBKR       | shipped, beta         | TWS / IB Gateway socket   | `pip install "msts-trader[ibkr]"`, works with local or Dockerised Gateway, **awaiting live-fill confirmation** |
+| Schwab     | shipped, beta         | OAuth2 + browser callback | `pip install "msts-trader[schwab]"`, 7-day refresh, **awaiting live-fill confirmation** |
+
+**Beta status:** Alpaca, IBKR, and Schwab adapters pass structural
+protocol conformance tests in CI (signatures, attributes, error
+handling) but have not yet been verified end-to-end against a real
+brokerage account by the author. Try them in paper mode first, or
+file an issue with a fill report if you run them live.
 
 Open a GitHub issue if you want one prioritised.
 
@@ -231,6 +237,30 @@ This tool sends real orders to your live brokerage account. You are
 responsible for the CSV you paste and the rebalance you confirm. Past
 performance of any signal source is not indicative of future results.
 The author makes no warranty of any kind; use at your own risk.
+
+## Development
+
+```bash
+git clone https://github.com/markudevelop/msts-trader.git
+cd msts-trader
+pip install -e ".[all,dev]"
+pytest -v          # 95 tests, ~2 seconds
+ruff check msts_trader
+```
+
+The test suite covers:
+
+- CSV parser (header validation, weights, comments, dup/neg/>1 guards)
+- Diff math (drift threshold, exits, warnings, blockers, BP overrun)
+- Market hours (RTH/pre/after/closed, holidays through 2027, weekends)
+- Paper broker end-to-end (cash accounting, position lifecycle, dry-run, persistence)
+- Broker protocol conformance (every adapter exposes the required attrs + methods)
+- Keychain (save/load/clear, default broker, broker enumeration)
+- CLI (help, version, brokers list, paper login, no-creds clean exit)
+
+Live brokerage adapters (Tastytrade, Alpaca, IBKR, Schwab) are not
+exercised against real APIs in CI — they need credentials and can
+move real money. The tests verify structure; you verify fills.
 
 ## License
 
