@@ -1,10 +1,12 @@
-"""msts-trader CLI: paste a CSV, preview the rebalance, execute it on Tastytrade.
+"""msts-trader CLI: paste a CSV, preview the rebalance, execute it on your broker.
 
 Subcommands:
-  login       — store provider_secret + refresh_token + account_id in OS keychain
-  status      — show NAV / positions / market status, no orders
-  rebalance   — (default) paste CSV from stdin, preview, prompt, execute
-  logout      — clear stored creds
+  login [--broker NAME]      — store creds in OS keychain (per-broker)
+  status [--broker NAME]     — show NAV / positions / market status
+  rebalance [--broker NAME]  — (default) paste CSV, preview, prompt, execute
+  logout [--broker NAME]     — clear stored creds for one broker
+  brokers                    — list supported and currently-configured brokers
+  paper-reset                — reset the paper-broker book
 """
 from __future__ import annotations
 
@@ -17,28 +19,67 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
-from . import __version__, fill_log
+from . import __version__, fill_log, keychain
+from .brokers import SUPPORTED, BrokerError, make
 from .csv_parser import CSVParseError, parse_csv
 from .diff import build_preview
-from .keychain import CredsMissingError, clear_creds, load_creds, save_creds
 from .market_hours import market_status
 from .models import Side
-from .tasty import Tasty
 
 c = Console()
 
 
+def _resolve_broker_name(explicit: str | None) -> str:
+    if explicit:
+        return explicit.lower().strip()
+    chosen = keychain.get_default()
+    if not chosen:
+        c.print("[red]no broker selected and no default stored — pass --broker NAME or run `msts-trader login --broker NAME` first[/red]")
+        sys.exit(1)
+    return chosen
+
+
+def _load_broker(name: str):
+    creds = keychain.load(name)
+    try:
+        return make(name, **creds)
+    except BrokerError as e:
+        c.print(f"[red]✗ broker init failed:[/red] {e}")
+        sys.exit(1)
+
+
 @click.group(invoke_without_command=True)
 @click.version_option(__version__, prog_name="msts-trader")
+@click.option("--broker", default=None, help=f"Broker name. Supported: {', '.join(SUPPORTED)}")
 @click.pass_context
-def main(ctx: click.Context) -> None:
+def main(ctx: click.Context, broker: str | None) -> None:
+    ctx.ensure_object(dict)
+    ctx.obj["broker"] = broker
     if ctx.invoked_subcommand is None:
         ctx.invoke(rebalance)
 
 
 @main.command()
-def login() -> None:
-    """Store Tastytrade OAuth creds (provider_secret + refresh_token) in OS keychain."""
+@click.pass_context
+def login(ctx: click.Context) -> None:
+    """Store broker creds in OS keychain."""
+    broker = ctx.obj.get("broker") or Prompt.ask(
+        f"broker [{'|'.join(SUPPORTED)}]",
+        default="tastytrade",
+        choices=list(SUPPORTED),
+    )
+    if broker == "tastytrade":
+        _login_tastytrade()
+    elif broker == "alpaca":
+        _login_alpaca()
+    elif broker == "paper":
+        _login_paper()
+    else:
+        c.print(f"[red]unknown broker {broker!r}[/red]")
+        sys.exit(1)
+
+
+def _login_tastytrade() -> None:
     c.print(
         Panel.fit(
             "[bold]Tastytrade OAuth setup[/bold]\n\n"
@@ -55,42 +96,106 @@ def login() -> None:
     account_id = Prompt.ask("account id (optional)", default="").strip() or None
 
     try:
-        t = Tasty(provider_secret, refresh_token, account_id)
-        bal = t.balances()
+        b = make("tastytrade", provider_secret=provider_secret, refresh_token=refresh_token, account_id=account_id)
+        bal = b.balances()
     except Exception as e:
         c.print(f"[red]✗ login failed:[/red] {e}")
         sys.exit(1)
 
-    save_creds(provider_secret, refresh_token, account_id or t.account_id)
+    keychain.save("tastytrade", {
+        "provider_secret": provider_secret,
+        "refresh_token": refresh_token,
+        "account_id": account_id or b.account_id,
+    })
+    keychain.set_default("tastytrade")
+    c.print(f"[green]✓ stored.[/green] tastytrade account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
+
+
+def _login_alpaca() -> None:
     c.print(
-        f"[green]✓ stored.[/green] account [bold]{t.account_id}[/bold]  ·  "
-        f"NAV ${bal.nav:,.2f}  ·  BP ${bal.buying_power:,.2f}"
+        Panel.fit(
+            "[bold]Alpaca API key setup[/bold]\n\n"
+            "1. Sign in at [cyan]https://alpaca.markets[/cyan] (or paper dashboard)\n"
+            "2. Generate an API key pair under your account settings\n"
+            "3. Paste the key id and secret below\n"
+            "4. Choose paper or live mode",
+            border_style="cyan",
+        )
     )
+    api_key = Prompt.ask("api key id", password=True)
+    secret_key = Prompt.ask("secret key", password=True)
+    paper = Confirm.ask("paper account?", default=True)
 
-
-@main.command()
-def logout() -> None:
-    """Forget stored creds."""
-    clear_creds()
-    c.print("[green]✓ creds cleared from keychain.[/green]")
-
-
-@main.command()
-def status() -> None:
-    """Show account NAV, positions, market status. No orders."""
     try:
-        ps, rt, aid = load_creds()
-    except CredsMissingError as e:
-        c.print(f"[red]{e}[/red]")
+        b = make("alpaca", api_key=api_key, secret_key=secret_key, paper=paper)
+        bal = b.balances()
+    except Exception as e:
+        c.print(f"[red]✗ login failed:[/red] {e}")
         sys.exit(1)
 
-    t = Tasty(ps, rt, aid)
-    bal = t.balances()
-    pos = t.positions()
+    keychain.save("alpaca", {"api_key": api_key, "secret_key": secret_key, "paper": paper})
+    keychain.set_default("alpaca")
+    c.print(f"[green]✓ stored.[/green] alpaca {'(paper)' if paper else '(live)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
+
+
+def _login_paper() -> None:
+    starting = Prompt.ask("starting cash", default="100000")
+    keychain.save("paper", {"starting_cash": starting})
+    keychain.set_default("paper")
+    b = make("paper", starting_cash=Decimal(starting))
+    bal = b.balances()
+    c.print(f"[green]✓ paper book ready.[/green] cash ${bal.cash:,.2f}")
+
+
+@main.command()
+@click.pass_context
+def logout(ctx: click.Context) -> None:
+    """Clear stored creds for a broker."""
+    broker = ctx.obj.get("broker")
+    if not broker:
+        broker = Prompt.ask("broker to forget", choices=list(SUPPORTED))
+    keychain.clear(broker)
+    if keychain.get_default() == broker:
+        keychain.clear_default()
+    c.print(f"[green]✓ creds cleared for {broker}.[/green]")
+
+
+@main.command()
+def brokers() -> None:
+    """Show supported brokers and which ones currently have stored creds."""
+    configured = set(keychain.list_brokers())
+    default = keychain.get_default()
+    table = Table(show_header=True, header_style="bold", box=None)
+    table.add_column("Broker")
+    table.add_column("Configured")
+    table.add_column("Default")
+    for name in SUPPORTED:
+        ok = "[green]✓[/green]" if name in configured else "[dim]—[/dim]"
+        d = "[cyan]★[/cyan]" if name == default else ""
+        table.add_row(name, ok, d)
+    c.print(table)
+
+
+@main.command(name="paper-reset")
+def paper_reset() -> None:
+    """Reset the paper broker book to its starting cash."""
+    from .brokers.paper import Paper
+    Paper().reset()
+    c.print("[green]✓ paper book reset.[/green]")
+
+
+@main.command()
+@click.pass_context
+def status(ctx: click.Context) -> None:
+    """Show account NAV, positions, market status. No orders."""
+    broker = _resolve_broker_name(ctx.obj.get("broker"))
+    b = _load_broker(broker)
+    bal = b.balances()
+    pos = b.positions()
     ms = market_status()
 
     c.print(
-        f"\n[bold]Account[/bold] {t.account_id}  ·  "
+        f"\n[bold]{b.name}[/bold]  ·  account [bold]{b.account_id}[/bold]  ·  "
         f"NAV [green]${bal.nav:,.2f}[/green]  ·  "
         f"cash ${bal.cash:,.2f}  ·  BP ${bal.buying_power:,.2f}"
     )
@@ -117,23 +222,19 @@ def status() -> None:
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirm prompt (auto-execute).")
 @click.option("--threshold", default=0.04, type=float, show_default=True, help="Drift threshold (fraction of NAV).")
 @click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Read CSV from file instead of stdin.")
-def rebalance(dry_run: bool, yes: bool, threshold: float, csv_file: str | None) -> None:
+@click.pass_context
+def rebalance(ctx: click.Context, dry_run: bool, yes: bool, threshold: float, csv_file: str | None) -> None:
     """Default command. Paste a ticker,weight CSV → preview → confirm → execute."""
-    try:
-        ps, rt, aid = load_creds()
-    except CredsMissingError as e:
-        c.print(f"[red]{e}[/red]")
-        sys.exit(1)
+    broker = _resolve_broker_name(ctx.obj.get("broker"))
 
     ms = market_status()
-    if ms.status == "closed" and not dry_run:
-        c.print(f"[red]Market closed. Next open: {ms.next_open}.[/red]")
-        c.print("[yellow]Re-run with --dry-run to preview, or wait until the next session.[/yellow]")
-        sys.exit(2)
-    if ms.status in ("premarket", "afterhours") and not dry_run:
-        c.print(f"[red]Market in {ms.status} session — v1 only supports RTH market orders.[/red]")
-        c.print("[yellow]Re-run during RTH (09:30–16:00 ET) or pass --dry-run.[/yellow]")
-        sys.exit(2)
+    if broker != "paper":
+        if ms.status == "closed" and not dry_run:
+            c.print(f"[red]Market closed. Next open: {ms.next_open}.[/red]")
+            sys.exit(2)
+        if ms.status in ("premarket", "afterhours") and not dry_run:
+            c.print(f"[red]Market in {ms.status} session — v1 only supports RTH market orders.[/red]")
+            sys.exit(2)
 
     if csv_file:
         with open(csv_file, encoding="utf-8") as f:
@@ -150,13 +251,12 @@ def rebalance(dry_run: bool, yes: bool, threshold: float, csv_file: str | None) 
 
     c.print(f"[green]✓ loaded {len(targets)} targets.[/green]")
 
-    t = Tasty(ps, rt, aid)
-    bal = t.balances()
-    pos = t.positions()
+    b = _load_broker(broker)
+    bal = b.balances()
+    pos = b.positions()
     universe = sorted({tg.ticker for tg in targets} | set(pos.keys()))
-    c.print(f"Quoting {len(universe)} symbols...", style="dim")
-    quotes = t.quote(universe)
-    # supplement with last-known position prices for tickers we already hold
+    c.print(f"Quoting {len(universe)} symbols via {b.name}...", style="dim")
+    quotes = b.quote(universe)
     for tk, p in pos.items():
         quotes.setdefault(tk, p.price)
 
@@ -170,30 +270,27 @@ def rebalance(dry_run: bool, yes: bool, threshold: float, csv_file: str | None) 
         drift_threshold=Decimal(str(threshold)),
     )
 
-    _render_preview(preview, t.account_id, ms)
+    _render_preview(preview, b.name, b.account_id, ms)
 
     if preview.has_blockers:
         c.print("[red]✗ blockers present — refusing to execute.[/red]")
         sys.exit(1)
-
     if not preview.orders:
         c.print("[green]Nothing to do — portfolio within drift on every ticker.[/green]")
         return
-
     if dry_run:
         c.print("[yellow]--dry-run set, exiting without sending orders.[/yellow]")
         return
-
-    if not yes and not Confirm.ask(f"\nExecute [bold]{len(preview.orders)}[/bold] orders?", default=False):
+    if not yes and not Confirm.ask(f"\nExecute [bold]{len(preview.orders)}[/bold] orders on [bold]{b.name}[/bold]?", default=False):
         c.print("[red]Cancelled.[/red]")
         sys.exit(0)
 
-    _execute(t, preview)
+    _execute(b, preview)
 
 
-def _render_preview(preview, account_id: str, ms) -> None:
+def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
     c.print(
-        f"\n[bold]Account[/bold] {account_id}  ·  "
+        f"\n[bold]{broker_name}[/bold] · account {account_id}  ·  "
         f"NAV [green]${preview.nav:,.2f}[/green]  ·  "
         f"cash ${preview.cash:,.2f}  ·  BP ${preview.buying_power:,.2f}"
     )
@@ -232,24 +329,24 @@ def _render_preview(preview, account_id: str, ms) -> None:
         c.print(f"[red]✗ {b}[/red]")
 
 
-def _execute(t: Tasty, preview) -> None:
+def _execute(broker, preview) -> None:
     total = len(preview.orders)
     sent = 0
     failed = 0
     for i, o in enumerate(preview.orders, 1):
         c.print(f"[{i}/{total}] {o.ticker} {o.side.value} {o.quantity:.2f} @ MKT ...", end=" ")
         try:
-            result = t.place_market(o, dry_run=False)
+            result = broker.place_market(o, dry_run=False)
         except Exception as e:
             result = {"status": "error", "reason": str(e), "ticker": o.ticker}
         status = result.get("status", "?")
-        if status == "error" or status == "skipped":
+        if status in ("error", "skipped"):
             failed += 1
             c.print(f"[red]{status.upper()}[/red] {result.get('reason', '')}")
         else:
             sent += 1
             c.print(f"[green]{status.upper()}[/green]  id={result.get('order_id', '?')}")
-        fill_log.append({"event": "order", **result, "side": o.side.value, "quantity": float(o.quantity)})
+        fill_log.append({"event": "order", "broker": broker.name, **result, "side": o.side.value, "quantity": float(o.quantity)})
 
     c.print(f"\n[bold]Done.[/bold]  sent: {sent}  ·  failed: {failed}  ·  log: {fill_log.log_dir()}")
 

@@ -28,7 +28,7 @@ jobs:
         run: ruff check msts_trader
       - name: import smoke
         run: |
-          python -c "from msts_trader import tasty, diff, csv_parser, market_hours, models, keychain, fill_log; print('ok')"
+          python -c "from msts_trader import diff, csv_parser, market_hours, models, keychain, fill_log; from msts_trader.brokers import base, paper, alpaca, tastytrade; print('ok')"
       - name: csv + diff smoke
         run: |
           python -c "

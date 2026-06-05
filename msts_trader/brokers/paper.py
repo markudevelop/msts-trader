@@ -1,0 +1,142 @@
+"""Paper broker — simulates a $100k cash account locally. No real fills.
+
+State is persisted to `~/.msts-trader/paper_state.json` so the simulated
+NAV and positions evolve across sessions. Useful for dry-running the
+flow without connecting any real brokerage.
+"""
+from __future__ import annotations
+
+import json
+import os
+from decimal import Decimal
+from pathlib import Path
+from typing import Iterable
+
+from ..models import Order, Position, Side
+from .base import Balances, BrokerError
+
+STATE_PATH = Path(os.path.expanduser("~/.msts-trader/paper_state.json"))
+STARTING_CASH = Decimal("100000")
+
+
+class Paper:
+    name = "paper"
+    supports_fractional = True
+
+    def __init__(self, starting_cash: str | float | Decimal | None = None):
+        if not STATE_PATH.exists():
+            STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            STATE_PATH.write_text(json.dumps({
+                "cash": str(Decimal(str(starting_cash)) if starting_cash else STARTING_CASH),
+                "positions": {},
+                "last_prices": {},
+            }))
+        self.account_id = "PAPER"
+
+    def _load(self) -> dict:
+        return json.loads(STATE_PATH.read_text())
+
+    def _save(self, state: dict) -> None:
+        STATE_PATH.write_text(json.dumps(state, indent=2))
+
+    def balances(self) -> Balances:
+        s = self._load()
+        cash = Decimal(s["cash"])
+        equity = Decimal(0)
+        for sym, qty_s in s["positions"].items():
+            px = Decimal(s.get("last_prices", {}).get(sym, "0"))
+            equity += Decimal(qty_s) * px
+        nav = cash + equity
+        return Balances(nav=nav, cash=cash, buying_power=cash)
+
+    def positions(self) -> dict[str, Position]:
+        s = self._load()
+        out: dict[str, Position] = {}
+        for sym, qty_s in s["positions"].items():
+            qty = Decimal(qty_s)
+            if qty == 0:
+                continue
+            px = Decimal(s.get("last_prices", {}).get(sym, "0"))
+            out[sym] = Position(ticker=sym, quantity=qty, price=px)
+        return out
+
+    def quote(self, tickers: Iterable[str]) -> dict[str, Decimal]:
+        """Paper broker cannot quote — caller must pre-seed via place_market notional.
+
+        Returns whatever we last booked as last_price. Real flows seed quotes
+        from the CSV path before calling diff; for paper testing, the CLI hands
+        last_prices from a separate fetch (or the user supplies via env).
+        """
+        s = self._load()
+        last = s.get("last_prices", {})
+        out: dict[str, Decimal] = {}
+        for t in {x.upper() for x in tickers}:
+            v = last.get(t)
+            if v:
+                out[t] = Decimal(v)
+        return out
+
+    def set_quote(self, ticker: str, price: Decimal) -> None:
+        """Test helper: explicitly set a quote in the paper book."""
+        s = self._load()
+        s.setdefault("last_prices", {})[ticker.upper()] = str(price)
+        self._save(s)
+
+    def place_market(self, order: Order, dry_run: bool = False) -> dict:
+        qty = Decimal(str(round(float(order.quantity), 4)))
+        if qty <= 0:
+            return {"status": "skipped", "reason": "qty<=0", "ticker": order.ticker}
+        px = order.estimated_price or Decimal(0)
+        if px <= 0:
+            return {"status": "error", "reason": "no price for paper fill", "ticker": order.ticker}
+        if dry_run:
+            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value, "quantity": float(qty), "dry_run": True}
+
+        s = self._load()
+        cash = Decimal(s["cash"])
+        positions: dict[str, str] = dict(s.get("positions", {}))
+        cur_qty = Decimal(positions.get(order.ticker, "0"))
+
+        notional = qty * px
+        if order.side == Side.BUY:
+            if notional > cash + Decimal("1"):
+                return {"status": "error", "reason": f"insufficient cash ${cash} < ${notional}", "ticker": order.ticker}
+            cash -= notional
+            new_qty = cur_qty + qty
+        else:
+            if cur_qty < qty:
+                return {"status": "error", "reason": f"insufficient {order.ticker} ({cur_qty} < {qty})", "ticker": order.ticker}
+            cash += notional
+            new_qty = cur_qty - qty
+
+        if new_qty == 0:
+            positions.pop(order.ticker, None)
+        else:
+            positions[order.ticker] = str(new_qty)
+
+        s["cash"] = str(cash)
+        s["positions"] = positions
+        last_prices = dict(s.get("last_prices", {}))
+        last_prices[order.ticker] = str(px)
+        s["last_prices"] = last_prices
+        self._save(s)
+
+        return {
+            "status": "FILLED",
+            "ticker": order.ticker,
+            "side": order.side.value,
+            "quantity": float(qty),
+            "order_id": f"paper-{order.ticker}-{int(qty * 100)}",
+            "fill_price": float(px),
+            "dry_run": False,
+        }
+
+    def reset(self, starting_cash: Decimal | None = None) -> None:
+        STATE_PATH.write_text(json.dumps({
+            "cash": str(starting_cash or STARTING_CASH),
+            "positions": {},
+            "last_prices": {},
+        }))
+        if not starting_cash:
+            return
+        raise BrokerError("paper reset done")  # signal CLI to print confirmation

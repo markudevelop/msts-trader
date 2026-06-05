@@ -1,6 +1,7 @@
 # msts-trader
 
-Paste a target-weights CSV, preview the rebalance, execute it on your Tastytrade account.
+Paste a target-weights CSV, preview the rebalance, execute it on your own
+brokerage account. Multi-broker, local-only, no key custody.
 
 ```
 $ msts-trader
@@ -13,7 +14,7 @@ EEM,0.20
 ^D
 ✓ loaded 4 targets.
 
-Account 5W******  ·  NAV $48,213.42  ·  cash $2,150.00  ·  BP $46,290.00
+tastytrade · account 5W******  ·  NAV $48,213.42  ·  cash $2,150.00  ·  BP $46,290.00
 Market: open  ·  closes in 23 min
 
            Rebalance preview
@@ -22,12 +23,23 @@ Market: open  ·  closes in 23 min
 ┃ EEM    ┃    31.5%  ┃   20.0%  ┃  -$5k ┃ SELL 119.00 @ ~$47.21   ┃      ┃
 ...
 
-Execute 4 orders? [y/N]: y
+Execute 4 orders on tastytrade? [y/N]: y
 [1/4] SPY  BUY  22.00 @ MKT ...  ROUTED  id=4f8...
-...
 
 Done.  sent: 4  ·  failed: 0  ·  log: ~/.msts-trader/fills/
 ```
+
+## Supported brokers
+
+| Broker     | Status   | Auth                     | Notes |
+|------------|----------|--------------------------|-------|
+| Paper      | shipped  | local file               | $100k starting cash, no real fills |
+| Tastytrade | shipped  | OAuth refresh token       | indefinite token, BYO OAuth app |
+| Alpaca     | shipped  | API key + secret         | paper or live, fractional supported |
+| IBKR       | planned  | TWS / IB Gateway socket  | works with your local Gateway / Docker |
+| Schwab     | planned  | OAuth2 PKCE              | 7-day refresh, browser callback |
+
+Open a GitHub issue if you want one bumped up the queue.
 
 ## Install
 
@@ -37,7 +49,7 @@ pip install msts-trader
 
 Python ≥3.11 required.
 
-Install from source (development):
+Install from source:
 
 ```bash
 git clone https://github.com/markudevelop/msts-trader.git
@@ -47,25 +59,51 @@ pip install -e .
 
 ## One-time setup
 
-You need Tastytrade OAuth credentials. **This is your app, not ours** — we never see your keys.
+You provide your own broker credentials. They are stored in your OS
+keychain (macOS Keychain / Windows Credential Manager / libsecret on
+Linux) and never leave your machine.
+
+### Tastytrade
 
 1. Sign in at https://developer.tastytrade.com → **My Apps**
 2. Create an OAuth application — copy the **provider secret**
 3. Run their OAuth authorization flow to obtain a **refresh token**
-4. Look up your **account number** in the Tastytrade web dashboard (optional — leave blank to auto-pick your first account)
+4. Look up your **account number** in the Tastytrade web dashboard (optional)
 5. Run:
 
 ```bash
-msts-trader login
+msts-trader login --broker tastytrade
 ```
 
-Paste the three values when prompted. They are stored in your OS keychain
-(macOS Keychain / Windows Credential Manager / libsecret). The app never
-writes them to disk in plaintext.
+### Alpaca
+
+1. Sign in at https://alpaca.markets (paper or live)
+2. Account → API keys → generate a new pair
+3. Run:
+
+```bash
+msts-trader login --broker alpaca
+```
+
+You choose paper vs live at login time.
+
+### Paper (offline simulator)
+
+```bash
+msts-trader login --broker paper
+```
+
+No real money, no broker connection. The book persists in
+`~/.msts-trader/paper_state.json` between sessions. Reset any time with
+`msts-trader paper-reset`.
+
+The first `login` you complete becomes the default broker. Override per
+command with `--broker NAME`, or change the default by logging in again.
 
 ## Daily usage
 
-1. Get your CSV. On a supported weights site, click **Copy CSV**. Or build one yourself:
+1. Get your CSV. Click **Copy CSV** on the supported weights site, or
+   build your own:
 
    ```csv
    ticker,weight
@@ -81,64 +119,67 @@ writes them to disk in plaintext.
 
 2. Run:
 
-   ```bash
-   msts-trader
-   ```
+```bash
+msts-trader                       # uses default broker
+msts-trader --broker alpaca       # explicit broker
+```
 
 3. Paste the CSV, hit `Ctrl+D` (`Ctrl+Z` then Enter on Windows).
-4. Review the preview table carefully.
+4. Review the preview carefully.
 5. Type `y` to execute, anything else to cancel.
 
 ### Useful flags
 
 ```bash
-msts-trader rebalance --dry-run               # preview only, never sends
-msts-trader rebalance --yes                   # skip the confirm prompt
-msts-trader rebalance --threshold 0.02        # tighter rebalance (default 4%)
-msts-trader rebalance --csv-file targets.csv  # read from a file instead of stdin
+msts-trader rebalance --dry-run                       # preview only, never sends
+msts-trader rebalance --yes                           # skip the confirm prompt
+msts-trader rebalance --threshold 0.02                # tighter rebalance (default 4%)
+msts-trader rebalance --csv-file targets.csv          # read from a file
+msts-trader --broker paper rebalance --csv-file ...   # test against paper
 ```
 
 ### Other commands
 
 ```bash
-msts-trader status     # show NAV, positions, market status
-msts-trader logout     # clear stored creds
-msts-trader --version  # print version
+msts-trader status                  # NAV, positions, market status (default broker)
+msts-trader --broker alpaca status  # other broker
+msts-trader brokers                 # list supported + configured brokers
+msts-trader logout --broker alpaca  # clear stored creds for one broker
+msts-trader paper-reset             # reset paper book to starting cash
+msts-trader --version
 ```
 
 ## What it does
 
 - Parses your CSV into `{ticker: target_weight}`.
-- Pulls live NAV, cash, buying power, and current positions from Tastytrade.
-- Quotes every relevant symbol via the Tastytrade market-data API.
+- Pulls live NAV, cash, buying power, and current positions from your broker.
+- Quotes every relevant symbol via the broker's market-data API.
 - Computes the dollar delta per ticker, skips anything within the drift
   threshold (default 4% of NAV).
 - Sells tickers no longer in your targets.
-- Sizes buys at the current quote, rounded to 2 decimals (Tastytrade
-  fractional shares on MARKET orders).
+- Sizes buys at the current quote, rounded to 2 decimals where the
+  broker supports fractional MARKET orders.
 - Shows the full plan and waits for `y` before sending anything.
 - Submits MARKET DAY orders. Logs results to `~/.msts-trader/fills/`.
 
-## What it does NOT do (v1)
+## What it does NOT do (v0.2)
 
-- Pre-market or after-hours execution — refuses to send outside 09:30–16:00 ET.
-- Shorting — negative weights are rejected.
+- Pre-market or after-hours execution. Refuses outside 09:30–16:00 ET.
+- Shorting. Negative weights are rejected.
 - Options, futures, crypto.
 - Multi-account or per-strategy ledger.
-- Margin-aware uniform scaling (warns instead; Tastytrade's own BP
-  pre-flight will scale down at submit if needed).
+- Active stop management (Hydra/Fusion-style watchers).
 - Automatic CSV polling. You paste each rebalance manually.
 
 ## Security
 
-- Your Tastytrade OAuth credentials live only in your OS keychain on your
-  own machine. The app does not phone home, does not log credentials, and
+- Your broker credentials live only in your OS keychain on your own
+  machine. The app does not phone home, does not log credentials, and
   is not connected to any service operated by the author.
-- The author of this app cannot view, recover, or revoke your
-  Tastytrade access. Revoke via your own Tastytrade OAuth app dashboard
-  if a refresh token leaks.
-- Trades are user-initiated: every execution requires you to paste a CSV
-  and confirm with `y`. There is no background trading loop.
+- The author of this app cannot view, recover, or revoke your broker
+  access. Revoke via your own broker's API-app dashboard if a key leaks.
+- Trades are user-initiated: every execution requires you to paste a
+  CSV and confirm with `y`. There is no background trading loop.
 
 ## Disclaimer
 
@@ -149,4 +190,10 @@ The author makes no warranty of any kind; use at your own risk.
 
 ## License
 
-Apache-2.0.
+[PolyForm Noncommercial License 1.0.0](LICENSE).
+
+You may use, modify, and share this software for any **noncommercial
+purpose** — personal trading, research, education, hobby projects.
+**Selling, hosting as a paid service, or otherwise commercializing
+this software or derivative works is not permitted** without a separate
+commercial license. Contact the author if you need one.

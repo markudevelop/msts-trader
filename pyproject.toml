@@ -4,18 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "msts-trader"
-version = "0.1.1"
-description = "Paste a target-weights CSV, preview the rebalance, execute it on your Tastytrade account."
+version = "0.2.0"
+description = "Paste a target-weights CSV, preview the rebalance, execute it on your brokerage account. Tastytrade + Alpaca + paper."
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
 authors = [{ name = "markudevelop" }]
-keywords = ["trading", "tastytrade", "rebalance", "portfolio", "cli"]
+keywords = ["trading", "tastytrade", "alpaca", "rebalance", "portfolio", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Financial and Insurance Industry",
-    "License :: OSI Approved :: Apache Software License",
+    "License :: Free for non-commercial use",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -23,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "tastytrade==11.0.4",
+    "alpaca-py>=0.30",
     "click>=8.1",
     "rich>=13.7",
     "keyring>=24",
