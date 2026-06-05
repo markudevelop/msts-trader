@@ -201,3 +201,34 @@ def test_bp_overrun_warns_not_blocks():
 
 def test_drift_threshold_constant_is_4pct():
     assert DRIFT_THRESHOLD == Decimal("0.04")
+
+
+def test_short_position_not_in_targets_is_left_untouched():
+    # A short (negative qty) not in targets must NOT generate a buy-to-cover
+    # in v1 — shorts are unsupported, so we leave it alone.
+    targets = [Target(ticker="SPY", weight=Decimal("1.0"))]
+    positions = {
+        "SPY": Position(ticker="SPY", quantity=Decimal("100"), price=Decimal("500")),
+        "QQQ": Position(ticker="QQQ", quantity=Decimal("-10"), price=Decimal("400")),  # short
+    }
+    p = build_preview(
+        targets=targets, positions=positions,
+        nav=Decimal("50000"), cash=Decimal("0"), buying_power=Decimal("0"),
+        quotes={"SPY": Decimal("500"), "QQQ": Decimal("400")},
+    )
+    assert not any(o.ticker == "QQQ" for o in p.orders)
+
+
+def test_qty_rounding_to_zero_is_skipped():
+    # A target whose dollar delta is above the drift gate but rounds to 0
+    # shares at a very high price is skipped, not sent as a 0-qty order.
+    targets = [Target(ticker="BRKA", weight=Decimal("0.10"))]
+    # 10% of 50k = $5000 target; price $700,000 => 0.007 -> quantize(0.01) = 0.01... actually rounds up.
+    # Use a price that makes qty round to exactly 0.00.
+    p = build_preview(
+        targets=targets, positions={},
+        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        quotes={"BRKA": Decimal("200000000")},  # $5000 / 200M = 0.000025 -> 0.00
+    )
+    assert all(o.ticker != "BRKA" or o.quantity > 0 for o in p.orders)
+    assert any(r.ticker == "BRKA" and "rounds to 0" in r.note for r in p.rows)

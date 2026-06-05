@@ -38,6 +38,15 @@ def test_parse_asof_absent():
     assert parse_asof("ticker,weight\nSPY,1.0\n") is None
 
 
+def test_parse_asof_bad_date_returns_none():
+    assert parse_asof("# asof: not-a-real-date\nticker,weight\nSPY,1\n") is None
+
+
+def test_parse_asof_naive_assumed_utc():
+    dt = parse_asof("# asof: 2026-06-05 15:45:00\nx,1\n")
+    assert dt is not None and dt.tzinfo is not None
+
+
 def test_check_stale_blocks_old():
     old = (datetime.now(timezone.utc) - timedelta(hours=50)).isoformat()
     msg = check_stale(f"# asof: {old}\nticker,weight\nSPY,1\n", 36)

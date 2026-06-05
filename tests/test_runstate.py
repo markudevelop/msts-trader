@@ -45,3 +45,14 @@ def test_different_targets_not_done():
     runstate.record(fp1)
     fp2 = runstate.fingerprint("tastytrade", "ACC", [Target(ticker="QQQ", weight=Decimal("1.0"))])
     assert runstate.already_done(fp2) is False
+
+
+def test_corrupted_state_file_does_not_crash():
+    # A truncated/garbage state file must not raise — treat as "not done".
+    runstate.STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    runstate.STATE_PATH.write_text("{not valid json")
+    fp = runstate.fingerprint("tastytrade", "ACC", _targets())
+    assert runstate.already_done(fp) is False
+    # record() must also recover and overwrite cleanly.
+    runstate.record(fp)
+    assert runstate.already_done(fp) is True

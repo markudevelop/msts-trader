@@ -44,3 +44,24 @@ def test_webhook_failure_does_not_raise(monkeypatch):
     monkeypatch.setattr(notifications, "_post_json", lambda url, payload, timeout=10.0: False)
     # should return False, not raise
     assert notifications._send_webhook("https://hooks.slack.com/x", "t") is False
+
+
+def test_discord_payload_uses_content(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(notifications, "_post_json", lambda url, payload, timeout=10.0: captured.update(payload) or True)
+    notifications._send_webhook("https://discord.com/api/webhooks/x", "hello")
+    assert "content" in captured and captured["content"] == "hello"
+
+
+def test_slack_payload_uses_text(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(notifications, "_post_json", lambda url, payload, timeout=10.0: captured.update(payload) or True)
+    notifications._send_webhook("https://hooks.slack.com/services/x", "hello")
+    assert captured.get("text") == "hello"
+
+
+def test_generic_webhook_uses_text(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(notifications, "_post_json", lambda url, payload, timeout=10.0: captured.update(payload) or True)
+    notifications._send_webhook("https://example.com/hook", "hello")
+    assert captured.get("text") == "hello"

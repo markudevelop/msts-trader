@@ -10,7 +10,13 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Tests
+- Coverage pass for previously-untested pure helpers and edge branches
+  (no behaviour change): `ibkr._reject_reason` (KID 201 / 10349
+  surfacing), `ibkr._f` / `_midpoint`, `hyperliquid._coin`
+  normalisation, diff short-position-left-untouched + qty-rounds-to-0,
+  `safety.parse_asof` bad-date, `runstate` corrupted-file recovery,
+  notifications Discord/Slack/generic payload routing. 221 tests.
 
 ## [0.6.0] — 2026-06-05
 
