@@ -26,7 +26,7 @@ Market: open  ·  closes in 23 min
 Execute 4 orders on tastytrade? [y/N]: y
 [1/4] SPY  BUY  22.00 @ MKT ...  ROUTED  id=4f8...
 
-Done.  sent: 4  ·  failed: 0  ·  log: ~/.msts-trader/fills/
+Done. tastytrade: sent 4, failed 0
 ```
 
 ## Supported brokers
@@ -174,9 +174,13 @@ command with `--broker NAME`, or change the default by logging in again.
    SHV,0.20
    ```
 
-   - `weight` is a fraction (0–1), not a percent.
-   - Sum should be ≤ 1.0 (the remainder is held as cash).
-   - Comments starting with `#` are ignored.
+   - `weight` is a fraction of NAV (e.g. `0.42` = 42%), not a percent.
+   - Sum **≤ 1.0** holds the remainder as cash; sum **> 1.0** is leverage
+     (e.g. `1.60` = 160% gross, financed on margin — see
+     [Leveraged weights](#leveraged-weights)).
+   - No shorts: negative weights are rejected.
+   - Comments starting with `#` are ignored (and `# asof: <iso>` enables
+     the stale-CSV guard).
 
 2. Run:
 
@@ -343,14 +347,16 @@ Two things to know for a **fresh account**:
 - A single weight above 3.0 (300%) is rejected as a likely
   percentage-paste mistake (e.g. `31.23` instead of `0.3123`).
 
-## What it does NOT do (v0.2)
+## What it does NOT do (yet)
 
-- Pre-market or after-hours execution. Refuses outside 09:30–16:00 ET.
+- Pre-market or after-hours execution for equities. Refuses outside
+  09:30–16:00 ET (crypto via Hyperliquid trades 24/7).
 - Shorting. Negative weights are rejected.
-- Options, futures, crypto.
-- Multi-account or per-strategy ledger.
+- Options or futures.
+- Multi-account in one command (run it once per account / creds-file).
 - Active stop management (Hydra/Fusion-style watchers).
-- Scheduling itself (use cron / GitHub Actions — see Headless above).
+- Scheduling itself (use cron / GitHub Actions — see
+  [Headless](#headless--automated-cron-github-actions)).
 
 ## Troubleshooting
 
@@ -467,23 +473,25 @@ with the same notes and the built wheel attached.
 git clone https://github.com/markudevelop/msts-trader.git
 cd msts-trader
 pip install -e ".[all,dev]"
-pytest -v          # 95 tests, ~2 seconds
+pytest -v          # ~200 tests, a couple of seconds
 ruff check msts_trader
 ```
 
 The test suite covers:
 
-- CSV parser (header validation, weights, comments, dup/neg/>1 guards)
-- Diff math (drift threshold, exits, warnings, blockers, BP overrun)
+- CSV parser (header validation, weights, leverage, comments, dup/neg guards)
+- Diff math (drift threshold, exits, warnings, blockers, BP overrun, leverage)
 - Market hours (RTH/pre/after/closed, holidays through 2027, weekends)
 - Paper broker end-to-end (cash accounting, position lifecycle, dry-run, persistence)
 - Broker protocol conformance (every adapter exposes the required attrs + methods)
-- Keychain (save/load/clear, default broker, broker enumeration)
-- CLI (help, version, brokers list, paper login, no-creds clean exit)
+- Keychain + env-derived credentials (per-broker, quote stripping, fallbacks)
+- Safety (max-notional cap, stale-CSV guard), retry/backoff, idempotency
+- Config file parsing, notifications formatting/dispatch
+- CLI (help, version, brokers list, doctor, login, no-creds clean exit)
 
-Live brokerage adapters (Tastytrade, Alpaca, IBKR, Schwab) are not
-exercised against real APIs in CI — they need credentials and can
-move real money. The tests verify structure; you verify fills.
+Live brokerage adapters are not exercised against real APIs in CI — they
+need credentials and can move real money. The tests verify structure;
+you verify fills.
 
 ## License
 
