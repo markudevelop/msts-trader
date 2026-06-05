@@ -539,6 +539,7 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 @click.option("--max-notional", type=float, default=None, help="Refuse if gross buys exceed this dollar amount.")
 @click.option("--max-stale-hours", type=float, default=None, help="Refuse if the CSV's `# asof:` time is older than this.")
 @click.option("--notify-url", default=None, help="Webhook (Discord/Slack/generic) to ping on execute.")
+@click.option("--margin-aware", is_flag=True, default=None, help="Scale all buys by one factor to fit buying power (weight-preserving; for leveraged/margin books).")
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON instead of tables.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output (for cron logs).")
@@ -556,6 +557,7 @@ def rebalance(
     max_notional: float | None,
     max_stale_hours: float | None,
     notify_url: str | None,
+    margin_aware: bool | None,
     force: bool,
     json_out: bool,
     quiet: bool,
@@ -574,6 +576,7 @@ def rebalance(
     max_notional = config.pick(max_notional, cfg, "max_notional")
     max_stale_hours = config.pick(max_stale_hours, cfg, "max_stale_hours")
     notify_url = config.pick(notify_url, cfg, "notify_url")
+    margin_aware = bool(config.pick(margin_aware, cfg, "margin_aware", False))
     quiet = bool(config.pick(True if quiet else None, cfg, "quiet", False))
 
     global _QUIET, _JSON
@@ -628,7 +631,7 @@ def rebalance(
     preview = build_preview(
         targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
         buying_power=bal.buying_power, quotes=quotes,
-        drift_threshold=Decimal(str(threshold)),
+        drift_threshold=Decimal(str(threshold)), margin_aware=margin_aware,
     )
 
     # Extra safety cap on top of the engine's own checks.
@@ -771,7 +774,7 @@ def _execute(broker, preview):
     return sent, failed, results
 
 
-def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool) -> dict:
+def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False) -> dict:
     """Run the full rebalance pipeline for one already-built broker.
 
     No interactive prompts, no rich rendering — returns a result dict.
@@ -789,7 +792,7 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
     preview = build_preview(
         targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
         buying_power=bal.buying_power, quotes=quotes,
-        drift_threshold=Decimal(str(threshold)),
+        drift_threshold=Decimal(str(threshold)), margin_aware=margin_aware,
     )
     cap = safety.check_max_notional(preview.orders, Decimal(str(max_notional)) if max_notional else None)
     if cap:
@@ -851,6 +854,7 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, force, json_out, quiet):
     max_notional = cfg.get("max_notional")
     max_stale_hours = cfg.get("max_stale_hours")
     notify_url = cfg.get("notify_url")
+    margin_aware = bool(cfg.get("margin_aware", False))
     csv_file = csv_file or cfg.get("csv_file")
     csv_url = csv_url or cfg.get("csv_url")
 
@@ -896,7 +900,7 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, force, json_out, quiet):
 
         say(f"\n[bold cyan]━━ {label} ({broker}) ━━[/bold cyan]")
         try:
-            r = _rebalance_one(b, targets, threshold=threshold, max_notional=max_notional, dry_run=dry_run, force=force)
+            r = _rebalance_one(b, targets, threshold=threshold, max_notional=max_notional, dry_run=dry_run, force=force, margin_aware=margin_aware)
         except Exception as e:
             r = {"broker": broker, "status": "error", "reason": str(e)}
         r["name"] = label

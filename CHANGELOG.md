@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the project is pre-1.0, minor versions (0.x.0) may introduce
 behaviour changes; patch versions (0.x.y) are fixes and docs.
 
+## [0.8.0] — 2026-06-06
+
+### Added
+- **Margin-aware uniform sizing (`--margin-aware`).** For leveraged /
+  margin books: if gross buys exceed available buying power (broker BP +
+  sell proceeds), scale every buy by one uniform factor so the whole book
+  fits — preserving relative weights — instead of letting the broker
+  reject the tail of the order set and distort the allocation. No-op when
+  the sells already fund the buys. Closes the main gap vs a production
+  live-trading runner for leveraged books. Also settable in config
+  (`margin_aware = true`) and honored by `multi`.
+
+### Changed
+- **Orders now execute sells before buys, always.** Proceeds settle/free
+  buying power before the buys submit — required for correctness on cash
+  accounts (unsettled-funds rejections), and lowers peak margin usage on
+  margin accounts. Within each side, larger dollar moves go first.
+
+### Tests
+- 261 total (+3): sells-ordered-before-buys, margin-aware scales to fit
+  BP (weight-preserving), margin-aware off just warns. Verified live
+  (dry-run) against a real 1.60x Tastytrade book.
+
 ## [0.7.1] — 2026-06-05
 
 Solidity pass — no user-facing change.
@@ -393,7 +416,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/markudevelop/msts-trader/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/markudevelop/msts-trader/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/markudevelop/msts-trader/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/markudevelop/msts-trader/compare/v0.5.3...v0.6.0

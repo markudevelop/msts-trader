@@ -220,7 +220,8 @@ msts-trader --broker paper rebalance --csv-file ...   # test against paper
 ### Safety, automation & output flags
 
 ```bash
-msts-trader rebalance --max-notional 60000   # refuse if gross buys exceed $60k
+msts-trader rebalance --margin-aware          # scale buys to fit buying power (leveraged/margin books)
+msts-trader rebalance --max-notional 60000    # refuse if gross buys exceed $60k
 msts-trader rebalance --max-stale-hours 36   # refuse if the CSV's `# asof:` is too old
 msts-trader rebalance --json                 # machine-readable output (one JSON object)
 msts-trader rebalance --quiet                # minimal output for cron logs
@@ -383,10 +384,17 @@ TBT,0.1480
 ...        # sums to ~1.60 = 160% gross
 ```
 
-The preview shows `Gross target exposure: 160% (1.60x)` and warns that it
-needs a margin account with sufficient buying power. The broker's own
-pre-flight (e.g. Tastytrade) will scale the order set down if your
-buying power is short.
+The preview shows `Gross target exposure: 160% (1.60x)`. For leveraged
+books, run with **`--margin-aware`**: if the gross buys exceed your
+available buying power (broker BP plus the proceeds from the sells, which
+execute first), msts-trader scales **every buy by one uniform factor** so
+the whole book fits — preserving your relative weights — instead of
+letting the broker reject the tail of the order set piecemeal and distort
+your allocation. When the sells already fund the buys, nothing is scaled.
+
+Orders always execute **sells before buys**, so proceeds free up buying
+power before the buys submit (required on cash accounts, lower peak
+margin on margin accounts).
 
 Two things to know for a **fresh account**:
 

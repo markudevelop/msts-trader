@@ -15,6 +15,7 @@ from .models import Order, Position, Preview, RebalanceRow, Side, Target
 DRIFT_THRESHOLD = Decimal("0.04")  # 4%
 MIN_ORDER_DOLLARS = Decimal("1")   # ignore sub-$1 dust
 MAX_SANE_GROSS = Decimal("5.0")    # >500% gross => almost certainly percentages, not weights
+BP_SAFETY = Decimal("0.97")        # leave a 3% buying-power cushion for margin-aware sizing
 
 
 def build_preview(
@@ -25,6 +26,8 @@ def build_preview(
     buying_power: Decimal,
     quotes: dict[str, Decimal],
     drift_threshold: Decimal = DRIFT_THRESHOLD,
+    margin_aware: bool = False,
+    bp_safety: Decimal = BP_SAFETY,
 ) -> Preview:
     warnings: list[str] = []
     blockers: list[str] = []
@@ -142,13 +145,39 @@ def build_preview(
             orders.append(order)
         rows.append(row)
 
-    # 3) Buying-power sanity
+    # 3) Buying-power handling
     gross_buys = sum((o.notional for o in orders if o.side == Side.BUY), Decimal(0))
-    if gross_buys > buying_power:
+    sell_proceeds = sum((o.notional for o in orders if o.side == Side.SELL), Decimal(0))
+    # Sells run first (below), so their proceeds are available to fund buys.
+    available_bp = (buying_power + sell_proceeds) * bp_safety
+
+    if margin_aware and gross_buys > available_bp and gross_buys > 0 and available_bp > 0:
+        # Scale every BUY by one uniform factor so the whole book fits the
+        # available buying power — preserving relative weights, instead of
+        # letting the broker reject the tail of the order set piecemeal.
+        scale = available_bp / gross_buys
+        for o in orders:
+            if o.side == Side.BUY:
+                o.quantity = (o.quantity * scale).quantize(Decimal("0.01"))
+                o.notional = o.quantity * (o.estimated_price or Decimal(0))
+        # drop buys that scaled to zero
+        orders = [o for o in orders if not (o.side == Side.BUY and o.quantity <= 0)]
+        gross_buys = sum((o.notional for o in orders if o.side == Side.BUY), Decimal(0))
+        warnings.append(
+            f"Margin-aware: scaled all buys by {scale:.1%} to fit ${available_bp:,.0f} "
+            f"buying power (weight-preserving)."
+        )
+    elif gross_buys > buying_power:
         warnings.append(
             f"Gross buys ${gross_buys:,.0f} exceed buying power ${buying_power:,.0f} — "
-            f"the broker's pre-flight may scale orders down at submit."
+            + ("re-run with --margin-aware to scale to fit, or " if not margin_aware else "")
+            + "the broker's pre-flight may scale orders down at submit."
         )
+
+    # Execute SELLS before BUYS: proceeds settle/free buying power first, so a
+    # rebalance never tries to buy before the funding sells go through. Within
+    # each side, larger dollar moves first.
+    orders.sort(key=lambda o: (0 if o.side == Side.SELL else 1, -abs(o.notional)))
 
     rows.sort(key=lambda r: (r.order is None, -abs(r.delta_dollars)))
     return Preview(nav=nav, buying_power=buying_power, cash=cash, rows=rows, orders=orders, warnings=warnings, blockers=blockers)

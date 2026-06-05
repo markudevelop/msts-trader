@@ -203,6 +203,60 @@ def test_drift_threshold_constant_is_4pct():
     assert DRIFT_THRESHOLD == Decimal("0.04")
 
 
+def test_sells_ordered_before_buys():
+    # A rebalance with both buys and sells must list every SELL before any
+    # BUY so proceeds fund the buys (required on cash accounts, harmless on
+    # margin).
+    targets = [Target(ticker="SPY", weight=Decimal("0.5")), Target(ticker="SHV", weight=Decimal("0.5"))]
+    positions = {
+        "GLD": Position(ticker="GLD", quantity=Decimal("100"), price=Decimal("200")),  # exit -> sell
+        "EEM": Position(ticker="EEM", quantity=Decimal("100"), price=Decimal("50")),    # exit -> sell
+    }
+    p = build_preview(
+        targets=targets, positions=positions,
+        nav=Decimal("100000"), cash=Decimal("75000"), buying_power=Decimal("100000"),
+        quotes={"SPY": Decimal("500"), "SHV": Decimal("110"), "GLD": Decimal("200"), "EEM": Decimal("50")},
+    )
+    sides = [o.side for o in p.orders]
+    assert Side.SELL in sides and Side.BUY in sides
+    last_sell = max(i for i, s in enumerate(sides) if s == Side.SELL)
+    first_buy = min(i for i, s in enumerate(sides) if s == Side.BUY)
+    assert last_sell < first_buy  # all sells precede all buys
+
+
+def test_margin_aware_scales_buys_to_fit_bp():
+    # Leveraged book: gross buys far exceed buying power. With margin_aware,
+    # all buys are scaled by one factor (weight-preserving) to fit.
+    targets = [Target(ticker="SPY", weight=Decimal("1.0")), Target(ticker="QQQ", weight=Decimal("0.6"))]
+    p = build_preview(
+        targets=targets, positions={},
+        nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("80000"),
+        quotes={"SPY": Decimal("500"), "QQQ": Decimal("400")},
+        margin_aware=True,
+    )
+    gross_buys = sum((o.notional for o in p.orders), Decimal(0))
+    assert gross_buys <= Decimal("80000")  # fits BP
+    # relative weights preserved: SPY notional / QQQ notional ≈ target ratio 1.0/0.6
+    by_t = {o.ticker: o for o in p.orders}
+    ratio = by_t["SPY"].notional / by_t["QQQ"].notional
+    assert Decimal("1.6") < ratio < Decimal("1.7")  # ~1.0/0.6
+    assert any("margin-aware" in w.lower() for w in p.warnings)
+
+
+def test_margin_aware_off_just_warns():
+    targets = [Target(ticker="SPY", weight=Decimal("1.5"))]
+    p = build_preview(
+        targets=targets, positions={},
+        nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("50000"),
+        quotes={"SPY": Decimal("500")},
+        margin_aware=False,
+    )
+    # not scaled — full target sized, BP warning present
+    assert any("exceed buying power" in w for w in p.warnings)
+    assert any("--margin-aware" in w for w in p.warnings)
+    assert sum((o.notional for o in p.orders), Decimal(0)) > Decimal("50000")
+
+
 def test_short_position_not_in_targets_is_left_untouched():
     # A short (negative qty) not in targets must NOT generate a buy-to-cover
     # in v1 — shorts are unsupported, so we leave it alone.
