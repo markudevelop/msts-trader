@@ -84,9 +84,7 @@ class Tasty:
         out: dict[str, Decimal] = {}
         for t in tickers:
             try:
-                eq = Equity.get(self._sess, t)
-                # Tastytrade Equity exposes `lendability` + `tick_sizes`; price
-                # is fetched via market-data REST. Fall back to a market-data call.
+                Equity.get(self._sess, t)  # validates symbol exists/tradeable
                 px = self._last_price(t)
                 if px is not None:
                     out[t] = px
@@ -97,7 +95,7 @@ class Tasty:
     def _last_price(self, ticker: str) -> Decimal | None:
         """Pull a single last price via the SDK's market-data helper."""
         try:
-            from tastytrade.market_data import a_get_market_data, get_market_data  # type: ignore
+            from tastytrade.market_data import get_market_data  # type: ignore
 
             md = get_market_data(self._sess, [ticker], instrument_type=InstrumentType.EQUITY)
             for row in md:

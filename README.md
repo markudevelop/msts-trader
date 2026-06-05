@@ -37,7 +37,7 @@ pip install msts-trader
 
 Python ≥3.11 required.
 
-Install from source (until a PyPI release lands):
+Install from source (development):
 
 ```bash
 git clone https://github.com/markudevelop/msts-trader.git
