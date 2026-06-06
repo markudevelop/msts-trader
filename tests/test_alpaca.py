@@ -61,3 +61,39 @@ def test_quote_swallows_data_errors():
     b = Alpaca.__new__(Alpaca)
     b._data = SimpleNamespace(get_stock_latest_quote=lambda req: (_ for _ in ()).throw(RuntimeError("boom")))
     assert b.quote(["SPY"]) == {}
+
+
+# ----- place_market -----
+
+def test_place_market_dry_run():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+    b = _broker()
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")), dry_run=True)
+    assert r["status"] == "dry-run" and r["dry_run"] is True
+
+
+def test_place_market_submits_and_reads_resp():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+    captured = {}
+    b = Alpaca.__new__(Alpaca)
+    b._client = SimpleNamespace(submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="abc-1"))
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")), dry_run=False)
+    assert r["status"] == "accepted" and r["order_id"] == "abc-1" and r["dry_run"] is False
+
+
+def test_place_market_error():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+    b = Alpaca.__new__(Alpaca)
+    b._client = SimpleNamespace(submit_order=lambda req: (_ for _ in ()).throw(RuntimeError("rejected: insufficient bp")))
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
+    assert r["status"] == "error" and "insufficient" in r["reason"]
+
+
+def test_place_market_zero_qty():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+    r = _broker().place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("0")))
+    assert r["status"] == "skipped"

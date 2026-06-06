@@ -76,3 +76,46 @@ def test_quote_price_priority():
 
 def test_quote_empty():
     assert _broker().quote([]) == {}
+
+
+# ----- place_market -----
+
+class _OrderResp:
+    def __init__(self, location=None):
+        self.headers = {"Location": location} if location else {}
+
+    def raise_for_status(self):
+        return None
+
+
+def test_place_market_submits_and_reads_location(monkeypatch):
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+    b = _broker()
+    b._client = SimpleNamespace(place_order=lambda h, spec: _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/12345"))
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
+    assert r["status"] == "submitted" and r["order_id"] == "12345" and r["quantity"] == 10
+
+
+def test_place_market_dry_run():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+    r = _broker().place_market(Order(ticker="SPY", side=Side.SELL, quantity=D("5")), dry_run=True)
+    assert r["status"] == "dry-run" and r["dry_run"] is True
+
+
+def test_place_market_fractional_skipped():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+    # 0.4 shares -> int() -> 0 -> Schwab whole-share skip
+    r = _broker().place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("0.4")))
+    assert r["status"] == "skipped" and "whole shares" in r["reason"]
+
+
+def test_place_market_error():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+    b = _broker()
+    b._client = SimpleNamespace(place_order=lambda h, spec: (_ for _ in ()).throw(RuntimeError("401 unauthorized")))
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
+    assert r["status"] == "error" and "401" in r["reason"]
