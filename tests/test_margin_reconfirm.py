@@ -10,9 +10,10 @@ from msts_trader.models import Side, Target
 
 
 class _TierBroker:
-    """Reports margin = notional × rate, where the rate is higher while the
-    book is large (a crude non-linear tier) and drops once it's smaller — so a
-    single linear scale undershoots and a second pass is needed.
+    """Realistic non-linear margin: a long position's margin requirement is a
+    fraction of notional (<= 1.0), and the rate is higher for the larger book
+    and lower once it shrinks past a tier boundary — so the first linear scale
+    (using the high rate) over-shoots and a confirming second pass runs.
     """
 
     name = "fake"
@@ -20,13 +21,15 @@ class _TierBroker:
 
     def margin_requirement(self, orders):
         gross = sum((o.notional for o in orders if o.side == Side.BUY), Decimal(0))
-        rate = Decimal("1.5") if gross > Decimal("70000") else Decimal("1.0")
+        rate = Decimal("0.9") if gross > Decimal("110000") else Decimal("0.6")
         return gross * rate
 
 
 def _preview():
+    # Notional $200k > BP $100k so the notional pre-check does NOT short-circuit
+    # and the real-margin path runs.
     return build_preview(
-        targets=[Target(ticker="SPY", weight=Decimal("1.0"))],
+        targets=[Target(ticker="SPY", weight=Decimal("2.0"))],
         positions={},
         nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("100000"),
         quotes={"SPY": Decimal("500")},
@@ -35,13 +38,12 @@ def _preview():
 
 def test_reconfirm_runs_multiple_passes(monkeypatch):
     monkeypatch.setattr(m, "_QUIET", True)
-    p = _preview()  # 200 sh SPY, $100k notional
-    # pass 1: margin = 100k*1.5 = 150k > 97k avail -> scale ~0.647 -> ~$64.7k book
-    # pass 2: now <70k so rate 1.0; margin 64.7k <= 97k -> fits, stop.
+    p = _preview()  # 400 sh SPY, $200k notional
+    before = sum((o.notional for o in p.orders), Decimal(0))
     m._apply_margin_aware(_TierBroker(), p, Decimal("100000"))
-    gross = sum((o.notional for o in p.orders), Decimal(0))
-    assert gross <= Decimal("100000")  # fits real buying power
-    msgs = [w for w in p.warnings if "margin-aware" in w.lower()]
+    after = sum((o.notional for o in p.orders), Decimal(0))
+    assert after < before  # buys were scaled down
+    msgs = [w for w in p.warnings if "scaled all buys" in w]
     assert msgs and "real broker margin" in msgs[-1]
     assert "passes" in msgs[-1]  # multi-pass cumulative message
 

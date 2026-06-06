@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the project is pre-1.0, minor versions (0.x.0) may introduce
 behaviour changes; patch versions (0.x.y) are fixes and docs.
 
+## [0.9.1] — 2026-06-06
+
+### Fixed
+- **Fully-invested (100%) books were trimmed ~3% on cash accounts.** With
+  margin-aware now on by default, a non-leveraged book (e.g. 60/40) on a
+  cash/paper account where buying power ≈ NAV got scaled to 97%, leaving
+  3% idle. Two root causes, both fixed:
+  - The 0.97 safety cushion was applied to the *fit check*; it now applies
+    only when actually scaling *down* an over-BP book. A book that fits
+    within 100% of buying power is left alone (full deployment).
+  - Buy share quantities rounded half-up, which could push a book a few
+    cents over BP and spuriously trigger scaling. Buys now round **down**,
+    so a book never over-commits from rounding.
+  Found by a fresh-install end-to-end sweep.
+
+### Tests
+- 284 total (+3): 100% book on a cash account deploys fully (no trim),
+  over-BP book is cushioned below the limit, re-confirm tests reworked
+  with realistic (≤100% notional) margin rates.
+
 ## [0.9.0] — 2026-06-06
 
 ### Changed
@@ -512,7 +532,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/markudevelop/msts-trader/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/markudevelop/msts-trader/compare/v0.8.4...v0.9.0
 [0.8.4]: https://github.com/markudevelop/msts-trader/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/markudevelop/msts-trader/compare/v0.8.2...v0.8.3

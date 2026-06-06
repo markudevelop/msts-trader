@@ -8,7 +8,7 @@ Logic mirrors msts-live's live runner for parity:
 """
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from .models import Order, Position, Preview, RebalanceRow, Side, Target
 
@@ -96,7 +96,9 @@ def build_preview(
             continue
 
         side = Side.BUY if delta_dollars > 0 else Side.SELL
-        qty = (abs(delta_dollars) / px).quantize(Decimal("0.01"))
+        # Round DOWN: never let share rounding push a buy above its target,
+        # so a fully-invested book doesn't spuriously exceed buying power.
+        qty = (abs(delta_dollars) / px).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         if qty <= 0:
             row.note = "qty rounds to 0"
             rows.append(row)
@@ -187,7 +189,11 @@ def apply_margin_aware(
     buys = [o for o in preview.orders if o.side == Side.BUY]
     gross = sum((o.notional for o in buys), Decimal(0))
     sell_proceeds = sum((o.notional for o in preview.orders if o.side == Side.SELL), Decimal(0))
-    available = (buying_power + sell_proceeds) * bp_safety
+    # The FIT check uses the full available buying power — a book that fits
+    # within 100% of BP is left alone (full deployment, no 3% trim). The
+    # bp_safety cushion is applied ONLY when scaling DOWN an over-BP book, so
+    # the scaled order set lands safely below the limit (slippage / fees).
+    available = buying_power + sell_proceeds
     need = real_margin if real_margin is not None else gross
 
     # We're handling buying power now, so drop build_preview's generic
@@ -203,11 +209,11 @@ def apply_margin_aware(
             )
         return Decimal(1)  # already fits — nothing to scale
 
-    scale = available / need
+    scale = (available * bp_safety) / need
     kept: list[Order] = []
     for o in preview.orders:
         if o.side == Side.BUY:
-            o.quantity = (o.quantity * scale).quantize(Decimal("0.01"))
+            o.quantity = (o.quantity * scale).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
             o.notional = o.quantity * (o.estimated_price or Decimal(0))
             if o.quantity <= 0:
                 continue

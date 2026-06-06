@@ -171,7 +171,9 @@ def _apply_margin_aware(broker, preview, buying_power, max_passes: int = 3) -> N
     buys0 = [o for o in preview.orders if o.side == Side.BUY]
     gross0 = sum((o.notional for o in buys0), Decimal(0))
     sells0 = sum((o.notional for o in preview.orders if o.side == Side.SELL), Decimal(0))
-    if gross0 <= (buying_power + sells0) * Decimal("0.97"):
+    # Fits within full buying power -> nothing to scale, no broker queries.
+    # (Cushion is applied only when actually scaling an over-BP book.)
+    if gross0 <= buying_power + sells0:
         preview.warnings = [w for w in preview.warnings if "re-run with --margin-aware" not in w]
         return
 
@@ -203,7 +205,7 @@ def _apply_margin_aware(broker, preview, buying_power, max_passes: int = 3) -> N
     buys = [o for o in preview.orders if o.side == Side.BUY]
     gross = sum((o.notional for o in buys), Decimal(0))
     sells = sum((o.notional for o in preview.orders if o.side == Side.SELL), Decimal(0))
-    available = (buying_power + sells) * Decimal("0.97")
+    available = buying_power + sells
     src = "real broker margin" if used_real else "estimated"
     if cumulative < Decimal(1):
         passes_note = f" over {passes} passes" if passes > 1 else ""

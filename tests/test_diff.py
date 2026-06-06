@@ -307,6 +307,41 @@ def test_apply_margin_aware_notes_fit_via_sells():
     assert spy.quantity == Decimal("200.00")  # 100k / 500
 
 
+def test_fully_invested_book_not_trimmed_on_cash_account():
+    from msts_trader.diff import apply_margin_aware
+
+    # 100% book (sum = 1.0) on a cash account where BP == NAV must deploy fully,
+    # NOT get shaved to 97% by the safety cushion. (Regression: the cushion
+    # was wrongly applied to the fit check.)
+    targets = [Target(ticker="SPY", weight=Decimal("0.6")), Target(ticker="SHV", weight=Decimal("0.4"))]
+    p = build_preview(
+        targets=targets, positions={},
+        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        quotes={"SPY": Decimal("500"), "SHV": Decimal("110")},
+    )
+    scaled = apply_margin_aware(p, buying_power=Decimal("50000"))
+    assert scaled == Decimal(1)  # no scaling — fits within full BP
+    gross = sum((o.notional for o in p.orders), Decimal(0))
+    # Full deployment (buys round down, so never over BP; within a few $ of 50k).
+    assert Decimal("49990") <= gross <= Decimal("50000")
+
+
+def test_over_bp_book_scaled_with_safety_cushion():
+    from msts_trader.diff import apply_margin_aware
+
+    # A book that exceeds BP is scaled to land BELOW the limit (cushion), so a
+    # market fill with mild slippage still clears.
+    targets = [Target(ticker="SPY", weight=Decimal("1.2"))]
+    p = build_preview(
+        targets=targets, positions={},
+        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        quotes={"SPY": Decimal("500")},
+    )
+    apply_margin_aware(p, buying_power=Decimal("50000"))
+    gross = sum((o.notional for o in p.orders), Decimal(0))
+    assert gross <= Decimal("50000") * Decimal("0.97") + 1  # cushioned below BP
+
+
 def test_apply_margin_aware_noop_when_fits():
     from msts_trader.diff import apply_margin_aware
 
