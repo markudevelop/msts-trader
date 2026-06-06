@@ -12,6 +12,19 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.9.3] — 2026-06-06
+
+### Changed
+- Metadata: add the `tradier` keyword (it was shipped but unlisted) and
+  bump `Development Status` from Alpha to **Beta** (326 tests, three
+  brokers live-tested).
+
+### CI
+- Added `pip check` (dependency-tree consistency), `python -m build`, and
+  `twine check dist/*` (package + long-description metadata validity) to
+  the CI matrix, and extended `ruff` to lint `tests/` too. Catches a
+  broken package/metadata before it can reach a release.
+
 ## [0.9.2] — 2026-06-06
 
 ### Added
@@ -547,7 +560,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/markudevelop/msts-trader/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/markudevelop/msts-trader/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/markudevelop/msts-trader/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/markudevelop/msts-trader/compare/v0.8.4...v0.9.0
