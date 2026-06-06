@@ -24,7 +24,7 @@ from . import __version__, config, fill_log, keychain, notifications, retry, run
 from .brokers import SUPPORTED, BrokerError, make
 from .creds_file import CredsFileError, broker_kwargs_from_env, load_into_env
 from .csv_parser import CSVParseError, parse_csv
-from .diff import build_preview
+from .diff import apply_margin_aware, build_preview
 from .login_errors import explain_login_error
 from .market_hours import market_status
 from .models import Side
@@ -148,6 +148,20 @@ def _fetch_url_or_exit(url: str) -> str:
     except Exception as e:
         c.print(f"[red]✗ could not fetch {url}:[/red] {e}")
         sys.exit(1)
+
+
+def _apply_margin_aware(broker, preview, buying_power) -> None:
+    """Scale buys to fit buying power, using the broker's REAL margin when
+    it exposes it (Tastytrade dry-run), else the notional approximation."""
+    real = None
+    mr = getattr(broker, "margin_requirement", None)
+    if callable(mr):
+        buys = [o for o in preview.orders if o.side == Side.BUY]
+        try:
+            real = mr(buys)
+        except Exception:
+            real = None
+    apply_margin_aware(preview, buying_power=buying_power, real_margin=real)
 
 
 def _load_broker(name: str):
@@ -631,8 +645,10 @@ def rebalance(
     preview = build_preview(
         targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
         buying_power=bal.buying_power, quotes=quotes,
-        drift_threshold=Decimal(str(threshold)), margin_aware=margin_aware,
+        drift_threshold=Decimal(str(threshold)),
     )
+    if margin_aware:
+        _apply_margin_aware(b, preview, bal.buying_power)
 
     # Extra safety cap on top of the engine's own checks.
     cap_msg = safety.check_max_notional(preview.orders, Decimal(str(max_notional)) if max_notional else None)
@@ -792,8 +808,10 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
     preview = build_preview(
         targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
         buying_power=bal.buying_power, quotes=quotes,
-        drift_threshold=Decimal(str(threshold)), margin_aware=margin_aware,
+        drift_threshold=Decimal(str(threshold)),
     )
+    if margin_aware:
+        _apply_margin_aware(b, preview, bal.buying_power)
     cap = safety.check_max_notional(preview.orders, Decimal(str(max_notional)) if max_notional else None)
     if cap:
         preview.blockers.append(cap)

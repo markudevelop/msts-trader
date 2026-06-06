@@ -385,12 +385,17 @@ TBT,0.1480
 ```
 
 The preview shows `Gross target exposure: 160% (1.60x)`. For leveraged
-books, run with **`--margin-aware`**: if the gross buys exceed your
-available buying power (broker BP plus the proceeds from the sells, which
-execute first), msts-trader scales **every buy by one uniform factor** so
-the whole book fits — preserving your relative weights — instead of
-letting the broker reject the tail of the order set piecemeal and distort
-your allocation. When the sells already fund the buys, nothing is scaled.
+books, run with **`--margin-aware`**: if the buys exceed your available
+buying power (broker BP plus the proceeds from the sells, which execute
+first), msts-trader scales **every buy by one uniform factor** so the
+whole book fits — preserving your relative weights — instead of letting
+the broker reject the tail of the order set piecemeal and distort your
+allocation. When the sells already fund the buys, nothing is scaled.
+
+On **Tastytrade** this uses the broker's *real* margin numbers (queried
+from the order dry-run), so leveraged-ETF margin rates (TBT, EDZ, …) are
+sized exactly — the same approach a production live runner uses. Other
+brokers fall back to a notional estimate; both are weight-preserving.
 
 Orders always execute **sells before buys**, so proceeds free up buying
 power before the buys submit (required on cash accounts, lower peak

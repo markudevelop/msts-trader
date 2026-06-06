@@ -224,37 +224,68 @@ def test_sells_ordered_before_buys():
     assert last_sell < first_buy  # all sells precede all buys
 
 
-def test_margin_aware_scales_buys_to_fit_bp():
-    # Leveraged book: gross buys far exceed buying power. With margin_aware,
-    # all buys are scaled by one factor (weight-preserving) to fit.
-    targets = [Target(ticker="SPY", weight=Decimal("1.0")), Target(ticker="QQQ", weight=Decimal("0.6"))]
-    p = build_preview(
-        targets=targets, positions={},
-        nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("80000"),
-        quotes={"SPY": Decimal("500"), "QQQ": Decimal("400")},
-        margin_aware=True,
-    )
-    gross_buys = sum((o.notional for o in p.orders), Decimal(0))
-    assert gross_buys <= Decimal("80000")  # fits BP
-    # relative weights preserved: SPY notional / QQQ notional ≈ target ratio 1.0/0.6
-    by_t = {o.ticker: o for o in p.orders}
-    ratio = by_t["SPY"].notional / by_t["QQQ"].notional
-    assert Decimal("1.6") < ratio < Decimal("1.7")  # ~1.0/0.6
-    assert any("margin-aware" in w.lower() for w in p.warnings)
-
-
-def test_margin_aware_off_just_warns():
+def test_build_preview_warns_on_bp_overrun_but_does_not_scale():
+    # build_preview itself no longer scales — it just warns. Scaling is
+    # applied separately by apply_margin_aware.
     targets = [Target(ticker="SPY", weight=Decimal("1.5"))]
     p = build_preview(
         targets=targets, positions={},
         nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("50000"),
         quotes={"SPY": Decimal("500")},
-        margin_aware=False,
     )
-    # not scaled — full target sized, BP warning present
     assert any("exceed buying power" in w for w in p.warnings)
     assert any("--margin-aware" in w for w in p.warnings)
     assert sum((o.notional for o in p.orders), Decimal(0)) > Decimal("50000")
+
+
+def test_apply_margin_aware_notional_scales_to_fit():
+    from msts_trader.diff import apply_margin_aware
+
+    targets = [Target(ticker="SPY", weight=Decimal("1.0")), Target(ticker="QQQ", weight=Decimal("0.6"))]
+    p = build_preview(
+        targets=targets, positions={},
+        nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("80000"),
+        quotes={"SPY": Decimal("500"), "QQQ": Decimal("400")},
+    )
+    apply_margin_aware(p, buying_power=Decimal("80000"))  # no real_margin -> notional
+    gross = sum((o.notional for o in p.orders), Decimal(0))
+    assert gross <= Decimal("80000") * Decimal("0.97") + 1  # fits with cushion
+    by_t = {o.ticker: o for o in p.orders}
+    ratio = by_t["SPY"].notional / by_t["QQQ"].notional
+    assert Decimal("1.6") < ratio < Decimal("1.7")  # weights preserved (~1.0/0.6)
+    assert any("estimated" in w.lower() for w in p.warnings)
+
+
+def test_apply_margin_aware_uses_real_margin_when_given():
+    from msts_trader.diff import apply_margin_aware
+
+    # Real margin is HIGHER than notional (leveraged ETF) -> scales more.
+    targets = [Target(ticker="TBT", weight=Decimal("1.0"))]
+    p = build_preview(
+        targets=targets, positions={},
+        nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("100000"),
+        quotes={"TBT": Decimal("40")},
+    )
+    # notional ~ $100k fits BP $100k; but real margin $150k does NOT -> scales.
+    apply_margin_aware(p, buying_power=Decimal("100000"), real_margin=Decimal("150000"))
+    assert any("real broker margin" in w.lower() for w in p.warnings)
+    assert sum((o.notional for o in p.orders), Decimal(0)) < Decimal("100000")
+
+
+def test_apply_margin_aware_noop_when_fits():
+    from msts_trader.diff import apply_margin_aware
+
+    targets = [Target(ticker="SPY", weight=Decimal("0.5"))]
+    p = build_preview(
+        targets=targets, positions={},
+        nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("100000"),
+        quotes={"SPY": Decimal("500")},
+    )
+    before = [(o.ticker, o.quantity) for o in p.orders]
+    apply_margin_aware(p, buying_power=Decimal("100000"))
+    after = [(o.ticker, o.quantity) for o in p.orders]
+    assert before == after  # nothing scaled
+    assert not any("margin-aware" in w.lower() for w in p.warnings)
 
 
 def test_short_position_not_in_targets_is_left_untouched():

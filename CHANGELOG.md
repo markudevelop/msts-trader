@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the project is pre-1.0, minor versions (0.x.0) may introduce
 behaviour changes; patch versions (0.x.y) are fixes and docs.
 
+## [0.8.1] — 2026-06-06
+
+### Changed
+- **Margin-aware sizing now uses the broker's *real* margin on
+  Tastytrade.** `--margin-aware` queries Tastytrade's order dry-run
+  (`buying_power_effect.change_in_buying_power`) per buy and sizes off the
+  actual buying-power requirement — capturing leveraged-ETF margin rates
+  (TBT, EDZ, …) that a notional estimate misses. This matches what a
+  production live runner does. Falls back to the notional approximation
+  automatically when the broker can't compute it (e.g. market closed) or
+  doesn't expose margin — no crash, never sizes on partial data.
+- Scaling logic moved out of `build_preview` into `diff.apply_margin_aware`
+  (broker-aware) so the real-vs-estimated path lives in one tested place.
+- Clearer messaging: when margin-aware runs, the generic "re-run with
+  --margin-aware" hint is removed and replaced with what it actually did
+  — either "(real broker margin / estimated): scaled buys by X%" or
+  "buys fit $Y (incl. $Z sell proceeds) — no scaling needed".
+
+### Tests
+- 263 total. apply_margin_aware: notional scale-to-fit (weight-preserving),
+  real-margin path scales harder than notional, no-op when it fits.
+  Verified live (dry-run) against the 1.60x Tastytrade book — clean
+  fallback + coherent messaging.
+
 ## [0.8.0] — 2026-06-06
 
 ### Added
@@ -416,7 +440,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/markudevelop/msts-trader/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/markudevelop/msts-trader/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/markudevelop/msts-trader/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/markudevelop/msts-trader/compare/v0.6.0...v0.7.0

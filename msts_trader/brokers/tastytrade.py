@@ -104,6 +104,35 @@ class Tastytrade:
                 out[sym] = px
         return out
 
+    def margin_requirement(self, orders) -> Decimal | None:
+        """Real total buying-power requirement for the given BUY orders.
+
+        Dry-runs each buy and sums the broker's reported
+        change_in_buying_power — this captures leveraged-ETF margin rates
+        (e.g. TBT, EDZ) that a notional estimate misses. Returns None if any
+        dry-run fails (e.g. market closed), so the caller falls back to the
+        notional approximation rather than sizing on partial data.
+        """
+        total = Decimal(0)
+        for o in orders:
+            if o.side != Side.BUY:
+                continue
+            qty = Decimal(str(round(float(o.quantity), 2)))
+            if qty <= 0:
+                continue
+            leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=o.ticker, action=OrderAction.BUY_TO_OPEN, quantity=qty)
+            new_order = NewOrder(time_in_force=OrderTimeInForce.DAY, order_type=OrderType.MARKET, legs=[leg], price=None)
+            try:
+                resp = self._acct.place_order(self._sess, new_order, dry_run=True)
+            except Exception:
+                return None
+            bpe = getattr(resp, "buying_power_effect", None)
+            chg = getattr(bpe, "change_in_buying_power", None) if bpe is not None else None
+            if chg is None:
+                return None
+            total += abs(Decimal(str(chg)))
+        return total
+
     @staticmethod
     def _extract_price(row) -> Decimal | None:
         for attr in ("last", "mark", "mid", "close"):

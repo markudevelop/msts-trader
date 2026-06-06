@@ -26,8 +26,6 @@ def build_preview(
     buying_power: Decimal,
     quotes: dict[str, Decimal],
     drift_threshold: Decimal = DRIFT_THRESHOLD,
-    margin_aware: bool = False,
-    bp_safety: Decimal = BP_SAFETY,
 ) -> Preview:
     warnings: list[str] = []
     blockers: list[str] = []
@@ -145,33 +143,14 @@ def build_preview(
             orders.append(order)
         rows.append(row)
 
-    # 3) Buying-power handling
+    # 3) Buying-power warning (scaling is applied separately by apply_margin_aware,
+    #    which can use the broker's real margin numbers).
     gross_buys = sum((o.notional for o in orders if o.side == Side.BUY), Decimal(0))
-    sell_proceeds = sum((o.notional for o in orders if o.side == Side.SELL), Decimal(0))
-    # Sells run first (below), so their proceeds are available to fund buys.
-    available_bp = (buying_power + sell_proceeds) * bp_safety
-
-    if margin_aware and gross_buys > available_bp and gross_buys > 0 and available_bp > 0:
-        # Scale every BUY by one uniform factor so the whole book fits the
-        # available buying power — preserving relative weights, instead of
-        # letting the broker reject the tail of the order set piecemeal.
-        scale = available_bp / gross_buys
-        for o in orders:
-            if o.side == Side.BUY:
-                o.quantity = (o.quantity * scale).quantize(Decimal("0.01"))
-                o.notional = o.quantity * (o.estimated_price or Decimal(0))
-        # drop buys that scaled to zero
-        orders = [o for o in orders if not (o.side == Side.BUY and o.quantity <= 0)]
-        gross_buys = sum((o.notional for o in orders if o.side == Side.BUY), Decimal(0))
-        warnings.append(
-            f"Margin-aware: scaled all buys by {scale:.1%} to fit ${available_bp:,.0f} "
-            f"buying power (weight-preserving)."
-        )
-    elif gross_buys > buying_power:
+    if gross_buys > buying_power:
         warnings.append(
             f"Gross buys ${gross_buys:,.0f} exceed buying power ${buying_power:,.0f} — "
-            + ("re-run with --margin-aware to scale to fit, or " if not margin_aware else "")
-            + "the broker's pre-flight may scale orders down at submit."
+            f"re-run with --margin-aware to scale to fit, or the broker's pre-flight "
+            f"may scale orders down at submit."
         )
 
     # Execute SELLS before BUYS: proceeds settle/free buying power first, so a
@@ -181,3 +160,55 @@ def build_preview(
 
     rows.sort(key=lambda r: (r.order is None, -abs(r.delta_dollars)))
     return Preview(nav=nav, buying_power=buying_power, cash=cash, rows=rows, orders=orders, warnings=warnings, blockers=blockers)
+
+
+def apply_margin_aware(
+    preview: Preview,
+    *,
+    buying_power: Decimal,
+    real_margin: Decimal | None = None,
+    bp_safety: Decimal = BP_SAFETY,
+) -> None:
+    """Scale all BUY orders by one factor so the book fits buying power.
+
+    `real_margin` is the broker's *actual* total buying-power requirement for
+    the buys (e.g. summed from Tastytrade order dry-runs — this captures
+    leveraged-ETF margin rates that notional can't). When None, the notional
+    value of the buys is used as a portable approximation.
+
+    Weight-preserving: every buy is scaled by the same factor. No-op when the
+    buys already fit (the common steady-state case). Mutates `preview`.
+    """
+    buys = [o for o in preview.orders if o.side == Side.BUY]
+    gross = sum((o.notional for o in buys), Decimal(0))
+    sell_proceeds = sum((o.notional for o in preview.orders if o.side == Side.SELL), Decimal(0))
+    available = (buying_power + sell_proceeds) * bp_safety
+    need = real_margin if real_margin is not None else gross
+
+    # We're handling buying power now, so drop build_preview's generic
+    # "re-run with --margin-aware" warning to avoid contradicting ourselves.
+    preview.warnings = [w for w in preview.warnings if "re-run with --margin-aware" not in w]
+
+    src = "real broker margin" if real_margin is not None else "estimated"
+    if need <= 0 or available <= 0 or need <= available:
+        if gross > buying_power:  # only note it when it looked tight on raw BP
+            preview.warnings.append(
+                f"Margin-aware ({src}): buys fit ${available:,.0f} buying power "
+                f"(incl. ${sell_proceeds:,.0f} sell proceeds) — no scaling needed."
+            )
+        return  # already fits — nothing to scale
+
+    scale = available / need
+    kept: list[Order] = []
+    for o in preview.orders:
+        if o.side == Side.BUY:
+            o.quantity = (o.quantity * scale).quantize(Decimal("0.01"))
+            o.notional = o.quantity * (o.estimated_price or Decimal(0))
+            if o.quantity <= 0:
+                continue
+        kept.append(o)
+    preview.orders = kept
+    preview.warnings.append(
+        f"Margin-aware ({src}): scaled all buys by {scale:.1%} to fit "
+        f"${available:,.0f} buying power (weight-preserving)."
+    )
