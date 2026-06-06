@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the project is pre-1.0, minor versions (0.x.0) may introduce
 behaviour changes; patch versions (0.x.y) are fixes and docs.
 
+## [0.8.3] — 2026-06-06
+
+### Fixed
+- **Error messages containing brackets were mangled by Rich markup.**
+  e.g. "no [[account]] entries in the config" rendered as "no [] entries",
+  and any broker error payload with `[...]` could be eaten. All
+  dynamic text in coloured output is now Rich-escaped (`_fail`, preview
+  warnings/blockers, execution failure reasons, login errors, the
+  multi-account table, broker-init / creds-file errors).
+
+### Tests
+- 278 total (+9, found the bug above): dust-delta skip, margin-aware
+  "fits via sell proceeds" note, creds-file empty-key / comments-only /
+  missing-file errors, Hyperliquid env creds, multi no-accounts /
+  no-CSV-source guards (the no-accounts test pins the bracket fix).
+
 ## [0.8.2] — 2026-06-06
 
 ### Added
@@ -457,7 +473,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/markudevelop/msts-trader/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/markudevelop/msts-trader/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/markudevelop/msts-trader/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/markudevelop/msts-trader/compare/v0.7.1...v0.8.0

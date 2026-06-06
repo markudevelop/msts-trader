@@ -16,6 +16,7 @@ from decimal import Decimal
 
 import click
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Confirm  # used for the post-preview Y/N (works fine in all terminals)
 from rich.table import Table
@@ -45,11 +46,15 @@ def say(msg: str = "", *, style: str | None = None, end: str = "\n") -> None:
 
 
 def _fail(msg: str, code: int = 1):
-    """Emit an error (JSON-aware) and exit."""
+    """Emit an error (JSON-aware) and exit.
+
+    The message is rich-escaped so literal brackets (e.g. "[[account]]",
+    broker error payloads) render verbatim instead of being eaten as markup.
+    """
     if _JSON:
         print(json.dumps({"error": msg}))
     else:
-        c.print(f"[red]✗ {msg}[/red]")
+        c.print(f"[red]✗ {escape(msg)}[/red]")
     sys.exit(code)
 
 
@@ -122,7 +127,7 @@ def _load_creds_file_or_exit(path: str) -> None:
     try:
         keys = load_into_env(path)
     except CredsFileError as e:
-        c.print(f"[red]✗ could not read creds file:[/red] {e}")
+        c.print(f"[red]✗ could not read creds file:[/red] {escape(str(e))}")
         sys.exit(1)
     c.print(f"[green]✓ loaded {len(keys)} value(s) from {path}[/green]")
 
@@ -185,7 +190,7 @@ def _load_broker(name: str):
     try:
         return make(name, **creds)
     except BrokerError as e:
-        c.print(f"[red]✗ broker init failed:[/red] {e}")
+        c.print(f"[red]✗ broker init failed:[/red] {escape(str(e))}")
         sys.exit(1)
 
 
@@ -215,7 +220,7 @@ def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None) ->
         try:
             keys = load_into_env(creds_file)
         except CredsFileError as e:
-            c.print(f"[red]✗ could not read creds file:[/red] {e}")
+            c.print(f"[red]✗ could not read creds file:[/red] {escape(str(e))}")
             sys.exit(1)
         c.print(f"[green]✓ loaded {len(keys)} value(s) from {creds_file}[/green]")
 
@@ -255,7 +260,7 @@ def _login_tastytrade() -> None:
         b = make("tastytrade", provider_secret=provider_secret, refresh_token=refresh_token, account_id=account_id)
         bal = b.balances()
     except Exception as e:
-        c.print(f"[red]✗ {explain_login_error('tastytrade', e)}[/red]")
+        c.print(f"[red]✗ {escape(explain_login_error('tastytrade', e))}[/red]")
         sys.exit(1)
 
     keychain.save("tastytrade", {
@@ -293,7 +298,7 @@ def _login_alpaca() -> None:
         b = make("alpaca", api_key=api_key, secret_key=secret_key, paper=paper)
         bal = b.balances()
     except Exception as e:
-        c.print(f"[red]✗ {explain_login_error('alpaca', e)}[/red]")
+        c.print(f"[red]✗ {escape(explain_login_error('alpaca', e))}[/red]")
         sys.exit(1)
 
     keychain.save("alpaca", {"api_key": api_key, "secret_key": secret_key, "paper": paper})
@@ -323,7 +328,7 @@ def _login_tradier() -> None:
         b = make("tradier", access_token=access_token, account_id=account_id, sandbox=sandbox)
         bal = b.balances()
     except Exception as e:
-        c.print(f"[red]✗ {explain_login_error('tradier', e)}[/red]")
+        c.print(f"[red]✗ {escape(explain_login_error('tradier', e))}[/red]")
         sys.exit(1)
 
     keychain.save("tradier", {"access_token": access_token, "account_id": account_id or b.account_id, "sandbox": sandbox})
@@ -353,7 +358,7 @@ def _login_ibkr() -> None:
         b = make("ibkr", host=host, port=port, client_id=client_id, account_id=account_id)
         bal = b.balances()
     except Exception as e:
-        c.print(f"[red]✗ {explain_login_error('ibkr', e)}[/red]")
+        c.print(f"[red]✗ {escape(explain_login_error('ibkr', e))}[/red]")
         sys.exit(1)
 
     keychain.save("ibkr", {"host": host, "port": port, "client_id": client_id, "account_id": account_id or b.account_id})
@@ -381,7 +386,7 @@ def _login_schwab() -> None:
         b = make("schwab", app_key=app_key, app_secret=app_secret, callback_url=callback_url)
         bal = b.balances()
     except Exception as e:
-        c.print(f"[red]✗ {explain_login_error('schwab', e)}[/red]")
+        c.print(f"[red]✗ {escape(explain_login_error('schwab', e))}[/red]")
         sys.exit(1)
 
     keychain.save("schwab", {"app_key": app_key, "app_secret": app_secret, "callback_url": callback_url, "account_hash": b._account_hash})
@@ -410,7 +415,7 @@ def _login_hyperliquid() -> None:
         b = make("hyperliquid", private_key=private_key, account_address=account_address, testnet=testnet)
         bal = b.balances()
     except Exception as e:
-        c.print(f"[red]✗ {explain_login_error('hyperliquid', e)}[/red]")
+        c.print(f"[red]✗ {escape(explain_login_error('hyperliquid', e))}[/red]")
         sys.exit(1)
 
     keychain.save("hyperliquid", {"private_key": private_key, "account_address": account_address, "testnet": testnet})
@@ -753,9 +758,9 @@ def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
     c.print(table)
 
     for w in preview.warnings:
-        c.print(f"[yellow]⚠ {w}[/yellow]")
+        c.print(f"[yellow]⚠ {escape(w)}[/yellow]")
     for b in preview.blockers:
-        c.print(f"[red]✗ {b}[/red]")
+        c.print(f"[red]✗ {escape(b)}[/red]")
 
 
 def _execute(broker, preview):
@@ -776,7 +781,7 @@ def _execute(broker, preview):
         status = result.get("status", "?")
         if status in ("error", "skipped"):
             failed += 1
-            say(f"[red]{status.upper()}[/red] {result.get('reason', '')}")
+            say(f"[red]{status.upper()}[/red] {escape(str(result.get('reason', '')))}")
         else:
             sent += 1
             say(f"[green]{status.upper()}[/green]  id={result.get('order_id', '?')}")
@@ -947,7 +952,7 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, force, json_out, quiet):
     for r in results:
         st = r.get("status", "?")
         color = "green" if st in ("executed", "dry-run", "nothing-to-do") else "yellow" if st in ("duplicate", "partial") else "red"
-        detail = f" {r['reason']}" if r.get("reason") else ""
+        detail = f" {escape(str(r['reason']))}" if r.get("reason") else ""
         table.add_row(r.get("name", "?"), r.get("broker", "—"), f"[{color}]{st}[/{color}]{detail}", str(r.get("orders", "—")), str(r.get("sent", "—")), str(r.get("failed", "—")))
     c.print(table)
     if any(r.get("status") in ("error", "blocked", "partial") for r in results):

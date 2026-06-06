@@ -272,6 +272,41 @@ def test_apply_margin_aware_uses_real_margin_when_given():
     assert sum((o.notional for o in p.orders), Decimal(0)) < Decimal("100000")
 
 
+def test_sub_dollar_delta_is_dust_skipped():
+    # A target whose dollar delta is under $1 is treated as dust and skipped.
+    targets = [Target(ticker="SPY", weight=Decimal("0.50"))]
+    positions = {"SPY": Position(ticker="SPY", quantity=Decimal("100"), price=Decimal("250.00"))}
+    # current = 25000, target = 0.5*50000.50 = 25000.25 -> delta $0.25 < $1
+    p = build_preview(
+        targets=targets, positions=positions,
+        nav=Decimal("50000.50"), cash=Decimal("25000"), buying_power=Decimal("25000"),
+        quotes={"SPY": Decimal("250.00")},
+        drift_threshold=Decimal("0"),  # disable drift gate so we reach the dust check
+    )
+    assert p.orders == []
+    assert any(r.ticker == "SPY" and r.note == "dust" for r in p.rows)
+
+
+def test_apply_margin_aware_notes_fit_via_sells():
+    from msts_trader.diff import apply_margin_aware
+
+    # Buys exceed raw BP, but sell proceeds cover them -> no scaling, but a
+    # clear "fits via sell proceeds" note is added.
+    targets = [Target(ticker="SPY", weight=Decimal("1.0"))]
+    positions = {"GLD": Position(ticker="GLD", quantity=Decimal("450"), price=Decimal("200"))}  # $90k sell
+    p = build_preview(
+        targets=targets, positions=positions,
+        nav=Decimal("100000"), cash=Decimal("20000"), buying_power=Decimal("20000"),
+        quotes={"SPY": Decimal("500"), "GLD": Decimal("200")},
+    )
+    # BP 20k + $90k sell proceeds -> available ~106k >= $100k buys -> fits
+    apply_margin_aware(p, buying_power=Decimal("20000"))
+    assert any("no scaling needed" in w for w in p.warnings)
+    # not scaled
+    spy = next(o for o in p.orders if o.ticker == "SPY")
+    assert spy.quantity == Decimal("200.00")  # 100k / 500
+
+
 def test_apply_margin_aware_noop_when_fits():
     from msts_trader.diff import apply_margin_aware
 

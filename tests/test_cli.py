@@ -135,6 +135,25 @@ def test_multi_dry_run_two_paper_accounts(tmp_path, monkeypatch):
     assert {acct["name"] for acct in payload["accounts"]} == {"a", "b"}
 
 
+def test_multi_no_accounts_errors(tmp_path):
+    cfg = tmp_path / "multi.toml"
+    cfg.write_text('threshold = 0.04\n')  # no [[account]] tables
+    csv = tmp_path / "t.csv"
+    csv.write_text("ticker,weight\nSPY,1.0\n")
+    r = CliRunner().invoke(main, ["multi", "--config", str(cfg), "--csv-file", str(csv), "--dry-run"])
+    assert r.exit_code != 0
+    # brackets must survive (rich-escaped), not be eaten to "no [] entries"
+    assert "[[account]]" in r.output
+
+
+def test_multi_no_csv_source_errors(tmp_path):
+    cfg = tmp_path / "multi.toml"
+    cfg.write_text('[[account]]\nname = "a"\nbroker = "paper"\n')
+    r = CliRunner().invoke(main, ["multi", "--config", str(cfg), "--dry-run"])
+    assert r.exit_code != 0
+    assert "csv" in r.output.lower()
+
+
 def test_multi_requires_yes_to_execute(tmp_path):
     cfg = tmp_path / "multi.toml"
     cfg.write_text('[[account]]\nname = "a"\nbroker = "paper"\n')

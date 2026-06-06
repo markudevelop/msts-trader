@@ -91,6 +91,17 @@ def test_tradier_absent_returns_none():
     assert broker_kwargs_from_env("tradier") is None
 
 
+def test_hyperliquid_from_env(monkeypatch):
+    monkeypatch.setenv("HL_PRIVATE_KEY", "0xabc")
+    monkeypatch.setenv("HL_TESTNET", "1")
+    out = broker_kwargs_from_env("hyperliquid")
+    assert out == {"private_key": "0xabc", "account_address": None, "testnet": True}
+
+
+def test_hyperliquid_absent_returns_none():
+    assert broker_kwargs_from_env("hyperliquid") is None
+
+
 def test_paper_from_env(monkeypatch):
     monkeypatch.setenv("PAPER_STARTING_CASH", "25000")
     assert broker_kwargs_from_env("paper") == {"starting_cash": "25000"}

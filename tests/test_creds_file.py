@@ -58,6 +58,23 @@ def test_parse_dotenv_missing_equals_raises():
         parse("JUST_A_KEY\n")
 
 
+def test_parse_dotenv_empty_key_raises():
+    with pytest.raises(CredsFileError, match="empty key"):
+        parse("=value\n")
+
+
+def test_parse_only_comments_raises():
+    with pytest.raises(CredsFileError, match="no key/value pairs"):
+        parse("# just a comment\n# another\n")
+
+
+def test_broker_kwargs_from_file_missing_raises():
+    from msts_trader.creds_file import broker_kwargs_from_file
+
+    with pytest.raises(CredsFileError, match="not found"):
+        broker_kwargs_from_file("tastytrade", "/no/such/creds.env")
+
+
 def test_load_into_env_sets_vars(tmp_path, monkeypatch):
     monkeypatch.delenv("TT_PROVIDER_SECRET", raising=False)
     monkeypatch.delenv("TT_REFRESH_TOKEN", raising=False)
