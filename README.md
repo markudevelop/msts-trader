@@ -341,6 +341,16 @@ Ready-to-use templates are in [`examples/`](examples/):
 The market-hours guard still applies: a headless run outside US regular
 hours exits without trading, so a daily schedule is safe.
 
+### Exit codes
+
+For scripting, `rebalance` / `multi` use:
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Success — executed, or nothing to do (within drift / dry-run / duplicate) |
+| `1`  | Error — bad/missing creds, malformed CSV, a blocker (e.g. `--max-notional`), stale CSV, or a partial/failed execution |
+| `2`  | Market closed or not in a regular-hours session (equities) |
+
 ## Multiple accounts
 
 Run the same target weights across several accounts in one pass with the

@@ -250,6 +250,13 @@ def _load_broker(name: str):
 @click.option("--broker", default=None, help=f"Broker name. Supported: {', '.join(SUPPORTED)}")
 @click.pass_context
 def main(ctx: click.Context, broker: str | None) -> None:
+    """Paste a target-weights CSV, preview the rebalance, execute it on your broker.
+
+    Run with no command to rebalance the default broker (paste a
+    ticker,weight CSV, review, confirm). Credentials live only in your OS
+    keychain — set one up with `msts-trader login`. Supports Tastytrade,
+    Alpaca, Tradier, IBKR, Schwab, Hyperliquid, and a local paper simulator.
+    """
     ctx.ensure_object(dict)
     ctx.obj["broker"] = broker
     if ctx.invoked_subcommand is None:

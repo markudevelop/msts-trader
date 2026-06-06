@@ -12,6 +12,17 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.9.2] — 2026-06-06
+
+### Added
+- **`py.typed` marker (PEP 561)** — the package ships type hints
+  throughout; it now advertises them so downstream type-checkers (mypy,
+  pyright) actually use them.
+- Top-level `--help` now has a description of what the tool does (the CLI
+  group was previously bare).
+- README: documented the exit codes (0 success / 1 error / 2 market
+  closed) for scripting.
+
 ## [0.9.1] — 2026-06-06
 
 ### Fixed
@@ -536,7 +547,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/markudevelop/msts-trader/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/markudevelop/msts-trader/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/markudevelop/msts-trader/compare/v0.8.4...v0.9.0
 [0.8.4]: https://github.com/markudevelop/msts-trader/compare/v0.8.3...v0.8.4
