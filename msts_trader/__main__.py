@@ -155,18 +155,56 @@ def _fetch_url_or_exit(url: str) -> str:
         sys.exit(1)
 
 
-def _apply_margin_aware(broker, preview, buying_power) -> None:
-    """Scale buys to fit buying power, using the broker's REAL margin when
-    it exposes it (Tastytrade dry-run), else the notional approximation."""
-    real = None
+def _apply_margin_aware(broker, preview, buying_power, max_passes: int = 3) -> None:
+    """Scale buys to fit buying power, using the broker's REAL margin when it
+    exposes it (Tastytrade / IBKR / Tradier), else the notional approximation.
+
+    With real margin, re-confirm: after scaling, re-query the broker on the
+    now-smaller book and scale again if non-linear margin tiers still push it
+    over. The notional path is linear, so it's exact in a single pass. Emits
+    one cumulative message regardless of how many passes ran.
+    """
     mr = getattr(broker, "margin_requirement", None)
-    if callable(mr):
+    has_real = callable(mr)
+    cumulative = Decimal(1)
+    passes = 0
+    used_real = False
+
+    for _ in range(max_passes):
         buys = [o for o in preview.orders if o.side == Side.BUY]
-        try:
-            real = mr(buys)
-        except Exception:
-            real = None
-    apply_margin_aware(preview, buying_power=buying_power, real_margin=real)
+        if not buys:
+            break
+        real = None
+        if has_real:
+            try:
+                real = mr(buys)
+            except Exception:
+                real = None
+        used_real = used_real or real is not None
+        scale = apply_margin_aware(preview, buying_power=buying_power, real_margin=real, add_warning=False)
+        passes += 1
+        cumulative *= scale
+        # Notional (real is None) is exact in one pass; stop once nothing scales.
+        if scale >= Decimal(1) or real is None:
+            break
+
+    # One summary message for the whole operation.
+    buys = [o for o in preview.orders if o.side == Side.BUY]
+    gross = sum((o.notional for o in buys), Decimal(0))
+    sells = sum((o.notional for o in preview.orders if o.side == Side.SELL), Decimal(0))
+    available = (buying_power + sells) * Decimal("0.97")
+    src = "real broker margin" if used_real else "estimated"
+    if cumulative < Decimal(1):
+        passes_note = f" over {passes} passes" if passes > 1 else ""
+        preview.warnings.append(
+            f"Margin-aware ({src}): scaled all buys by {cumulative:.1%} to fit "
+            f"${available:,.0f} buying power (weight-preserving){passes_note}."
+        )
+    elif gross > buying_power:
+        preview.warnings.append(
+            f"Margin-aware ({src}): buys fit ${available:,.0f} buying power "
+            f"(incl. ${sells:,.0f} sell proceeds) — no scaling needed."
+        )
 
 
 def _load_broker(name: str):

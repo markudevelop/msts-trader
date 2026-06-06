@@ -408,6 +408,11 @@ notional-vs-buying-power is already exact. All paths are weight-preserving,
 and any failure to get real margin falls back to the notional estimate
 automatically (never sizes on partial data).
 
+With real margin it also **re-confirms**: after scaling, it re-queries the
+broker on the now-smaller book and scales again if non-linear margin tiers
+still push it over (up to a few passes), then reports one cumulative
+scale. The notional path is linear, so it's exact in a single pass.
+
 Orders always execute **sells before buys**, so proceeds free up buying
 power before the buys submit (required on cash accounts, lower peak
 margin on margin accounts).

@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the project is pre-1.0, minor versions (0.x.0) may introduce
 behaviour changes; patch versions (0.x.y) are fixes and docs.
 
+## [0.8.4] — 2026-06-06
+
+### Added
+- **Margin-aware re-confirm pass** (completes parity with a production
+  live runner). With real broker margin, after the first uniform scale the
+  broker is re-queried on the now-smaller book and the buys are scaled
+  again if non-linear margin tiers still push it over (bounded to a few
+  passes). One cumulative message is reported regardless of pass count.
+  The notional path stays single-pass (linear → exact). `apply_margin_aware`
+  now returns the scale factor and takes `add_warning` so the caller can
+  emit a single summary.
+
+### Tests
+- 281 total (+3): multi-pass re-confirm converges and fits real BP, exactly
+  one cumulative scale message (not one per pass), notional broker stays
+  single-pass.
+
 ## [0.8.3] — 2026-06-06
 
 ### Fixed
@@ -473,7 +490,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.8.3...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.8.4...HEAD
+[0.8.4]: https://github.com/markudevelop/msts-trader/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/markudevelop/msts-trader/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/markudevelop/msts-trader/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/markudevelop/msts-trader/compare/v0.8.0...v0.8.1

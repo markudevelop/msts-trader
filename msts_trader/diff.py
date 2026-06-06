@@ -168,7 +168,8 @@ def apply_margin_aware(
     buying_power: Decimal,
     real_margin: Decimal | None = None,
     bp_safety: Decimal = BP_SAFETY,
-) -> None:
+    add_warning: bool = True,
+) -> Decimal:
     """Scale all BUY orders by one factor so the book fits buying power.
 
     `real_margin` is the broker's *actual* total buying-power requirement for
@@ -177,7 +178,11 @@ def apply_margin_aware(
     value of the buys is used as a portable approximation.
 
     Weight-preserving: every buy is scaled by the same factor. No-op when the
-    buys already fit (the common steady-state case). Mutates `preview`.
+    buys already fit (the common steady-state case). Mutates `preview` and
+    returns the scale factor applied (Decimal(1) = no scaling). With real
+    margin the caller may re-run this (the broker re-quotes the smaller book)
+    to handle non-linear margin tiers — set `add_warning=False` then and emit
+    one cumulative message.
     """
     buys = [o for o in preview.orders if o.side == Side.BUY]
     gross = sum((o.notional for o in buys), Decimal(0))
@@ -191,12 +196,12 @@ def apply_margin_aware(
 
     src = "real broker margin" if real_margin is not None else "estimated"
     if need <= 0 or available <= 0 or need <= available:
-        if gross > buying_power:  # only note it when it looked tight on raw BP
+        if add_warning and gross > buying_power:  # only note it when it looked tight on raw BP
             preview.warnings.append(
                 f"Margin-aware ({src}): buys fit ${available:,.0f} buying power "
                 f"(incl. ${sell_proceeds:,.0f} sell proceeds) — no scaling needed."
             )
-        return  # already fits — nothing to scale
+        return Decimal(1)  # already fits — nothing to scale
 
     scale = available / need
     kept: list[Order] = []
@@ -208,7 +213,9 @@ def apply_margin_aware(
                 continue
         kept.append(o)
     preview.orders = kept
-    preview.warnings.append(
-        f"Margin-aware ({src}): scaled all buys by {scale:.1%} to fit "
-        f"${available:,.0f} buying power (weight-preserving)."
-    )
+    if add_warning:
+        preview.warnings.append(
+            f"Margin-aware ({src}): scaled all buys by {scale:.1%} to fit "
+            f"${available:,.0f} buying power (weight-preserving)."
+        )
+    return scale
