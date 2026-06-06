@@ -125,7 +125,10 @@ def _resolve_broker_name(ctx: click.Context, explicit: str | None) -> str:
 
 def _load_creds_file_or_exit(path: str) -> None:
     try:
-        keys = load_into_env(path)
+        # An explicitly-passed --creds-file is a deliberate choice; it must win
+        # over any stale value already exported in the shell (e.g. a revoked
+        # TT_REFRESH_TOKEN), which would otherwise silently shadow the file.
+        keys = load_into_env(path, overwrite=True)
     except CredsFileError as e:
         c.print(f"[red]✗ could not read creds file:[/red] {escape(str(e))}")
         sys.exit(1)
@@ -276,7 +279,9 @@ def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None) ->
     """Store broker creds in OS keychain."""
     if creds_file:
         try:
-            keys = load_into_env(creds_file)
+            # Explicit --creds-file wins over a stale exported value (e.g. a
+            # revoked TT_REFRESH_TOKEN) that would otherwise shadow the file.
+            keys = load_into_env(creds_file, overwrite=True)
         except CredsFileError as e:
             c.print(f"[red]✗ could not read creds file:[/red] {escape(str(e))}")
             sys.exit(1)

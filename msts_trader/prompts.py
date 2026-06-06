@@ -110,6 +110,13 @@ def ask_secret(prompt: str, *, env_var: Optional[str] = None) -> str:
     if env_var:
         val = env_value(env_var)
         if val:
+            # Announce env-sourced values so a stale exported secret (e.g. a
+            # revoked refresh token) can't silently masquerade as fresh input.
+            sys.stderr.write(
+                f"\n[notice] using {env_var} from the environment "
+                f"(skipping prompt). unset it to be prompted instead.\n"
+            )
+            sys.stderr.flush()
             return val
 
     # Non-interactive: just read a line from stdin.

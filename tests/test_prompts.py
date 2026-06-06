@@ -26,6 +26,16 @@ def test_ask_secret_env_var_overrides_prompt(monkeypatch):
     assert prompts.ask_secret("p", env_var="MSTS_TEST_SECRET") == "env-value"
 
 
+def test_ask_secret_warns_when_value_from_env(monkeypatch, capsys):
+    # A value sourced from the environment must announce itself, so a stale
+    # exported secret can't silently masquerade as fresh input.
+    monkeypatch.setenv("MSTS_TEST_SECRET", "from-env")
+    assert prompts.ask_secret("refresh token", env_var="MSTS_TEST_SECRET") == "from-env"
+    err = capsys.readouterr().err
+    assert "MSTS_TEST_SECRET" in err
+    assert "environment" in err.lower()
+
+
 def test_ask_secret_falls_back_to_visible_when_getpass_empty(monkeypatch, capsys):
     # Pretend we are interactive but getpass returns empty (the VS Code failure mode)
     monkeypatch.setattr(prompts, "_is_interactive", lambda: True)

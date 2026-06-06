@@ -12,6 +12,23 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.9.5] — 2026-06-07
+
+### Fixed
+- **Stale exported secret shadowed `--creds-file` and the login prompt.** A
+  revoked `TT_REFRESH_TOKEN` (or any creds var) left in the shell silently
+  won over both the fresh token in a `--creds-file` and the interactive
+  prompt, so users kept hitting "refresh token revoked" no matter what they
+  pasted. Two fixes: (1) an explicit `--creds-file` now loads with
+  `overwrite=True`, so the file wins over a stale env var; (2) `ask_secret`
+  prints a `[notice] using <VAR> from the environment` line when it sources a
+  value from the env, so a stale exported secret can't masquerade as fresh
+  input. Reported from the field (Tastytrade login).
+
+### Tests
+- 334 total (+2): `--creds-file` overrides a stale env var (paper broker);
+  `ask_secret` announces env-sourced values.
+
 ## [0.9.4] — 2026-06-06
 
 ### Fixed

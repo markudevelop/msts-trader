@@ -164,6 +164,33 @@ def test_multi_requires_yes_to_execute(tmp_path):
     assert "without --yes" in r.output.lower()
 
 
+def test_login_creds_file_overrides_stale_env(tmp_path, monkeypatch):
+    """An explicit --creds-file must win over a stale exported env var.
+
+    Regression: a revoked TT_REFRESH_TOKEN left in the shell shadowed the
+    fresh token in the creds file (load_into_env defaulted overwrite=False),
+    so users got 'token revoked' even after fixing the file. Reproduced here
+    with the paper broker, which loads PAPER_STARTING_CASH the same way.
+    """
+    import json as _json
+
+    from msts_trader.brokers import paper
+
+    monkeypatch.setattr(paper, "STATE_PATH", tmp_path / "paper_state.json")
+    monkeypatch.setenv("PAPER_STARTING_CASH", "999")  # stale value in the shell
+    creds = tmp_path / "creds.json"
+    creds.write_text('{"PAPER_STARTING_CASH": "40000"}')
+
+    runner = CliRunner()
+    r = runner.invoke(main, ["login", "--broker", "paper", "--creds-file", str(creds)])
+    assert r.exit_code == 0, r.output
+
+    s = runner.invoke(main, ["--broker", "paper", "status", "--json"])
+    assert s.exit_code == 0, s.output
+    payload = _json.loads(s.output.strip().splitlines()[-1])
+    assert payload["nav"] == "40000", "creds file must override stale env var"
+
+
 def test_paper_reset_clears_book(tmp_path, monkeypatch):
     from msts_trader.brokers import paper
 
