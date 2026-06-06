@@ -3,6 +3,12 @@
 Paste a target-weights CSV, preview the rebalance, execute it on your own
 brokerage account. Multi-broker, local-only, no key custody.
 
+7 brokers (Tastytrade, Alpaca, Tradier, IBKR, Schwab, Hyperliquid, paper),
+leverage + margin-aware sizing (real broker margin, on by default),
+sells-before-buys, multi-account, headless (cron / GitHub Actions),
+notifications, idempotency, and a `--json` API. Licensed PolyForm
+Noncommercial.
+
 ```
 $ msts-trader
 Paste CSV (ticker,weight), then Ctrl+D:
@@ -555,7 +561,7 @@ with the same notes and the built wheel attached.
 git clone https://github.com/markudevelop/msts-trader.git
 cd msts-trader
 pip install -e ".[all,dev]"
-pytest -v          # ~200 tests, a couple of seconds
+pytest -v          # 280+ tests, a couple of seconds
 ruff check msts_trader
 ```
 

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the project is pre-1.0, minor versions (0.x.0) may introduce
 behaviour changes; patch versions (0.x.y) are fixes and docs.
 
+## [Unreleased]
+
+_Nothing yet._
+
 ## [0.9.1] — 2026-06-06
 
 ### Fixed
