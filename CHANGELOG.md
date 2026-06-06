@@ -12,6 +12,20 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.9.4] — 2026-06-06
+
+### Fixed
+- **CSV with spaces around the header names** (e.g. `" ticker , weight "`,
+  common from spreadsheet exports / manual edits) was wrongly rejected as
+  "no targets parsed". The header *check* normalised names but row lookups
+  used the raw spaced keys. Row keys are now stripped + lowercased, so
+  padded/odd-cased headers resolve. Found by an adversarial-input sweep.
+
+### Tests
+- 332 total (+6): spaced headers, CRLF line endings, extra columns,
+  scientific-notation weights, percent-sign rejection, and a zero-buy
+  (all-sells) book through margin-aware (no divide-by-zero).
+
 ## [0.9.3] — 2026-06-06
 
 ### Changed
@@ -560,7 +574,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/markudevelop/msts-trader/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/markudevelop/msts-trader/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/markudevelop/msts-trader/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/markudevelop/msts-trader/compare/v0.9.0...v0.9.1

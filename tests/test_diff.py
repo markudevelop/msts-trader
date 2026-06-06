@@ -342,6 +342,22 @@ def test_over_bp_book_scaled_with_safety_cushion():
     assert gross <= Decimal("50000") * Decimal("0.97") + 1  # cushioned below BP
 
 
+def test_margin_aware_handles_zero_buy_book():
+    # All-sells book (target all cash) + zero BP must not divide by zero.
+    from msts_trader.diff import apply_margin_aware
+
+    targets = [Target(ticker="SHV", weight=Decimal("0"))]
+    positions = {"SPY": Position(ticker="SPY", quantity=Decimal("100"), price=Decimal("500"))}
+    p = build_preview(
+        targets=targets, positions=positions,
+        nav=Decimal("50000"), cash=Decimal("0"), buying_power=Decimal("0"),
+        quotes={"SPY": Decimal("500"), "SHV": Decimal("110")},
+    )
+    scale = apply_margin_aware(p, buying_power=Decimal("0"))  # no crash
+    assert scale == Decimal(1)
+    assert [o.side for o in p.orders] == [Side.SELL]  # only the SPY exit
+
+
 def test_apply_margin_aware_noop_when_fits():
     from msts_trader.diff import apply_margin_aware
 

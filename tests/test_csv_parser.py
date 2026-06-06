@@ -76,6 +76,32 @@ def test_rejects_no_data_rows():
         parse_csv("# only a comment\n")
 
 
+def test_headers_with_surrounding_spaces():
+    # Padded header names (" ticker , weight ") must still resolve the rows.
+    out = parse_csv("\n\n  ticker , weight \n SPY , 0.5 \n SHV ,0.5\n")
+    assert [(t.ticker, t.weight) for t in out] == [("SPY", Decimal("0.5")), ("SHV", Decimal("0.5"))]
+
+
+def test_crlf_line_endings():
+    out = parse_csv("ticker,weight\r\nSPY,0.5\r\nSHV,0.5\r\n")
+    assert len(out) == 2
+
+
+def test_extra_columns_ignored():
+    out = parse_csv("ticker,weight,note\nSPY,0.5,hi\nSHV,0.5,yo\n")
+    assert [t.ticker for t in out] == ["SPY", "SHV"]
+
+
+def test_scientific_notation_weight():
+    out = parse_csv("ticker,weight\nSPY,1e-2\nSHV,0.99\n")
+    assert out[0].weight == Decimal("0.01")
+
+
+def test_percent_sign_rejected():
+    with pytest.raises(CSVParseError, match="not a number"):
+        parse_csv("ticker,weight\nSPY,50%\n")
+
+
 def test_total_weight():
     out = parse_csv("ticker,weight\nSPY,0.3\nGLD,0.2\nSHV,0.5\n")
     assert total_weight(out) == Decimal("1.0")

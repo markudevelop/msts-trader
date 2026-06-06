@@ -36,8 +36,12 @@ def parse_csv(text: str) -> list[Target]:
     targets: list[Target] = []
     seen: set[str] = set()
     for i, row in enumerate(reader, start=2):
-        tkr = (row.get("ticker") or row.get("Ticker") or "").strip().upper()
-        raw_w = (row.get("weight") or row.get("Weight") or "").strip()
+        # Normalise each row's keys (strip + lowercase) so headers with
+        # surrounding spaces or odd casing — e.g. " Ticker , Weight " — still
+        # resolve. (DictReader keeps the raw header text as the keys.)
+        norm = {(k or "").strip().lower(): v for k, v in row.items()}
+        tkr = (norm.get("ticker") or "").strip().upper()
+        raw_w = (norm.get("weight") or "").strip()
         if not tkr:
             continue
         if tkr in seen:
