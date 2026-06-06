@@ -552,6 +552,8 @@ re-minted:
 - Trades are user-initiated: every execution requires you to paste a
   CSV and confirm with `y`. There is no background trading loop.
 
+Full details and how to report a vulnerability: [SECURITY.md](SECURITY.md).
+
 ## Disclaimer
 
 This tool sends real orders to your live brokerage account. You are
