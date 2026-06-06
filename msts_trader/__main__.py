@@ -164,6 +164,17 @@ def _apply_margin_aware(broker, preview, buying_power, max_passes: int = 3) -> N
     over. The notional path is linear, so it's exact in a single pass. Emits
     one cumulative message regardless of how many passes ran.
     """
+    # Cheap pre-check so default-on margin-aware costs nothing in the common
+    # case: buying power consumed by a long buy is at most its notional, so if
+    # the notional already fits the available BP, no scaling can be needed —
+    # skip the (per-order) broker margin queries entirely.
+    buys0 = [o for o in preview.orders if o.side == Side.BUY]
+    gross0 = sum((o.notional for o in buys0), Decimal(0))
+    sells0 = sum((o.notional for o in preview.orders if o.side == Side.SELL), Decimal(0))
+    if gross0 <= (buying_power + sells0) * Decimal("0.97"):
+        preview.warnings = [w for w in preview.warnings if "re-run with --margin-aware" not in w]
+        return
+
     mr = getattr(broker, "margin_requirement", None)
     has_real = callable(mr)
     cumulative = Decimal(1)
@@ -596,7 +607,7 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 @click.option("--max-notional", type=float, default=None, help="Refuse if gross buys exceed this dollar amount.")
 @click.option("--max-stale-hours", type=float, default=None, help="Refuse if the CSV's `# asof:` time is older than this.")
 @click.option("--notify-url", default=None, help="Webhook (Discord/Slack/generic) to ping on execute.")
-@click.option("--margin-aware", is_flag=True, default=None, help="Scale all buys by one factor to fit buying power (weight-preserving; for leveraged/margin books).")
+@click.option("--margin-aware/--no-margin-aware", default=None, help="Scale buys to fit buying power (weight-preserving). On by default; --no-margin-aware to disable.")
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON instead of tables.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output (for cron logs).")
@@ -633,7 +644,7 @@ def rebalance(
     max_notional = config.pick(max_notional, cfg, "max_notional")
     max_stale_hours = config.pick(max_stale_hours, cfg, "max_stale_hours")
     notify_url = config.pick(notify_url, cfg, "notify_url")
-    margin_aware = bool(config.pick(margin_aware, cfg, "margin_aware", False))
+    margin_aware = bool(config.pick(margin_aware, cfg, "margin_aware", True))
     quiet = bool(config.pick(True if quiet else None, cfg, "quiet", False))
 
     global _QUIET, _JSON
@@ -893,10 +904,11 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
 @click.option("--csv-url", default=None, help="Target CSV URL (overrides config).")
 @click.option("--dry-run", is_flag=True, help="Preview every account, send nothing.")
 @click.option("--yes", "-y", is_flag=True, help="Required to actually execute (multi never prompts).")
+@click.option("--margin-aware/--no-margin-aware", default=None, help="Scale buys to fit buying power (on by default; --no-margin-aware to disable).")
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output.")
-def multi(config_path, csv_file, csv_url, dry_run, yes, force, json_out, quiet):
+def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, json_out, quiet):
     """Run the same target weights across several accounts in one pass.
 
     Each `[[account]]` in the config names a broker and a creds file; the
@@ -915,7 +927,7 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, force, json_out, quiet):
     max_notional = cfg.get("max_notional")
     max_stale_hours = cfg.get("max_stale_hours")
     notify_url = cfg.get("notify_url")
-    margin_aware = bool(cfg.get("margin_aware", False))
+    margin_aware = bool(config.pick(margin_aware, cfg, "margin_aware", True))
     csv_file = csv_file or cfg.get("csv_file")
     csv_url = csv_url or cfg.get("csv_url")
 

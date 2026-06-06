@@ -10,6 +10,7 @@ csv_url = "https://example.com/your-weights.csv"
 threshold = 0.04
 max_notional = 60000
 max_stale_hours = 36
+margin_aware = true   # scale buys to fit buying power (leveraged/margin books)
 notify_url = "https://discord.com/api/webhooks/..."
 
 # Each account names a broker and a creds file (same JSON / KEY=VALUE

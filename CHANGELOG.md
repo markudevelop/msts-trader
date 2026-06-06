@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the project is pre-1.0, minor versions (0.x.0) may introduce
 behaviour changes; patch versions (0.x.y) are fixes and docs.
 
+## [0.9.0] — 2026-06-06
+
+### Changed
+- **Margin-aware sizing is now ON by default** (matching a production
+  live runner, where `MARGIN_AWARE_SIZING` is always on). It's the safer
+  default — it prevents the broker rejecting the tail of a leveraged
+  order set and distorting the allocation. Pass `--no-margin-aware`
+  (or `margin_aware = false` in config) to disable. Applies to both
+  `rebalance` and `multi`.
+- **Free when the book fits:** a notional pre-check short-circuits before
+  any broker margin query — buying power consumed by a long buy is at
+  most its notional, so if the notional already fits available BP, no
+  scaling is possible and the per-order dry-runs are skipped. So
+  default-on adds no API calls / latency in the common steady-state case;
+  the real-margin queries run only when the book is actually tight.
+
+### Tests
+- 282 total (+1): default-on does not query broker margin when the book
+  already fits. Verified live (dry-run) on the 1.60x Tastytrade book —
+  default-on, no queries, clean preview; `--no-margin-aware` restores the
+  warn-only behavior.
+
 ## [0.8.4] — 2026-06-06
 
 ### Added
@@ -490,7 +512,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/markudevelop/msts-trader/compare/v0.8.4...v0.9.0
 [0.8.4]: https://github.com/markudevelop/msts-trader/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/markudevelop/msts-trader/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/markudevelop/msts-trader/compare/v0.8.1...v0.8.2

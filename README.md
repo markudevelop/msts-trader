@@ -220,7 +220,7 @@ msts-trader --broker paper rebalance --csv-file ...   # test against paper
 ### Safety, automation & output flags
 
 ```bash
-msts-trader rebalance --margin-aware          # scale buys to fit buying power (leveraged/margin books)
+msts-trader rebalance --no-margin-aware       # disable buying-power-fit scaling (on by default)
 msts-trader rebalance --max-notional 60000    # refuse if gross buys exceed $60k
 msts-trader rebalance --max-stale-hours 36   # refuse if the CSV's `# asof:` is too old
 msts-trader rebalance --json                 # machine-readable output (one JSON object)
@@ -251,6 +251,7 @@ csv_url = "https://example.com/weights.csv"
 max_notional = 60000
 max_stale_hours = 36
 notify_url = "https://discord.com/api/webhooks/..."
+margin_aware = true   # default; set false to disable buying-power-fit scaling
 quiet = false
 ```
 
@@ -384,13 +385,16 @@ TBT,0.1480
 ...        # sums to ~1.60 = 160% gross
 ```
 
-The preview shows `Gross target exposure: 160% (1.60x)`. For leveraged
-books, run with **`--margin-aware`**: if the buys exceed your available
-buying power (broker BP plus the proceeds from the sells, which execute
-first), msts-trader scales **every buy by one uniform factor** so the
-whole book fits — preserving your relative weights — instead of letting
-the broker reject the tail of the order set piecemeal and distort your
-allocation. When the sells already fund the buys, nothing is scaled.
+The preview shows `Gross target exposure: 160% (1.60x)`. **Margin-aware
+sizing is on by default** (matching a production live runner): if the
+buys exceed your available buying power (broker BP plus the proceeds from
+the sells, which execute first), msts-trader scales **every buy by one
+uniform factor** so the whole book fits — preserving your relative
+weights — instead of letting the broker reject the tail of the order set
+piecemeal and distort your allocation. When the sells already fund the
+buys, nothing is scaled (and it's free — a notional pre-check skips the
+broker margin queries unless the book is actually tight). Pass
+`--no-margin-aware` to disable.
 
 Where the broker exposes it, this uses the broker's **real** per-order
 margin so leveraged-ETF rates (TBT, EDZ, …) are sized exactly — the same

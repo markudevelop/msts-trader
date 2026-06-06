@@ -54,6 +54,33 @@ def test_single_summary_message_only(monkeypatch):
     assert len(scale_msgs) == 1  # exactly one cumulative message, not one per pass
 
 
+def test_no_broker_query_when_notional_fits(monkeypatch):
+    # Default-on margin-aware must cost nothing when the book already fits:
+    # the per-order margin dry-run must NOT be called.
+    monkeypatch.setattr(m, "_QUIET", True)
+
+    class _CountingBroker:
+        name = "c"
+        account_id = "X"
+
+        def __init__(self):
+            self.calls = 0
+
+        def margin_requirement(self, orders):
+            self.calls += 1
+            return Decimal("0")
+
+    b = _CountingBroker()
+    p = build_preview(
+        targets=[Target(ticker="SPY", weight=Decimal("0.5"))],
+        positions={}, nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("100000"),
+        quotes={"SPY": Decimal("500")},
+    )  # $50k buys, $100k BP -> fits
+    m._apply_margin_aware(b, p, Decimal("100000"))
+    assert b.calls == 0  # no margin dry-run when it obviously fits
+    assert not any("margin-aware" in w.lower() for w in p.warnings)
+
+
 def test_notional_broker_single_pass(monkeypatch):
     monkeypatch.setattr(m, "_QUIET", True)
 
