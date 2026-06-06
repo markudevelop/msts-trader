@@ -392,10 +392,21 @@ whole book fits — preserving your relative weights — instead of letting
 the broker reject the tail of the order set piecemeal and distort your
 allocation. When the sells already fund the buys, nothing is scaled.
 
-On **Tastytrade** this uses the broker's *real* margin numbers (queried
-from the order dry-run), so leveraged-ETF margin rates (TBT, EDZ, …) are
-sized exactly — the same approach a production live runner uses. Other
-brokers fall back to a notional estimate; both are weight-preserving.
+Where the broker exposes it, this uses the broker's **real** per-order
+margin so leveraged-ETF rates (TBT, EDZ, …) are sized exactly — the same
+approach a production live runner uses:
+
+| Broker | Margin source |
+|--------|---------------|
+| Tastytrade | real — order dry-run `buying_power_effect` |
+| IBKR | real — `whatIfOrder` initial-margin change |
+| Tradier | real — order preview `margin_change` |
+| Alpaca / Schwab | buying power (already encodes the Reg-T 2× multiplier) |
+
+Real per-order margin only *matters* for leveraged ETFs; for plain ETFs,
+notional-vs-buying-power is already exact. All paths are weight-preserving,
+and any failure to get real margin falls back to the notional estimate
+automatically (never sizes on partial data).
 
 Orders always execute **sells before buys**, so proceeds free up buying
 power before the buys submit (required on cash accounts, lower peak

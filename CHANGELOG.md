@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the project is pre-1.0, minor versions (0.x.0) may introduce
 behaviour changes; patch versions (0.x.y) are fixes and docs.
 
+## [0.8.2] — 2026-06-06
+
+### Added
+- **Real per-order margin for IBKR and Tradier** (joining Tastytrade).
+  `--margin-aware` now sizes off the broker's actual margin numbers on:
+  - IBKR — `whatIfOrder().initMarginChange` summed across buys.
+  - Tradier — order preview (`preview=true`) `margin_change` (cost fallback).
+  Alpaca and Schwab keep the buying-power approximation, which already
+  encodes the Reg-T 2× multiplier and is exact for non-leveraged ETFs.
+  Every path falls back to the notional estimate if real margin is
+  unavailable. Real margin only matters for leveraged ETFs (TBT, EDZ).
+
+### Tests
+- 269 total (+6): Tradier margin_requirement (margin_change, cost
+  fallback, error→None), IBKR margin_requirement via a faked socket
+  (sum, failure→None, missing-field→None).
+
 ## [0.8.1] — 2026-06-06
 
 ### Changed
@@ -440,7 +457,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/markudevelop/msts-trader/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/markudevelop/msts-trader/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/markudevelop/msts-trader/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/markudevelop/msts-trader/compare/v0.7.0...v0.7.1

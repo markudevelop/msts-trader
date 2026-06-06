@@ -163,6 +163,29 @@ class IBKR:
             _collect(3)
         return out
 
+    def margin_requirement(self, orders) -> Decimal | None:
+        """Real total initial-margin requirement for the BUY orders via
+        whatIfOrder.initMarginChange. Returns None if any what-if fails or
+        the account doesn't report margin (caller falls back to notional)."""
+        total = Decimal(0)
+        for o in orders:
+            if o.side != Side.BUY:
+                continue
+            qty = float(round(float(o.quantity), 4))
+            if qty <= 0:
+                continue
+            try:
+                ct = Stock(o.ticker, "SMART", "USD")
+                self._ib.qualifyContracts(ct)
+                state = self._ib.whatIfOrder(ct, MarketOrder("BUY", qty, account=self.account_id))
+            except Exception:
+                return None
+            chg = _f(getattr(state, "initMarginChange", None))
+            if chg is None:
+                return None
+            total += Decimal(str(abs(chg)))
+        return total
+
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
         qty = float(round(float(order.quantity), 4))
         if qty <= 0:

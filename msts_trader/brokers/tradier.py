@@ -123,6 +123,34 @@ class Tradier:
                 out[sym] = Decimal(str(px))
         return out
 
+    def margin_requirement(self, orders) -> Decimal | None:
+        """Real total margin requirement for the BUY orders via Tradier's
+        order preview (margin_change, or cost as a fallback). Returns None if
+        any preview fails (caller falls back to notional)."""
+        total = Decimal(0)
+        for o in orders:
+            if o.side != Side.BUY:
+                continue
+            qty = int(o.quantity)
+            if qty <= 0:
+                continue
+            params = {
+                "class": "equity", "symbol": o.ticker, "side": "buy",
+                "quantity": qty, "type": "market", "duration": "day", "preview": "true",
+            }
+            try:
+                resp = self._request("POST", f"/v1/accounts/{self.account_id}/orders", params)
+            except Exception:
+                return None
+            od = resp.get("order") or {}
+            mc = od.get("margin_change")
+            if mc is None:
+                mc = od.get("cost")
+            if mc is None:
+                return None
+            total += abs(Decimal(str(mc)))
+        return total
+
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
         qty = int(order.quantity)  # whole shares
         if qty <= 0:

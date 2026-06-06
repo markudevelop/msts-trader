@@ -139,6 +139,38 @@ def test_place_market_zero_qty_skipped(monkeypatch):
     assert r["status"] == "skipped"
 
 
+def test_margin_requirement_sums_margin_change(monkeypatch):
+    calls = []
+
+    def orders(params):
+        calls.append(params["symbol"])
+        return {"order": {"status": "ok", "margin_change": 750.0, "cost": 1500.0}}
+
+    b = _broker(monkeypatch, {("POST", "/v1/accounts/VA123/orders"): orders})
+    buys = [
+        Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10")),
+        Order(ticker="QQQ", side=Side.BUY, quantity=Decimal("5")),
+        Order(ticker="GLD", side=Side.SELL, quantity=Decimal("3")),  # sell ignored
+    ]
+    total = b.margin_requirement(buys)
+    assert total == Decimal("1500.0")  # 750 + 750, sell skipped
+    assert calls == ["SPY", "QQQ"]
+
+
+def test_margin_requirement_falls_back_to_cost(monkeypatch):
+    b = _broker(monkeypatch, {("POST", "/v1/accounts/VA123/orders"): {"order": {"cost": 2000.0}}})
+    total = b.margin_requirement([Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10"))])
+    assert total == Decimal("2000.0")
+
+
+def test_margin_requirement_none_on_error(monkeypatch):
+    def boom(params):
+        raise RuntimeError("preview failed")
+
+    b = _broker(monkeypatch, {("POST", "/v1/accounts/VA123/orders"): boom})
+    assert b.margin_requirement([Order(ticker="SPY", side=Side.BUY, quantity=Decimal("1"))]) is None
+
+
 def test_requires_token():
     with pytest.raises(BrokerError, match="access_token required"):
         Tradier(access_token="")
