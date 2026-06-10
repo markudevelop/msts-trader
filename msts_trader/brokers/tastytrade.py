@@ -170,7 +170,8 @@ class Tastytrade:
                 whole = int(qty)
                 if whole <= 0:
                     return {"status": "skipped", "reason": "fractional rejected, whole=0", "ticker": order.ticker}
-                leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=order.ticker, action=action, quantity=Decimal(whole))
+                qty = Decimal(whole)  # report the quantity actually submitted, not the rejected fractional one
+                leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=order.ticker, action=action, quantity=qty)
                 new_order = NewOrder(time_in_force=OrderTimeInForce.DAY, order_type=OrderType.MARKET, legs=[leg], price=None)
                 resp = self._acct.place_order(self._sess, new_order, dry_run=dry_run)
             else:

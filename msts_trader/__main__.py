@@ -31,6 +31,25 @@ from .market_hours import market_status
 from .models import Side
 from .prompts import ask_secret, ask_text, ask_yes_no, env_value
 
+def _harden_console_encoding() -> None:
+    """Keep legacy Windows code pages from killing the CLI.
+
+    Help text and previews use arrows / check marks / ellipses that
+    cp1252 / cp437 consoles can't encode, and click writes them straight
+    to stdout — a plain `msts-trader --help` would die with
+    UnicodeEncodeError. Degrade unencodable characters to '?' instead.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            enc = (stream.encoding or "").lower().replace("-", "")
+            if enc and enc != "utf8":
+                stream.reconfigure(errors="replace")
+        except Exception:
+            pass  # non-reconfigurable stream (pytest capture, pipes) — already safe
+
+
+_harden_console_encoding()
+
 c = Console()
 
 # Set per-invocation by the rebalance command.

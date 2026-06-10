@@ -11,6 +11,19 @@ class BrokerError(RuntimeError):
     """Anything the broker layer can't fix without user action."""
 
 
+def first_present(*values):
+    """First value that is not None.
+
+    Balance fields need this instead of an `or` chain: a legitimate 0
+    (zero buying power on a maxed-out margin account, zero NAV) is falsy
+    and would silently fall through to a different — wrong — field.
+    """
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
 @dataclass
 class Balances:
     nav: Decimal

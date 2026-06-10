@@ -121,8 +121,8 @@ def test_multi_dry_run_two_paper_accounts(tmp_path, monkeypatch):
     cfg = tmp_path / "multi.toml"
     cfg.write_text(
         f'threshold = 0.04\n'
-        f'[[account]]\nname = "a"\nbroker = "paper"\ncreds_file = "{a}"\n'
-        f'[[account]]\nname = "b"\nbroker = "paper"\ncreds_file = "{b}"\n'
+        f'[[account]]\nname = "a"\nbroker = "paper"\ncreds_file = "{a.as_posix()}"\n'
+        f'[[account]]\nname = "b"\nbroker = "paper"\ncreds_file = "{b.as_posix()}"\n'
     )
     csv = tmp_path / "t.csv"
     csv.write_text("ticker,weight\nSPY,0.6\nSHV,0.4\n")
@@ -133,6 +133,25 @@ def test_multi_dry_run_two_paper_accounts(tmp_path, monkeypatch):
     assert len(payload["accounts"]) == 2
     assert all(acct["status"] == "dry-run" for acct in payload["accounts"])
     assert {acct["name"] for acct in payload["accounts"]} == {"a", "b"}
+
+
+def test_help_survives_legacy_console_encoding():
+    # Windows consoles often run a legacy code page (cp1252/cp437) that can't
+    # encode the arrows/check marks in our help text; `msts-trader --help`
+    # must degrade instead of dying with UnicodeEncodeError.
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    r = subprocess.run(
+        [sys.executable, "-m", "msts_trader", "--help"],
+        capture_output=True,
+        env=env,
+        timeout=60,
+    )
+    assert r.returncode == 0, r.stderr.decode(errors="replace")
+    assert b"Usage:" in r.stdout
 
 
 def test_multi_no_accounts_errors(tmp_path):

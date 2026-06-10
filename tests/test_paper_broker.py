@@ -116,3 +116,16 @@ def test_rejects_zero_or_negative_qty(qty):
     p = Paper(starting_cash="10000")
     r = p.place_market(Order(ticker="SPY", side=Side.BUY, quantity=Decimal(qty), estimated_price=Decimal("500")))
     assert r["status"] == "skipped"
+
+
+def test_lowercase_order_ticker_is_normalized():
+    # A lowercase ticker must book under the uppercase key so positions()
+    # finds its price in last_prices (which quote()/set_quote() uppercase).
+    p = Paper(starting_cash="50000")
+    p.set_quote("SPY", Decimal("500"))
+    r = p.place_market(Order(ticker="spy", side=Side.BUY, quantity=Decimal("10"), estimated_price=Decimal("500")))
+    assert r["status"] == "FILLED" and r["ticker"] == "SPY"
+    pos = p.positions()
+    assert set(pos) == {"SPY"}
+    assert pos["SPY"].price == Decimal("500")
+    assert p.balances().nav == Decimal("50000")

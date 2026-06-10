@@ -12,6 +12,39 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.9.6] — 2026-06-10
+
+### Fixed
+- **`msts-trader --help` crashed on Windows consoles with a legacy code
+  page** (cp1252/cp437): the help text contains `→` and click writes it
+  straight to stdout, dying with `UnicodeEncodeError`. stdout/stderr now
+  degrade unencodable characters to `?` instead of crashing.
+- **Tastytrade: fractional-order fallback misreported the quantity.** When
+  a fractional order was rejected (`fractional_trading_invalid_symbol`)
+  and resubmitted as whole shares, the result still reported the original
+  fractional quantity (e.g. 10.5 instead of the 10 actually sent), so the
+  fill log recorded the wrong amount.
+- **Tradier / Schwab / IBKR: a legitimate `0` balance fell through `or`
+  fallback chains.** Worst case: a maxed-out margin account with
+  `stock_buying_power: 0` (Tradier) reported cash as phantom buying power,
+  mis-sizing buys. Balance parsing now uses first-non-None semantics
+  (`first_present` in `brokers/base.py`).
+- **Alpaca: a missing order id came back as the string `"None"`** instead
+  of `None`.
+- **Paper: a lowercase order ticker booked a position that then valued at
+  $0** — `place_market` stored raw-case keys while `quote()`/`set_quote()`
+  uppercase, so the price lookup missed. Tickers are now normalised.
+
+### CI / Tests
+- CI now also runs on `windows-latest` (Python 3.13). The prompt layer,
+  console encoding, and path handling all behave differently there, and
+  three tests + the `--help` crash only reproduced on Windows.
+- Fixed 3 Windows-only test failures (TOML backslash paths; `ask_secret`
+  tests not pinning the flaky-terminal branch). 342 total (+8): zero-balance
+  regression tests for Tradier/Schwab/IBKR, Tastytrade fractional-fallback
+  quantity, Alpaca missing order id, paper lowercase ticker, cp1252 help,
+  and the flaky-terminal prompt path.
+
 ## [0.9.5] — 2026-06-07
 
 ### Fixed

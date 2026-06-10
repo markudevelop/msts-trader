@@ -119,3 +119,16 @@ def test_place_market_error():
     b._client = SimpleNamespace(place_order=lambda h, spec: (_ for _ in ()).throw(RuntimeError("401 unauthorized")))
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
     assert r["status"] == "error" and "401" in r["reason"]
+
+
+def test_balances_zero_values_do_not_fall_through():
+    # A legitimate 0 (account in liquidation, exhausted BP) must not fall
+    # through to the secondary field.
+    acct = {"securitiesAccount": {"currentBalances": {
+        "liquidationValue": 0, "equity": 50000, "cashBalance": 0,
+        "buyingPower": 0, "dayTradingBuyingPower": 99999,
+    }}}
+    bal = _broker(account=acct).balances()
+    assert bal.nav == Decimal("0")
+    assert bal.cash == Decimal("0")
+    assert bal.buying_power == Decimal("0")

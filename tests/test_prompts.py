@@ -37,8 +37,11 @@ def test_ask_secret_warns_when_value_from_env(monkeypatch, capsys):
 
 
 def test_ask_secret_falls_back_to_visible_when_getpass_empty(monkeypatch, capsys):
-    # Pretend we are interactive but getpass returns empty (the VS Code failure mode)
+    # Pretend we are interactive but getpass returns empty (the VS Code failure mode).
+    # Pin the flaky-terminal check off so the getpass path runs on every platform
+    # (on Windows _is_hidden_input_flaky() is always True and skips getpass).
     monkeypatch.setattr(prompts, "_is_interactive", lambda: True)
+    monkeypatch.setattr(prompts, "_is_hidden_input_flaky", lambda: False)
     monkeypatch.setattr("getpass.getpass", lambda *a, **kw: "")
     monkeypatch.setattr(sys, "stdin", io.StringIO("typed-secret\n"))
     val = prompts.ask_secret("provider secret")
@@ -49,6 +52,7 @@ def test_ask_secret_falls_back_to_visible_when_getpass_empty(monkeypatch, capsys
 
 def test_ask_secret_falls_back_when_getpass_raises(monkeypatch, capsys):
     monkeypatch.setattr(prompts, "_is_interactive", lambda: True)
+    monkeypatch.setattr(prompts, "_is_hidden_input_flaky", lambda: False)
 
     def raise_io(*a, **kw):
         raise OSError("no tty")
@@ -61,9 +65,25 @@ def test_ask_secret_falls_back_when_getpass_raises(monkeypatch, capsys):
 
 def test_ask_secret_uses_getpass_when_it_works(monkeypatch):
     monkeypatch.setattr(prompts, "_is_interactive", lambda: True)
+    monkeypatch.setattr(prompts, "_is_hidden_input_flaky", lambda: False)
     monkeypatch.setattr("getpass.getpass", lambda *a, **kw: "hidden-value")
     val = prompts.ask_secret("p")
     assert val == "hidden-value"
+
+
+def test_ask_secret_skips_getpass_on_flaky_terminal(monkeypatch, capsys):
+    # On VS Code / Cursor / Windows consoles, getpass must never run; the
+    # prompt goes straight to visible input with a notice on stderr.
+    monkeypatch.setattr(prompts, "_is_interactive", lambda: True)
+    monkeypatch.setattr(prompts, "_is_hidden_input_flaky", lambda: True)
+    monkeypatch.setattr(
+        "getpass.getpass",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("getpass should not run")),
+    )
+    monkeypatch.setattr("builtins.input", lambda *a, **kw: "pasted-secret")
+    assert prompts.ask_secret("p") == "pasted-secret"
+    err = capsys.readouterr().err
+    assert "notice" in err.lower()
 
 
 def test_ask_secret_non_interactive_reads_stdin(monkeypatch):

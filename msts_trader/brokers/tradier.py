@@ -20,7 +20,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError
+from .base import Balances, BrokerError, first_present
 
 PROD_BASE = "https://api.tradier.com"
 SANDBOX_BASE = "https://sandbox.tradier.com"
@@ -77,11 +77,13 @@ class Tradier:
         b = self._request("GET", f"/v1/accounts/{self.account_id}/balances").get("balances") or {}
         nav = Decimal(str(b.get("total_equity") or 0))
         cash = Decimal(str(b.get("total_cash") or 0))
-        bp = (
-            ((b.get("margin") or {}).get("stock_buying_power"))
-            or ((b.get("cash") or {}).get("cash_available"))
-            or b.get("total_cash")
-            or 0
+        # first_present, not `or`: stock_buying_power of 0 (maxed-out margin)
+        # must not fall through to cash_available and report phantom BP.
+        bp = first_present(
+            (b.get("margin") or {}).get("stock_buying_power"),
+            (b.get("cash") or {}).get("cash_available"),
+            b.get("total_cash"),
+            0,
         )
         return Balances(nav=nav, cash=cash, buying_power=Decimal(str(bp)))
 

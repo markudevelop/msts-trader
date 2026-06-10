@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Iterable
 
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError
+from .base import Balances, BrokerError, first_present
 
 try:
     from schwab.auth import client_from_token_file, easy_client  # type: ignore
@@ -85,9 +85,10 @@ class Schwab:
         resp.raise_for_status()
         a = resp.json().get("securitiesAccount", {})
         cur = a.get("currentBalances") or {}
-        nav = Decimal(str(cur.get("liquidationValue") or cur.get("equity") or 0))
-        cash = Decimal(str(cur.get("cashBalance") or 0))
-        bp = Decimal(str(cur.get("buyingPower") or cur.get("dayTradingBuyingPower") or 0))
+        # first_present, not `or`: a legitimate 0 must not fall through to the next field
+        nav = Decimal(str(first_present(cur.get("liquidationValue"), cur.get("equity"), 0)))
+        cash = Decimal(str(first_present(cur.get("cashBalance"), 0)))
+        bp = Decimal(str(first_present(cur.get("buyingPower"), cur.get("dayTradingBuyingPower"), 0)))
         return Balances(nav=nav, cash=cash, buying_power=bp)
 
     def positions(self) -> dict[str, Position]:

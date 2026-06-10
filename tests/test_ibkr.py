@@ -93,3 +93,16 @@ def test_quote_reqtickers_failure_returns_empty():
     b = _ibkr()
     b._ib.reqTickers = lambda *a: (_ for _ in ()).throw(RuntimeError("no data farm"))
     assert b.quote(["SPY"]) == {}
+
+
+def test_balances_zero_values_do_not_fall_through():
+    # A legitimate 0 must not fall through to the fallback tag.
+    b = _ibkr(summary=[
+        _row("NetLiquidation", "0"),
+        _row("NetLiquidationByCurrency", "100000"),
+        _row("BuyingPower", "0"),
+        _row("AvailableFunds", "50000"),
+    ])
+    bal = b.balances()
+    assert bal.nav == Decimal("0")
+    assert bal.buying_power == Decimal("0")

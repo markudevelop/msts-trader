@@ -82,3 +82,24 @@ def test_place_market_error():
     )
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10")))
     assert r["status"] == "error" and "margin_check_failed" in r["reason"]
+
+
+def test_place_market_fractional_fallback_reports_whole_qty():
+    # When the fractional order is rejected and we resubmit whole shares,
+    # the result must report the whole-share quantity actually sent.
+    calls = []
+
+    def place_order(sess, order, dry_run=False):
+        calls.append(order)
+        if len(calls) == 1:
+            raise RuntimeError("preflight: fractional_trading_invalid_symbol")
+        return SimpleNamespace(order=SimpleNamespace(id="7", status="Routed"))
+
+    b = Tastytrade.__new__(Tastytrade)
+    b._sess = object()
+    b.account_id = "5W"
+    b._acct = SimpleNamespace(get_positions=lambda sess: [], place_order=place_order)
+    r = b.place_market(Order(ticker="VOO", side=Side.BUY, quantity=Decimal("10.5")))
+    assert r["status"] == "Routed"
+    assert r["quantity"] == 10.0
+    assert calls[1].legs[0].quantity == Decimal("10")

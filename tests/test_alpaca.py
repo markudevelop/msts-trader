@@ -97,3 +97,14 @@ def test_place_market_zero_qty():
     from decimal import Decimal as D
     r = _broker().place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("0")))
     assert r["status"] == "skipped"
+
+
+def test_place_market_missing_order_id_is_none():
+    # resp.id of None must come back as None, not the string "None".
+    from decimal import Decimal as D
+
+    from msts_trader.models import Order, Side
+    b = Alpaca.__new__(Alpaca)
+    b._client = SimpleNamespace(submit_order=lambda req: SimpleNamespace(status="accepted", id=None))
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
+    assert r["order_id"] is None

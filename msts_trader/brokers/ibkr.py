@@ -24,7 +24,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError
+from .base import Balances, BrokerError, first_present
 
 try:
     from ib_insync import IB, MarketOrder, Stock  # type: ignore
@@ -86,9 +86,10 @@ class IBKR:
                 m[r.tag] = Decimal(str(r.value))
             except Exception:
                 continue
-        nav = m.get("NetLiquidation") or m.get("NetLiquidationByCurrency") or Decimal(0)
-        cash = m.get("TotalCashValue") or m.get("CashBalance") or Decimal(0)
-        bp = m.get("BuyingPower") or m.get("AvailableFunds") or Decimal(0)
+        # first_present, not `or`: a legitimate Decimal(0) must not fall through to the next tag
+        nav = first_present(m.get("NetLiquidation"), m.get("NetLiquidationByCurrency"), Decimal(0))
+        cash = first_present(m.get("TotalCashValue"), m.get("CashBalance"), Decimal(0))
+        bp = first_present(m.get("BuyingPower"), m.get("AvailableFunds"), Decimal(0))
         return Balances(nav=nav, cash=cash, buying_power=bp)
 
     def positions(self) -> dict[str, Position]:

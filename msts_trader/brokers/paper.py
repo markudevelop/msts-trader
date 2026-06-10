@@ -83,50 +83,53 @@ class Paper:
         self._save(s)
 
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
+        # Normalise like quote()/set_quote() do, so a lowercase order ticker
+        # can't book a position whose price lookup then misses last_prices.
+        tkr = order.ticker.upper()
         qty = Decimal(str(round(float(order.quantity), 4)))
         if qty <= 0:
-            return {"status": "skipped", "reason": "qty<=0", "ticker": order.ticker}
+            return {"status": "skipped", "reason": "qty<=0", "ticker": tkr}
         px = order.estimated_price or Decimal(0)
         if px <= 0:
-            return {"status": "error", "reason": "no price for paper fill", "ticker": order.ticker}
+            return {"status": "error", "reason": "no price for paper fill", "ticker": tkr}
         if dry_run:
-            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value, "quantity": float(qty), "dry_run": True}
+            return {"status": "dry-run", "ticker": tkr, "side": order.side.value, "quantity": float(qty), "dry_run": True}
 
         s = self._load()
         cash = Decimal(s["cash"])
         positions: dict[str, str] = dict(s.get("positions", {}))
-        cur_qty = Decimal(positions.get(order.ticker, "0"))
+        cur_qty = Decimal(positions.get(tkr, "0"))
 
         notional = qty * px
         if order.side == Side.BUY:
             if notional > cash + Decimal("1"):
-                return {"status": "error", "reason": f"insufficient cash ${cash} < ${notional}", "ticker": order.ticker}
+                return {"status": "error", "reason": f"insufficient cash ${cash} < ${notional}", "ticker": tkr}
             cash -= notional
             new_qty = cur_qty + qty
         else:
             if cur_qty < qty:
-                return {"status": "error", "reason": f"insufficient {order.ticker} ({cur_qty} < {qty})", "ticker": order.ticker}
+                return {"status": "error", "reason": f"insufficient {tkr} ({cur_qty} < {qty})", "ticker": tkr}
             cash += notional
             new_qty = cur_qty - qty
 
         if new_qty == 0:
-            positions.pop(order.ticker, None)
+            positions.pop(tkr, None)
         else:
-            positions[order.ticker] = str(new_qty)
+            positions[tkr] = str(new_qty)
 
         s["cash"] = str(cash)
         s["positions"] = positions
         last_prices = dict(s.get("last_prices", {}))
-        last_prices[order.ticker] = str(px)
+        last_prices[tkr] = str(px)
         s["last_prices"] = last_prices
         self._save(s)
 
         return {
             "status": "FILLED",
-            "ticker": order.ticker,
+            "ticker": tkr,
             "side": order.side.value,
             "quantity": float(qty),
-            "order_id": f"paper-{order.ticker}-{int(qty * 100)}",
+            "order_id": f"paper-{tkr}-{int(qty * 100)}",
             "fill_price": float(px),
             "dry_run": False,
         }

@@ -110,6 +110,6 @@ class Alpaca:
             "ticker": order.ticker,
             "side": order.side.value,
             "quantity": qty,
-            "order_id": str(getattr(resp, "id", "")) or None,
+            "order_id": str(oid) if (oid := getattr(resp, "id", None)) is not None else None,
             "dry_run": False,
         }

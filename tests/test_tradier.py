@@ -174,3 +174,16 @@ def test_margin_requirement_none_on_error(monkeypatch):
 def test_requires_token():
     with pytest.raises(BrokerError, match="access_token required"):
         Tradier(access_token="")
+
+
+def test_balances_zero_margin_bp_is_honored(monkeypatch):
+    # stock_buying_power of 0 (maxed-out margin account) must be reported
+    # as 0, not fall through to cash_available / total_cash as phantom BP.
+    b = _broker(monkeypatch, {
+        "/v1/accounts/VA123/balances": {"balances": {
+            "total_equity": 10000, "total_cash": 5000,
+            "margin": {"stock_buying_power": 0},
+            "cash": {"cash_available": 5000},
+        }},
+    })
+    assert b.balances().buying_power == Decimal("0")
