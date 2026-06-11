@@ -34,6 +34,10 @@ class Order:
     quantity: Decimal
     estimated_price: Decimal | None = None
     notional: Decimal = Decimal(0)
+    # Market-on-close: fill in the closing auction instead of immediately.
+    # Only honoured by brokers with supports_moc = True; exchanges stop
+    # accepting MOC around 15:50 ET.
+    moc: bool = False
 
 
 @dataclass

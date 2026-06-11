@@ -12,7 +12,7 @@ import pytest
 from msts_trader.brokers import SUPPORTED, BrokerError, make
 
 
-REQUIRED_ATTRS = ("name", "supports_fractional")
+REQUIRED_ATTRS = ("name", "supports_fractional", "supports_moc")
 REQUIRED_METHODS = ("balances", "positions", "quote", "place_market")
 
 
@@ -41,6 +41,15 @@ def test_broker_class_has_required_class_attrs(name):
     assert getattr(cls, "name", None) == name
     assert hasattr(cls, "supports_fractional")
     assert isinstance(cls.supports_fractional, bool)
+    assert hasattr(cls, "supports_moc")
+    assert isinstance(cls.supports_moc, bool)
+
+
+def test_moc_support_matrix():
+    # The CLI's --moc error message and README promise exactly this set.
+    classes = _broker_classes()
+    supported = {n for n, cls in classes.items() if cls.supports_moc}
+    assert supported == {"alpaca", "ibkr", "schwab", "paper"}
 
 
 @pytest.mark.parametrize("name", SUPPORTED)

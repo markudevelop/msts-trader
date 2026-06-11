@@ -29,6 +29,7 @@ SANDBOX_BASE = "https://sandbox.tradier.com"
 class Tradier:
     name = "tradier"
     supports_fractional = False
+    supports_moc = False  # Tradier's API has no closing-auction order type
 
     def __init__(self, access_token: str, account_id: str | None = None, sandbox: bool = False, timeout: float = 20.0):
         if not access_token:

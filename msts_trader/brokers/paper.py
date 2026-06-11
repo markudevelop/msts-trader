@@ -22,6 +22,7 @@ STARTING_CASH = Decimal("100000")
 class Paper:
     name = "paper"
     supports_fractional = True
+    supports_moc = True  # simulated: fills at the booked price, tagged moc
 
     def __init__(self, starting_cash: str | float | Decimal | None = None):
         if not STATE_PATH.exists():
@@ -129,6 +130,7 @@ class Paper:
             "ticker": tkr,
             "side": order.side.value,
             "quantity": float(qty),
+            "moc": order.moc,
             "order_id": f"paper-{tkr}-{int(qty * 100)}",
             "fill_price": float(px),
             "dry_run": False,

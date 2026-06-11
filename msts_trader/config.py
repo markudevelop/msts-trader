@@ -29,6 +29,7 @@ DEFAULT_PATH = Path(os.path.expanduser("~/.msts-trader/config.toml"))
 _KNOWN = {
     "broker", "threshold", "csv_file", "csv_url", "creds_file",
     "max_notional", "max_stale_hours", "notify_url", "quiet", "margin_aware",
+    "moc",
     "account",  # array of [[account]] tables for the `multi` command
 }
 

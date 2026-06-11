@@ -47,6 +47,7 @@ def _coin(ticker: str) -> str:
 class Hyperliquid:
     name = "hyperliquid"
     supports_fractional = True
+    supports_moc = False  # crypto perps trade 24/7 — no closing auction
 
     def __init__(self, private_key: str, account_address: str | None = None, testnet: bool = False):
         if not _HL_OK:

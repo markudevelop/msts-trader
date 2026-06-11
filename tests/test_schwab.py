@@ -112,6 +112,34 @@ def test_place_market_fractional_skipped():
     assert r["status"] == "skipped" and "whole shares" in r["reason"]
 
 
+def test_place_market_moc_sets_order_type(monkeypatch):
+    # order.moc must produce a MARKET_ON_CLOSE order spec.
+    from decimal import Decimal as D
+
+    from msts_trader.models import Order, Side
+    captured = {}
+    b = _broker()
+    b._client = SimpleNamespace(
+        place_order=lambda h, spec: captured.update(spec=spec) or _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/777")
+    )
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10"), moc=True))
+    assert r["status"] == "submitted" and r["moc"] is True
+    assert captured["spec"].get("orderType") == "MARKET_ON_CLOSE"
+
+
+def test_place_market_without_moc_stays_market():
+    from decimal import Decimal as D
+
+    from msts_trader.models import Order, Side
+    captured = {}
+    b = _broker()
+    b._client = SimpleNamespace(
+        place_order=lambda h, spec: captured.update(spec=spec) or _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/778")
+    )
+    b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
+    assert captured["spec"].get("orderType") == "MARKET"
+
+
 def test_place_market_error():
     from msts_trader.models import Order, Side
     from decimal import Decimal as D

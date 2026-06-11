@@ -47,6 +47,7 @@ TOKEN_PATH = Path(os.path.expanduser("~/.msts-trader/schwab_token.json"))
 class Schwab:
     name = "schwab"
     supports_fractional = False  # Schwab Trader API places whole-share equity orders
+    supports_moc = True  # orderType MARKET_ON_CLOSE
 
     def __init__(self, app_key: str, app_secret: str, callback_url: str = "https://127.0.0.1:8182/", account_hash: str | None = None):
         if not _SCHWAB_OK:
@@ -133,13 +134,17 @@ class Schwab:
         if qty <= 0:
             return {"status": "skipped", "reason": "qty rounds to 0 (Schwab requires whole shares)", "ticker": order.ticker}
         if dry_run:
-            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value, "quantity": qty, "dry_run": True}
+            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value, "quantity": qty, "moc": order.moc, "dry_run": True}
 
         spec = (
             equity_buy_market(order.ticker, qty)
             if order.side == Side.BUY
             else equity_sell_market(order.ticker, qty)
         )
+        if order.moc:
+            from schwab.orders.common import OrderType as SchwabOrderType  # type: ignore
+
+            spec = spec.set_order_type(SchwabOrderType.MARKET_ON_CLOSE)
         try:
             resp = self._client.place_order(self._account_hash, spec.build())
             resp.raise_for_status()
@@ -154,6 +159,7 @@ class Schwab:
             "ticker": order.ticker,
             "side": order.side.value,
             "quantity": qty,
+            "moc": order.moc,
             "order_id": order_id,
             "dry_run": False,
         }

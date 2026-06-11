@@ -95,6 +95,47 @@ def test_quote_reqtickers_failure_returns_empty():
     assert b.quote(["SPY"]) == {}
 
 
+def test_place_market_moc_builds_moc_order():
+    # order.moc must reach IBKR as orderType MOC with whole shares.
+    from msts_trader.models import Order, Side
+
+    captured = {}
+    b = _ibkr()
+    b._ib.placeOrder = lambda ct, o: captured.update(order=o) or SimpleNamespace(
+        orderStatus=SimpleNamespace(status="Submitted"),
+        order=SimpleNamespace(permId="77", orderId=1),
+        log=[],
+    )
+    b._ib.sleep = lambda s: None
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10.7"), moc=True))
+    assert captured["order"].orderType == "MOC"
+    assert captured["order"].totalQuantity == 10.0  # whole shares for the closing auction
+    assert r["moc"] is True and r["status"] == "Submitted"
+
+
+def test_place_market_moc_sub_share_skips():
+    from msts_trader.models import Order, Side
+
+    r = _ibkr().place_market(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("0.4"), moc=True))
+    assert r["status"] == "skipped" and "whole shares" in r["reason"]
+
+
+def test_place_market_without_moc_stays_mkt():
+    from msts_trader.models import Order, Side
+
+    captured = {}
+    b = _ibkr()
+    b._ib.placeOrder = lambda ct, o: captured.update(order=o) or SimpleNamespace(
+        orderStatus=SimpleNamespace(status="Submitted"),
+        order=SimpleNamespace(permId="78", orderId=2),
+        log=[],
+    )
+    b._ib.sleep = lambda s: None
+    b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10.7")))
+    assert captured["order"].orderType == "MKT"
+    assert captured["order"].totalQuantity == 10.7  # fractional preserved
+
+
 def test_balances_zero_values_do_not_fall_through():
     # A legitimate 0 must not fall through to the fallback tag.
     b = _ibkr(summary=[

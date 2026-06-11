@@ -71,7 +71,14 @@ crypto adapter are likely next).
 pip install msts-trader
 ```
 
-Python ≥3.11 required.
+or with [uv](https://docs.astral.sh/uv/) (installs the CLI into an
+isolated environment, no venv juggling):
+
+```bash
+uv tool install msts-trader
+```
+
+Python ≥3.11 required (uv fetches a suitable Python automatically).
 
 ### Optional brokers
 
@@ -85,12 +92,24 @@ pip install "msts-trader[hyperliquid]"  # adds hyperliquid-python-sdk + eth-acco
 pip install "msts-trader[all]"          # everything
 ```
 
+(with uv: `uv tool install "msts-trader[all]"`)
+
 Install from source:
 
 ```bash
 git clone https://github.com/markudevelop/msts-trader.git
 cd msts-trader
 pip install -e ".[all]"
+```
+
+or with uv — `uv sync` creates the venv, pins Python to
+[.python-version](.python-version), and installs everything:
+
+```bash
+git clone https://github.com/markudevelop/msts-trader.git
+cd msts-trader
+uv sync --all-extras
+uv run msts-trader --help
 ```
 
 ## One-time setup
@@ -172,6 +191,16 @@ browser window, you authorize, and the token JSON is written to
 `~/.msts-trader/schwab_token.json`. Schwab refresh tokens expire every
 7 days — re-run `msts-trader login --broker schwab` when that happens.
 
+Don't wait for it to expire mid-week: run
+
+```bash
+msts-trader login --broker schwab --reauth
+```
+
+on a Saturday or Sunday to force a fresh browser authorization and
+restart the 7-day clock, guaranteeing auth works through the whole
+trading week.
+
 ### Paper (offline simulator)
 
 ```bash
@@ -224,8 +253,17 @@ msts-trader rebalance --dry-run                       # preview only, never send
 msts-trader rebalance --yes                           # skip the confirm prompt
 msts-trader rebalance --threshold 0.02                # tighter rebalance (default 4%)
 msts-trader rebalance --csv-file targets.csv          # read from a file
+msts-trader rebalance --moc                           # market-on-close orders (see below)
 msts-trader --broker paper rebalance --csv-file ...   # test against paper
 ```
+
+- **`--moc` (market-on-close):** orders fill in the exchange closing
+  auction instead of immediately — useful when your target weights are
+  computed against closing prices. Supported on **Alpaca, IBKR, Schwab,
+  and paper** (Tastytrade/Tradier/Hyperliquid have no MOC order type —
+  the CLI refuses rather than silently downgrading). MOC orders are
+  whole-share only, and exchanges stop accepting them around **15:50 ET**,
+  so submit before then. Also available as `moc = true` in the config file.
 
 ### Safety, automation & output flags
 
@@ -262,6 +300,7 @@ max_notional = 60000
 max_stale_hours = 36
 notify_url = "https://discord.com/api/webhooks/..."
 margin_aware = true   # default; set false to disable buying-power-fit scaling
+moc = false           # set true to always use market-on-close orders
 quiet = false
 ```
 
@@ -583,8 +622,16 @@ with the same notes and the built wheel attached.
 git clone https://github.com/markudevelop/msts-trader.git
 cd msts-trader
 pip install -e ".[all,dev]"
-pytest -v          # 280+ tests, a couple of seconds
+pytest -v          # 350+ tests, a couple of seconds
 ruff check msts_trader
+```
+
+or with uv (uses the Python pinned in `.python-version`):
+
+```bash
+uv sync --all-extras
+uv run pytest -v
+uv run ruff check msts_trader
 ```
 
 The test suite covers:

@@ -28,6 +28,7 @@ from .base import Balances, BrokerError, first_present
 
 try:
     from ib_insync import IB, MarketOrder, Stock  # type: ignore
+    from ib_insync import Order as IbOrder  # type: ignore
     _IB_OK = True
 except ImportError:
     _IB_OK = False
@@ -36,6 +37,7 @@ except ImportError:
 class IBKR:
     name = "ibkr"
     supports_fractional = True  # IBKR supports US-stock fractional via OutsideRTH=False MKT orders on eligible symbols
+    supports_moc = True  # orderType MOC — whole shares only
 
     def __init__(
         self,
@@ -187,10 +189,19 @@ class IBKR:
             total += Decimal(str(abs(chg)))
         return total
 
+    def _build_order(self, action: str, qty: float, moc: bool):
+        if moc:
+            # Market-on-close: fills in the exchange closing auction.
+            return IbOrder(action=action, totalQuantity=qty, orderType="MOC", tif="DAY", account=self.account_id)
+        return MarketOrder(action, qty, account=self.account_id)
+
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
         qty = float(round(float(order.quantity), 4))
+        if order.moc:
+            qty = float(int(qty))  # IBKR closing-auction orders are whole shares
         if qty <= 0:
-            return {"status": "skipped", "reason": "qty<=0", "ticker": order.ticker}
+            reason = "qty rounds to 0 (MOC requires whole shares)" if order.moc else "qty<=0"
+            return {"status": "skipped", "reason": reason, "ticker": order.ticker}
 
         ct = Stock(order.ticker, "SMART", "USD")
         self._ib.qualifyContracts(ct)
@@ -199,8 +210,8 @@ class IBKR:
         if dry_run:
             # Real broker-side validation via what-if: returns margin and
             # commission impact without ever transmitting the order.
-            whatif = MarketOrder(action, qty, account=self.account_id)
-            base = {"status": "dry-run", "ticker": order.ticker, "side": order.side.value, "quantity": qty, "dry_run": True}
+            whatif = self._build_order(action, qty, order.moc)
+            base = {"status": "dry-run", "ticker": order.ticker, "side": order.side.value, "quantity": qty, "moc": order.moc, "dry_run": True}
             try:
                 state = self._ib.whatIfOrder(ct, whatif)
                 base.update(
@@ -214,7 +225,7 @@ class IBKR:
                 base["note"] = f"what-if unavailable: {e}"
             return base
 
-        mkt = MarketOrder(action, qty, account=self.account_id)
+        mkt = self._build_order(action, qty, order.moc)
         try:
             trade = self._ib.placeOrder(ct, mkt)
         except Exception as e:
@@ -232,6 +243,7 @@ class IBKR:
             "ticker": order.ticker,
             "side": order.side.value,
             "quantity": qty,
+            "moc": order.moc,
             "order_id": str(getattr(trade.order, "permId", "") or getattr(trade.order, "orderId", "")) or None,
             "dry_run": False,
         }

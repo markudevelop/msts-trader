@@ -25,6 +25,7 @@ except ImportError:
 class Alpaca:
     name = "alpaca"
     supports_fractional = True
+    supports_moc = True  # TimeInForce.CLS — whole shares only
 
     def __init__(self, api_key: str, secret_key: str, paper: bool = False):
         if not _ALPACA_OK:
@@ -84,14 +85,19 @@ class Alpaca:
 
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
         qty = round(float(order.quantity), 4)
+        if order.moc:
+            # Alpaca only accepts whole shares with TimeInForce.CLS.
+            qty = float(int(qty))
         if qty <= 0:
-            return {"status": "skipped", "reason": "qty<=0", "ticker": order.ticker}
+            reason = "qty rounds to 0 (MOC requires whole shares)" if order.moc else "qty<=0"
+            return {"status": "skipped", "reason": reason, "ticker": order.ticker}
         if dry_run:
             return {
                 "status": "dry-run",
                 "ticker": order.ticker,
                 "side": order.side.value,
                 "quantity": qty,
+                "moc": order.moc,
                 "dry_run": True,
             }
         side = OrderSide.BUY if order.side == Side.BUY else OrderSide.SELL
@@ -99,7 +105,7 @@ class Alpaca:
             symbol=order.ticker,
             qty=qty,
             side=side,
-            time_in_force=TimeInForce.DAY,
+            time_in_force=TimeInForce.CLS if order.moc else TimeInForce.DAY,
         )
         try:
             resp = self._client.submit_order(req)
@@ -110,6 +116,7 @@ class Alpaca:
             "ticker": order.ticker,
             "side": order.side.value,
             "quantity": qty,
+            "moc": order.moc,
             "order_id": str(oid) if (oid := getattr(resp, "id", None)) is not None else None,
             "dry_run": False,
         }

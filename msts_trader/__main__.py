@@ -296,8 +296,15 @@ def main(ctx: click.Context, broker: str | None) -> None:
     default=None,
     help="Load credentials from a JSON or KEY=VALUE file instead of typing them.",
 )
+@click.option(
+    "--reauth",
+    is_flag=True,
+    help="Force a fresh OAuth flow even if a cached token exists. Schwab: re-runs "
+    "the browser authorization so the 7-day refresh token restarts — run this on "
+    "a weekend to guarantee auth through the trading week.",
+)
 @click.pass_context
-def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -> None:
+def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None, reauth: bool) -> None:
     """Store broker creds in OS keychain."""
     if creds_file:
         _load_creds_file_or_exit(creds_file)
@@ -311,6 +318,16 @@ def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None) ->
     if flow is None:
         c.print(f"[red]unknown broker {broker!r}[/red]")
         sys.exit(1)
+    if reauth and broker == "schwab":
+        # Schwab reuses the on-disk token file when present; deleting it is
+        # what forces the full browser flow (and a fresh 7-day refresh token).
+        from .brokers.schwab import clear_token, has_token, token_path
+
+        if has_token():
+            clear_token()
+            c.print(f"[yellow]cleared cached Schwab token ({token_path()}) — the browser flow will run fresh.[/yellow]")
+        else:
+            c.print("[dim]no cached Schwab token — the browser flow runs anyway.[/dim]")
     flow()
 
 
@@ -465,7 +482,9 @@ def _login_schwab() -> None:
             "2. Set the callback URL to [bold]https://127.0.0.1:8182/[/bold]\n"
             "3. Copy your [bold]app key[/bold] and [bold]app secret[/bold]\n"
             "4. A browser will open for authorization. Refresh token lasts\n"
-            "   [bold]7 days[/bold] — re-run this login when it expires.",
+            "   [bold]7 days[/bold] — re-run this login when it expires.\n\n"
+            "[dim]Tip: run `msts-trader login --broker schwab --reauth` on a\n"
+            "weekend to restart the 7-day clock before the trading week.[/dim]",
             border_style="cyan",
         )
     )
@@ -650,6 +669,7 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 @click.option("--max-stale-hours", type=float, default=None, help="Refuse if the CSV's `# asof:` time is older than this.")
 @click.option("--notify-url", default=None, help="Webhook (Discord/Slack/generic) to ping on execute.")
 @click.option("--margin-aware/--no-margin-aware", default=None, help="Scale buys to fit buying power (weight-preserving). On by default; --no-margin-aware to disable.")
+@click.option("--moc", is_flag=True, default=None, help="Submit market-on-close orders (fill in the closing auction). Alpaca / IBKR / Schwab / paper; whole shares; submit before ~15:50 ET.")
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON instead of tables.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output (for cron logs).")
@@ -668,6 +688,7 @@ def rebalance(
     max_stale_hours: float | None,
     notify_url: str | None,
     margin_aware: bool | None,
+    moc: bool | None,
     force: bool,
     json_out: bool,
     quiet: bool,
@@ -687,6 +708,7 @@ def rebalance(
     max_stale_hours = config.pick(max_stale_hours, cfg, "max_stale_hours")
     notify_url = config.pick(notify_url, cfg, "notify_url")
     margin_aware = bool(config.pick(margin_aware, cfg, "margin_aware", True))
+    moc = bool(config.pick(True if moc else None, cfg, "moc", False))
     quiet = bool(config.pick(True if quiet else None, cfg, "quiet", False))
 
     global _QUIET, _JSON
@@ -730,6 +752,13 @@ def rebalance(
     say(f"[green]✓ loaded {len(targets)} targets.[/green]")
 
     b = _load_broker(broker)
+    if moc:
+        if not getattr(b, "supports_moc", False):
+            _fail(f"{b.name} does not support market-on-close orders (MOC works on: alpaca, ibkr, schwab, paper).")
+        # NYSE/Nasdaq stop accepting MOC around 15:50 ET; refuse rather than
+        # let every order bounce at the broker.
+        if not dry_run and ms.minutes_to_close is not None and ms.minutes_to_close < 12:
+            _fail(f"only {ms.minutes_to_close} min to the close — exchanges stop accepting MOC orders around 15:50 ET.", code=2)
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
     universe = sorted({tg.ticker for tg in targets} | set(pos.keys()))
@@ -745,6 +774,9 @@ def rebalance(
     )
     if margin_aware:
         _apply_margin_aware(b, preview, bal.buying_power)
+    if moc:
+        for o in preview.orders:
+            o.moc = True
 
     # Extra safety cap on top of the engine's own checks.
     cap_msg = safety.check_max_notional(preview.orders, Decimal(str(max_notional)) if max_notional else None)
@@ -860,7 +892,8 @@ def _execute(broker, preview):
     failed = 0
     results = []
     for i, o in enumerate(preview.orders, 1):
-        say(f"[{i}/{total}] {o.ticker} {o.side.value} {o.quantity:.2f} @ MKT ...", end=" ")
+        order_type = "MOC" if o.moc else "MKT"
+        say(f"[{i}/{total}] {o.ticker} {o.side.value} {o.quantity:.2f} @ {order_type} ...", end=" ")
         try:
             # NOT retried: a market order is not idempotent. If submission
             # times out after the broker accepted it, a retry would double

@@ -12,6 +12,35 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.10.0] — 2026-06-11
+
+### Added
+- **Market-on-close orders** (`rebalance --moc`, or `moc = true` in the
+  config file): orders fill in the exchange closing auction instead of
+  immediately — for target weights computed against closing prices.
+  Supported on **Alpaca** (`TimeInForce.CLS`), **IBKR** (`orderType MOC`),
+  **Schwab** (`MARKET_ON_CLOSE`), and **paper** (simulated). MOC is
+  whole-share only; quantities round down. Brokers without a closing-
+  auction order type (Tastytrade, Tradier, Hyperliquid) are refused
+  up front rather than silently downgraded, and the CLI refuses MOC
+  submission within ~10 minutes of the close (exchanges cut off around
+  15:50 ET). Adapters expose a `supports_moc` capability flag.
+- **`login --reauth`** — force a fresh OAuth flow even when a cached
+  token exists. For Schwab this deletes the cached token file so the
+  browser authorization re-runs, restarting the 7-day refresh-token
+  clock: run it on a weekend to guarantee auth works through the whole
+  trading week.
+- **uv support**: `.python-version` (3.13) pins the dev interpreter,
+  `uv.lock` is committed for reproducible dev environments, and the
+  README documents `uv tool install msts-trader` (users) and
+  `uv sync --all-extras` / `uv run pytest` (development).
+
+### Tests
+- 360 passing (+12): MOC order construction per adapter (CLS tif /
+  MOC orderType / MARKET_ON_CLOSE spec, whole-share rounding,
+  sub-share skip), MOC support matrix, CLI refusal on unsupported
+  brokers, paper MOC dry-run, and Schwab `--reauth` token clearing.
+
 ## [0.9.7] — 2026-06-11
 
 ### Added

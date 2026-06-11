@@ -26,6 +26,7 @@ from .base import Balances, BrokerError
 class Tastytrade:
     name = "tastytrade"
     supports_fractional = True  # MARKET orders only
+    supports_moc = False  # tastytrade's API has no closing-auction order type
 
     def __init__(self, provider_secret: str, refresh_token: str, account_id: str | None = None, is_test: bool = False):
         if not provider_secret or not refresh_token:

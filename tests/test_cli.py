@@ -86,6 +86,54 @@ def test_paper_rebalance_dry_run_end_to_end(tmp_path, monkeypatch):
     assert r2.exit_code in (0,), r2.output
 
 
+def test_rebalance_moc_refused_on_unsupported_broker(tmp_path, monkeypatch):
+    # tastytrade has no MOC order type — the CLI must refuse, not downgrade.
+    import msts_trader.__main__ as cli
+
+    class _NoMoc:
+        name = "tastytrade"
+        account_id = "5W"
+        supports_moc = False
+
+    monkeypatch.setattr(cli, "_load_broker", lambda name: _NoMoc())
+    monkeypatch.setattr(cli, "market_status", lambda: type("MS", (), {"status": "open", "next_open": None, "minutes_to_close": 120})())
+    r = CliRunner().invoke(
+        main, ["--broker", "tastytrade", "rebalance", "--moc", "--dry-run"], input="ticker,weight\nSPY,1.0\n"
+    )
+    assert r.exit_code != 0
+    assert "market-on-close" in r.output.lower()
+
+
+def test_rebalance_moc_accepted_on_paper(tmp_path, monkeypatch):
+    from decimal import Decimal
+
+    from msts_trader.brokers import paper
+
+    monkeypatch.setattr(paper, "STATE_PATH", tmp_path / "paper_state.json")
+    p = paper.Paper(starting_cash="50000")
+    p.set_quote("SPY", Decimal("500"))
+    runner = CliRunner()
+    runner.invoke(main, ["login", "--broker", "paper"], input="50000\n")
+    r = runner.invoke(main, ["--broker", "paper", "rebalance", "--moc", "--dry-run"], input="ticker,weight\nSPY,1.0\n")
+    assert r.exit_code == 0, r.output
+
+
+def test_login_schwab_reauth_clears_cached_token(tmp_path, monkeypatch):
+    # --reauth must delete the cached token file so the browser flow re-runs
+    # (the weekend refresh-token reset).
+    import msts_trader.__main__ as cli
+    import msts_trader.brokers.schwab as schwab_mod
+
+    tok = tmp_path / "schwab_token.json"
+    tok.write_text("{}")
+    monkeypatch.setattr(schwab_mod, "TOKEN_PATH", tok)
+    monkeypatch.setitem(cli._LOGIN_FLOWS, "schwab", lambda: None)  # skip the real OAuth flow
+    r = CliRunner().invoke(main, ["login", "--broker", "schwab", "--reauth"])
+    assert r.exit_code == 0, r.output
+    assert "cleared cached schwab token" in r.output.lower()
+    assert not tok.exists()
+
+
 def test_status_json_paper(tmp_path, monkeypatch):
     import json as _json
 

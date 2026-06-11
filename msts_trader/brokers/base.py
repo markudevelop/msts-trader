@@ -44,6 +44,7 @@ class Broker(Protocol):
     name: str
     account_id: str
     supports_fractional: bool
+    supports_moc: bool
 
     def balances(self) -> Balances:
         """Net liquidating value, cash, equity buying power. Decimals throughout."""
@@ -59,6 +60,11 @@ class Broker(Protocol):
 
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
         """Submit a MARKET DAY order. Returns a flat dict with status + ids.
+
+        If `order.moc` is set and the adapter declares supports_moc = True,
+        submit a market-on-close order instead (fills in the closing
+        auction). Adapters with supports_moc = False never see moc orders —
+        the CLI refuses before placement.
 
         Required keys:  status (str), ticker (str)
         Suggested keys: order_id, side, quantity, reason (on errors), dry_run

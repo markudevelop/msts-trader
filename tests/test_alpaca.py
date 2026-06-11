@@ -99,6 +99,43 @@ def test_place_market_zero_qty():
     assert r["status"] == "skipped"
 
 
+def test_place_market_moc_uses_cls_tif_and_whole_shares():
+    # MOC routes as TimeInForce.CLS, and Alpaca only takes whole shares there.
+    from decimal import Decimal as D
+
+    from alpaca.trading.enums import TimeInForce
+
+    from msts_trader.models import Order, Side
+    captured = {}
+    b = Alpaca.__new__(Alpaca)
+    b._client = SimpleNamespace(submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="m-1"))
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10.7"), moc=True))
+    assert captured["req"].time_in_force == TimeInForce.CLS
+    assert r["quantity"] == 10.0 and r["moc"] is True
+
+
+def test_place_market_moc_sub_share_skips():
+    from decimal import Decimal as D
+
+    from msts_trader.models import Order, Side
+    r = _broker().place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("0.6"), moc=True))
+    assert r["status"] == "skipped" and "whole shares" in r["reason"]
+
+
+def test_place_market_day_tif_without_moc():
+    from decimal import Decimal as D
+
+    from alpaca.trading.enums import TimeInForce
+
+    from msts_trader.models import Order, Side
+    captured = {}
+    b = Alpaca.__new__(Alpaca)
+    b._client = SimpleNamespace(submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="d-1"))
+    b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10.7")))
+    assert captured["req"].time_in_force == TimeInForce.DAY
+    assert captured["req"].qty == 10.7  # fractional preserved on regular market orders
+
+
 def test_place_market_missing_order_id_is_none():
     # resp.id of None must come back as None, not the string "None".
     from decimal import Decimal as D
