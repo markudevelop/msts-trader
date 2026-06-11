@@ -111,6 +111,10 @@ Linux) and never leave your machine.
 msts-trader login --broker tastytrade
 ```
 
+Using Tastytrade's **certification (sandbox) environment**? Cert-issued
+keys are rejected by production (and vice versa) — set `TT_TEST=1` (env
+or creds file) so msts-trader connects to the cert API instead.
+
 ### Alpaca
 
 1. Sign in at https://alpaca.markets (paper or live)
@@ -498,7 +502,10 @@ msts-trader login --broker tastytrade --creds-file tt_creds.json
 No prompts, no terminal quirks, works identically on every OS. Delete
 the file afterwards — the credentials are now in your OS keychain.
 
-Lowercase keys (`provider_secret`, `api_key`, etc.) also work. For
+Lowercase keys (`provider_secret`, `api_key`, etc.) also work, and
+`client_secret` is accepted as an alias for the provider secret (it's
+what Tastytrade's portal calls it). Add `TT_TEST=1` if the keys are from
+Tastytrade's certification (sandbox) environment. For
 Alpaca use `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` / `APCA_PAPER`;
 for IBKR `IBKR_HOST` / `IBKR_PORT` / `IBKR_CLIENT_ID`; for Schwab
 `SCHWAB_APP_KEY` / `SCHWAB_APP_SECRET`.
@@ -541,6 +548,9 @@ re-minted:
 1. https://developer.tastytrade.com → My Apps → your app
 2. Run the OAuth authorization flow again to get a **new refresh token**
 3. `msts-trader login --broker tastytrade` (or `--creds-file`) with the new token
+
+You'll also see this error if you use **certification (sandbox) keys**
+against production — cert keys only work with `TT_TEST=1` set.
 
 ## Security
 

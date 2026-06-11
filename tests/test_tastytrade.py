@@ -84,6 +84,36 @@ def test_place_market_error():
     assert r["status"] == "error" and "margin_check_failed" in r["reason"]
 
 
+def test_init_passes_is_test_to_session(monkeypatch):
+    # TT_TEST / is_test must reach the SDK Session so cert (sandbox) keys
+    # hit the cert environment instead of being rejected by production.
+    import msts_trader.brokers.tastytrade as tt_mod
+
+    captured = {}
+
+    class FakeSession:
+        def __init__(self, provider_secret, refresh_token, is_test=False):
+            captured["args"] = (provider_secret, refresh_token, is_test)
+
+    class FakeAccount:
+        account_number = "5WCERT"
+
+        @staticmethod
+        def get(sess, account_id=None):
+            return FakeAccount()
+
+    monkeypatch.setattr(tt_mod, "Session", FakeSession)
+    monkeypatch.setattr(tt_mod, "Account", FakeAccount)
+
+    b = Tastytrade("ps", "rt", is_test=True)
+    assert captured["args"] == ("ps", "rt", True)
+    assert b.is_test is True
+    assert b.account_id == "5WCERT"
+
+    b = Tastytrade("ps", "rt")
+    assert captured["args"] == ("ps", "rt", False)  # production by default
+
+
 def test_place_market_fractional_fallback_reports_whole_qty():
     # When the fractional order is rejected and we resubmit whole shares,
     # the result must report the whole-share quantity actually sent.

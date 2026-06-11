@@ -38,6 +38,17 @@ def test_parse_dotenv_aliases():
     assert out == {"APCA_API_KEY_ID": "K", "APCA_API_SECRET_KEY": "S", "APCA_PAPER": "true"}
 
 
+def test_parse_client_secret_alias():
+    # tastytrade's developer portal labels the provider secret "client secret"
+    out = parse("client_secret=cs\nrefresh_token=rt\n")
+    assert out == {"TT_PROVIDER_SECRET": "cs", "TT_REFRESH_TOKEN": "rt"}
+
+
+def test_parse_is_test_alias():
+    out = parse(json.dumps({"is_test": "1"}))
+    assert out == {"TT_TEST": "1"}
+
+
 def test_parse_empty_raises():
     with pytest.raises(CredsFileError, match="empty"):
         parse("   \n  ")

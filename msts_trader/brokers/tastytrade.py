@@ -27,10 +27,13 @@ class Tastytrade:
     name = "tastytrade"
     supports_fractional = True  # MARKET orders only
 
-    def __init__(self, provider_secret: str, refresh_token: str, account_id: str | None = None):
+    def __init__(self, provider_secret: str, refresh_token: str, account_id: str | None = None, is_test: bool = False):
         if not provider_secret or not refresh_token:
             raise BrokerError("provider_secret and refresh_token required")
-        self._sess = Session(provider_secret, refresh_token)
+        # is_test=True targets Tastytrade's certification (sandbox) environment;
+        # cert-issued OAuth keys are rejected by production and vice versa.
+        self.is_test = is_test
+        self._sess = Session(provider_secret, refresh_token, is_test=is_test)
 
         if account_id:
             self._acct = Account.get(self._sess, account_id)

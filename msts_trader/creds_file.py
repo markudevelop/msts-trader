@@ -24,8 +24,10 @@ from .prompts import env_value, strip_quotes
 # Map friendly / lowercase keys a user might write to the canonical env names.
 _ALIASES = {
     "provider_secret": "TT_PROVIDER_SECRET",
+    "client_secret": "TT_PROVIDER_SECRET",  # tastytrade's portal calls it "client secret"
     "refresh_token": "TT_REFRESH_TOKEN",
     "account_id": "TT_ACCOUNT_ID",
+    "is_test": "TT_TEST",
     "api_key": "APCA_API_KEY_ID",
     "api_key_id": "APCA_API_KEY_ID",
     "secret_key": "APCA_API_SECRET_KEY",
@@ -99,7 +101,9 @@ def broker_kwargs(broker: str, get) -> dict | None:
     if broker == "tastytrade":
         ps, rt = e("TT_PROVIDER_SECRET"), e("TT_REFRESH_TOKEN")
         if ps and rt:
-            return {"provider_secret": ps, "refresh_token": rt, "account_id": e("TT_ACCOUNT_ID")}
+            raw = e("TT_TEST")
+            is_test = bool(raw) and raw.lower() in {"1", "true", "yes", "test", "sandbox", "cert"}
+            return {"provider_secret": ps, "refresh_token": rt, "account_id": e("TT_ACCOUNT_ID"), "is_test": is_test}
         return None
     if broker == "alpaca":
         k, s = e("APCA_API_KEY_ID"), e("APCA_API_SECRET_KEY")

@@ -4,6 +4,7 @@
   "TT_PROVIDER_SECRET": "your-tastytrade-provider-secret",
   "TT_REFRESH_TOKEN": "your-tastytrade-refresh-token",
   "TT_ACCOUNT_ID": "your-tastytrade-account-number",
+  "TT_TEST": "false",
 
   "APCA_API_KEY_ID": "your-alpaca-key-id",
   "APCA_API_SECRET_KEY": "your-alpaca-secret",

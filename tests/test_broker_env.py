@@ -4,7 +4,7 @@ import pytest
 
 from msts_trader.creds_file import broker_kwargs_from_env, broker_kwargs_from_file
 
-TT = ("TT_PROVIDER_SECRET", "TT_REFRESH_TOKEN", "TT_ACCOUNT_ID")
+TT = ("TT_PROVIDER_SECRET", "TT_REFRESH_TOKEN", "TT_ACCOUNT_ID", "TT_TEST")
 ALP = ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "APCA_PAPER")
 IB = ("IBKR_HOST", "IBKR_PORT", "IBKR_CLIENT_ID", "IBKR_ACCOUNT_ID")
 SC = ("SCHWAB_APP_KEY", "SCHWAB_APP_SECRET", "SCHWAB_CALLBACK_URL")
@@ -21,7 +21,12 @@ def test_tastytrade_from_env(monkeypatch):
     monkeypatch.setenv("TT_PROVIDER_SECRET", "ps")
     monkeypatch.setenv("TT_REFRESH_TOKEN", "rt")
     monkeypatch.setenv("TT_ACCOUNT_ID", "acct")
-    assert broker_kwargs_from_env("tastytrade") == {"provider_secret": "ps", "refresh_token": "rt", "account_id": "acct"}
+    assert broker_kwargs_from_env("tastytrade") == {
+        "provider_secret": "ps",
+        "refresh_token": "rt",
+        "account_id": "acct",
+        "is_test": False,
+    }
 
 
 def test_tastytrade_account_optional(monkeypatch):
@@ -29,6 +34,28 @@ def test_tastytrade_account_optional(monkeypatch):
     monkeypatch.setenv("TT_REFRESH_TOKEN", "rt")
     out = broker_kwargs_from_env("tastytrade")
     assert out["account_id"] is None
+    assert out["is_test"] is False  # production by default
+
+
+def test_tastytrade_test_env(monkeypatch):
+    monkeypatch.setenv("TT_PROVIDER_SECRET", "ps")
+    monkeypatch.setenv("TT_REFRESH_TOKEN", "rt")
+    monkeypatch.setenv("TT_TEST", "1")
+    assert broker_kwargs_from_env("tastytrade")["is_test"] is True
+
+
+def test_tastytrade_test_env_accepts_sandbox_word(monkeypatch):
+    monkeypatch.setenv("TT_PROVIDER_SECRET", "ps")
+    monkeypatch.setenv("TT_REFRESH_TOKEN", "rt")
+    monkeypatch.setenv("TT_TEST", "sandbox")
+    assert broker_kwargs_from_env("tastytrade")["is_test"] is True
+
+
+def test_tastytrade_test_env_falsy_value(monkeypatch):
+    monkeypatch.setenv("TT_PROVIDER_SECRET", "ps")
+    monkeypatch.setenv("TT_REFRESH_TOKEN", "rt")
+    monkeypatch.setenv("TT_TEST", "false")
+    assert broker_kwargs_from_env("tastytrade")["is_test"] is False
 
 
 def test_tastytrade_missing_returns_none(monkeypatch):
@@ -125,7 +152,7 @@ def test_from_file_isolated(tmp_path, monkeypatch):
     f = tmp_path / "a.env"
     f.write_text("TT_PROVIDER_SECRET=ps1\nTT_REFRESH_TOKEN=rt1\nTT_ACCOUNT_ID=acc1\n")
     out = broker_kwargs_from_file("tastytrade", f)
-    assert out == {"provider_secret": "ps1", "refresh_token": "rt1", "account_id": "acc1"}
+    assert out == {"provider_secret": "ps1", "refresh_token": "rt1", "account_id": "acc1", "is_test": False}
     import os
     assert "TT_PROVIDER_SECRET" not in os.environ  # not leaked into the process env
 

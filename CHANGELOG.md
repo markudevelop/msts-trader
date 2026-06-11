@@ -12,6 +12,28 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.9.7] — 2026-06-11
+
+### Added
+- **Tastytrade certification (sandbox) environment support.** Set
+  `TT_TEST=1` (env var or creds-file key, also accepts `true`/`yes`/
+  `test`/`sandbox`/`cert`) to connect to Tastytrade's cert API instead of
+  production. Cert-issued OAuth keys are rejected by production with
+  "refresh token has been revoked or has expired" — previously there was
+  no way to use them at all. The flag round-trips through `login`, the
+  keychain, headless env creds, and `--creds-file`.
+- **`client_secret` accepted as a creds-file alias for the provider
+  secret** — it's what Tastytrade's developer portal calls it.
+
+### Improved
+- **`✓ loaded N value(s)` now lists the loaded key names** (never
+  values), so a duplicated or misspelled key in a creds file — which
+  silently collapses the count (e.g. 3 entries → "loaded 2") — is visible
+  at a glance.
+- The tastytrade login error path now hints at `TT_TEST=1` when
+  production rejects the grant, and the README documents the
+  cert-vs-production split.
+
 ## [0.9.6] — 2026-06-10
 
 ### Fixed

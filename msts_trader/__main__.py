@@ -151,7 +151,10 @@ def _load_creds_file_or_exit(path: str) -> None:
     except CredsFileError as e:
         c.print(f"[red]✗ could not read creds file:[/red] {escape(str(e))}")
         sys.exit(1)
-    c.print(f"[green]✓ loaded {len(keys)} value(s) from {path}[/green]")
+    # Show the key NAMES (never values) so a duplicate/misspelled key in the
+    # file is visible immediately instead of silently collapsing the count.
+    names = ", ".join(sorted(keys))
+    c.print(f"[green]✓ loaded {len(keys)} value(s) from {path}[/green] [dim]({escape(names)})[/dim]")
 
 
 def _fetch_url_or_exit(url: str) -> str:
@@ -297,14 +300,7 @@ def main(ctx: click.Context, broker: str | None) -> None:
 def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -> None:
     """Store broker creds in OS keychain."""
     if creds_file:
-        try:
-            # Explicit --creds-file wins over a stale exported value (e.g. a
-            # revoked TT_REFRESH_TOKEN) that would otherwise shadow the file.
-            keys = load_into_env(creds_file, overwrite=True)
-        except CredsFileError as e:
-            c.print(f"[red]✗ could not read creds file:[/red] {escape(str(e))}")
-            sys.exit(1)
-        c.print(f"[green]✓ loaded {len(keys)} value(s) from {creds_file}[/green]")
+        _load_creds_file_or_exit(creds_file)
 
     broker = (
         broker_opt
@@ -329,7 +325,8 @@ def _login_tastytrade() -> None:
             "(or leave blank to auto-pick first account)\n\n"
             "[dim]Avoid typing: put TT_PROVIDER_SECRET / TT_REFRESH_TOKEN / "
             "TT_ACCOUNT_ID in a file and run with --creds-file, or export them "
-            "as environment variables first.[/dim]",
+            "as environment variables first. Using certification (sandbox) "
+            "keys? Add TT_TEST=1 — cert keys are rejected by production.[/dim]",
             border_style="cyan",
         )
     )
@@ -337,21 +334,33 @@ def _login_tastytrade() -> None:
     refresh_token = ask_secret("refresh token", env_var="TT_REFRESH_TOKEN")
     account_id = env_value("TT_ACCOUNT_ID") or ask_text("account id (optional)", default="", allow_blank=True)
     account_id = account_id.strip() or None
+    raw_test = env_value("TT_TEST")
+    is_test = raw_test is not None and raw_test.lower() in {"1", "true", "yes", "test", "sandbox", "cert"}
 
     try:
-        b = make("tastytrade", provider_secret=provider_secret, refresh_token=refresh_token, account_id=account_id)
+        b = make(
+            "tastytrade",
+            provider_secret=provider_secret,
+            refresh_token=refresh_token,
+            account_id=account_id,
+            is_test=is_test,
+        )
         bal = b.balances()
     except Exception as e:
         c.print(f"[red]✗ {escape(explain_login_error('tastytrade', e))}[/red]")
+        if not is_test:
+            c.print("[dim]Using certification (sandbox) keys? Add TT_TEST=1 to your creds file / env.[/dim]")
         sys.exit(1)
 
     keychain.save("tastytrade", {
         "provider_secret": provider_secret,
         "refresh_token": refresh_token,
         "account_id": account_id or b.account_id,
+        "is_test": is_test,
     })
     keychain.set_default("tastytrade")
-    c.print(f"[green]✓ stored.[/green] tastytrade account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
+    env_label = " (test/cert)" if is_test else ""
+    c.print(f"[green]✓ stored.[/green] tastytrade{env_label} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
 
 
 def _login_alpaca() -> None:
