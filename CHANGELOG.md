@@ -12,6 +12,31 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.12.0] — 2026-06-12
+
+### Added
+- **Protective stop orders**: the CSV accepts an optional `stop_pct`
+  column (fraction below entry, e.g. `0.015` = 1.5%). After a BUY
+  fills, a GTC SELL STOP is placed at `fill x (1 - stop_pct)` and
+  reconciled on every run — stops are cancelled when the position is
+  exited or reduced (a resting stop with no position would open a
+  short) and replaced when a new fill re-anchors the entry. Brokers
+  expose this behind a new `supports_stops` flag with `place_stop` /
+  `open_stops` / `cancel_order`; the paper broker simulates the full
+  lifecycle, others warn-and-skip instead of failing the rebalance.
+  Stops fire broker-side: no local intraday watcher is needed (note:
+  stop-market guarantees execution, not price — overnight gaps fill
+  through the stop).
+- **`rebalance --threshold-mode nav|position`** (or `threshold_mode`
+  in the config): choose the drift denominator. `nav` (default,
+  unchanged) measures a ticker's drift against the whole book;
+  `position` measures it against the line itself — required for
+  scaled/composite books whose small lines (e.g. 1.8% of NAV) could
+  never move 4% of NAV and would be frozen forever under nav-mode.
+- **`examples/pnl-unified.toml`**: two-lane execution config for a
+  multi-engine composite (weights-expressible engines via CSV here;
+  stop-dependent engines via their own runner).
+
 ## [0.11.0] — 2026-06-12
 
 ### Added
