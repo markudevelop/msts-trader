@@ -28,21 +28,15 @@ from typing import Iterable
 from ..models import Order, Position, Side
 from .base import Balances, BrokerError, first_present
 
-try:
-    from ib_insync import IB, MarketOrder, Stock  # type: ignore
-    from ib_insync import Order as IbOrder  # type: ignore
-    _IB_OK = True
-except ImportError:
-    _IB_OK = False
-
-
 def _ensure_event_loop() -> None:
     """Make sure the thread has a usable asyncio event loop for ib_insync.
 
-    ib_insync's sync API fetches the loop with `get_event_loop()`. Python
-    3.12 deprecated implicit loop creation and 3.14 removed it, so on new
-    interpreters a plain CLI invocation dies with "RuntimeError: There is
-    no current event loop in thread 'MainThread'" before we ever reach TWS.
+    ib_insync's sync API fetches the loop with `get_event_loop()`, and its
+    dependency eventkit does the same at *import time*. Python 3.12
+    deprecated implicit loop creation and 3.14 removed it, so on new
+    interpreters `import ib_insync` itself dies with "RuntimeError: There
+    is no current event loop in thread 'MainThread'" before we ever reach
+    TWS. Hence this must run before the import below, not just before IB().
     """
     try:
         asyncio.get_running_loop()
@@ -59,6 +53,15 @@ def _ensure_event_loop() -> None:
         usable = False
     if not usable:
         asyncio.set_event_loop(policy.new_event_loop())
+
+
+_ensure_event_loop()
+try:
+    from ib_insync import IB, MarketOrder, Stock  # type: ignore
+    from ib_insync import Order as IbOrder  # type: ignore
+    _IB_OK = True
+except ImportError:
+    _IB_OK = False
 
 
 class IBKR:

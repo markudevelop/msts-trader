@@ -10,6 +10,8 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-06-12
+
 ### Added
 - **Live-broker stop adapters**: `supports_stops` is now implemented for
   **Tastytrade** (`OrderType.STOP` + `stop_trigger`, GTC) and **Alpaca**
@@ -20,6 +22,19 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
   1-share stop before relying on it.
 
 ### Fixed
+- **IBKR on Python 3.14**: `import ib_insync` crashed with
+  "RuntimeError: There is no current event loop" — its dependency
+  `eventkit` calls `get_event_loop()` at import time, and Python 3.14
+  removed implicit loop creation. The event-loop shim now runs *before*
+  the import, not just before `IB()`. This hit `uv tool install` users
+  in particular, since uv tools default to the newest Python; the
+  `--python 3.13` workaround is no longer needed.
+- **Protective stops on partial reduce / add-on buys**: a SELL trimming
+  a position cancelled its stop without re-placing one for the remaining
+  shares, and a BUY adding to an existing position placed a stop for the
+  added quantity only. Reconcile now anchors on `broker.positions()`
+  post-trade: the remainder gets a re-anchored stop at current price,
+  add-ons protect the full position.
 - **release.yml**: PyPI upload uses `skip-existing` — re-pushed tags
   (e.g. lightweight→annotated conversion) re-fire the workflow and PyPI
   400s on same-version re-uploads; already-published now counts as success.
@@ -748,7 +763,14 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.9.4...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/markudevelop/msts-trader/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/markudevelop/msts-trader/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/markudevelop/msts-trader/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/markudevelop/msts-trader/compare/v0.9.7...v0.10.0
+[0.9.7]: https://github.com/markudevelop/msts-trader/compare/v0.9.6...v0.9.7
+[0.9.6]: https://github.com/markudevelop/msts-trader/compare/v0.9.5...v0.9.6
+[0.9.5]: https://github.com/markudevelop/msts-trader/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/markudevelop/msts-trader/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/markudevelop/msts-trader/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/markudevelop/msts-trader/compare/v0.9.1...v0.9.2

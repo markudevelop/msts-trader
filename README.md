@@ -94,6 +94,19 @@ pip install "msts-trader[all]"          # everything
 
 (with uv: `uv tool install "msts-trader[all]"`)
 
+> **Note (IBKR + uv tool, versions ≤ 0.12.0):** `uv tool install` picks
+> the newest Python it can find (currently 3.14), where IBKR auth in
+> older releases failed with a "no current event loop" error from
+> `ib_insync`/`eventkit`. Fixed in releases after 0.12.0; if you're stuck
+> on an older version, pin Python 3.13:
+>
+> ```bash
+> uv tool install --python 3.13 --reinstall "msts-trader[all]"
+> ```
+>
+> `uv run` from a source checkout was never affected — it honors the
+> [.python-version](.python-version) pin.
+
 Install from source:
 
 ```bash
@@ -164,6 +177,9 @@ login. Headless: `TRADIER_ACCESS_TOKEN` / `TRADIER_ACCOUNT_ID` /
 pip install "msts-trader[ibkr]"
 msts-trader login --broker ibkr
 ```
+
+On versions ≤ 0.12.0 installed via `uv tool`, use `--python 3.13` — see
+the [install note](#optional-brokers) about IBKR on Python 3.14.
 
 You'll be asked for host, port, and client id of a running TWS or IB
 Gateway. Defaults:
