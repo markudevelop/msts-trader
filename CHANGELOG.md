@@ -10,7 +10,19 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- **Live-broker stop adapters**: `supports_stops` is now implemented for
+  **Tastytrade** (`OrderType.STOP` + `stop_trigger`, GTC) and **Alpaca**
+  (`StopOrderRequest`, GTC) — both whole-share only (fractional stop
+  quantity rounds DOWN; the residual fraction stays unprotected rather
+  than over-selling). `open_stops` filters live stop orders; `cancel_order`
+  by id. Not yet validated against live accounts — paper-validate a
+  1-share stop before relying on it.
+
+### Fixed
+- **release.yml**: PyPI upload uses `skip-existing` — re-pushed tags
+  (e.g. lightweight→annotated conversion) re-fire the workflow and PyPI
+  400s on same-version re-uploads; already-published now counts as success.
 
 ## [0.12.0] — 2026-06-12
 

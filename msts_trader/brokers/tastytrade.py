@@ -27,6 +27,7 @@ class Tastytrade:
     name = "tastytrade"
     supports_fractional = True  # MARKET orders only
     supports_moc = False  # tastytrade's API has no closing-auction order type
+    supports_stops = True  # GTC SELL STOP via OrderType.STOP + stop_trigger
 
     def __init__(self, provider_secret: str, refresh_token: str, account_id: str | None = None, is_test: bool = False):
         if not provider_secret or not refresh_token:
@@ -192,3 +193,60 @@ class Tastytrade:
             "order_id": order_id,
             "dry_run": dry_run,
         }
+
+    # ---- protective stops -------------------------------------------------
+    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal,
+                   dry_run: bool = False) -> dict:
+        """GTC SELL STOP for an existing long. Stop orders must be whole-share
+        on tastytrade — fractional quantity is rounded DOWN (the residual
+        fraction stays unprotected rather than over-selling)."""
+        qty = Decimal(int(quantity))
+        if qty <= 0:
+            return {"status": "skipped", "reason": "whole-share qty rounds to 0",
+                    "ticker": ticker}
+        leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=ticker,
+                  action=OrderAction.SELL_TO_CLOSE, quantity=qty)
+        new_order = NewOrder(time_in_force=OrderTimeInForce.GTC,
+                             order_type=OrderType.STOP, legs=[leg],
+                             stop_trigger=stop_price, price=None)
+        try:
+            resp = self._acct.place_order(self._sess, new_order, dry_run=dry_run)
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "ticker": ticker}
+        order_obj = getattr(resp, "order", None)
+        return {
+            "status": str(getattr(order_obj, "status", None) or "submitted"),
+            "ticker": ticker,
+            "order_id": getattr(order_obj, "id", None),
+            "quantity": float(qty),
+            "stop_price": float(stop_price),
+            "dry_run": dry_run,
+        }
+
+    def open_stops(self) -> dict[str, list[dict]]:
+        out: dict[str, list[dict]] = {}
+        for o in self._acct.get_live_orders(self._sess):
+            if getattr(o, "order_type", None) != OrderType.STOP:
+                continue
+            status = str(getattr(o, "status", "")).lower()
+            if any(k in status for k in ("cancel", "reject", "filled", "expired")):
+                continue
+            legs = getattr(o, "legs", None) or []
+            if not legs:
+                continue
+            tkr = getattr(legs[0], "symbol", None)
+            if not tkr:
+                continue
+            out.setdefault(tkr, []).append({
+                "order_id": getattr(o, "id", None),
+                "quantity": Decimal(str(getattr(legs[0], "quantity", 0) or 0)),
+                "stop_price": Decimal(str(getattr(o, "stop_trigger", 0) or 0)),
+            })
+        return out
+
+    def cancel_order(self, order_id) -> dict:
+        try:
+            self._acct.delete_order(self._sess, int(order_id))
+            return {"status": "CANCELLED", "order_id": order_id}
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "order_id": order_id}

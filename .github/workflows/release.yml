@@ -52,6 +52,11 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Re-pushed tags (e.g. converting lightweight -> annotated) re-fire
+          # this workflow; PyPI rejects same-version re-uploads with a 400.
+          # Treat "already on PyPI" as success, not failure.
+          skip-existing: true
 
   github-release:
     name: create GitHub Release

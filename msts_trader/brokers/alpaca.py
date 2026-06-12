@@ -16,7 +16,8 @@ try:
     from alpaca.data.requests import StockLatestQuoteRequest
     from alpaca.trading.client import TradingClient
     from alpaca.trading.enums import OrderSide, TimeInForce
-    from alpaca.trading.requests import MarketOrderRequest
+    from alpaca.trading.enums import QueryOrderStatus
+    from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, StopOrderRequest
     _ALPACA_OK = True
 except ImportError:
     _ALPACA_OK = False
@@ -26,6 +27,7 @@ class Alpaca:
     name = "alpaca"
     supports_fractional = True
     supports_moc = True  # TimeInForce.CLS — whole shares only
+    supports_stops = True  # GTC SELL STOP via StopOrderRequest (whole shares)
 
     def __init__(self, api_key: str, secret_key: str, paper: bool = False):
         if not _ALPACA_OK:
@@ -120,3 +122,51 @@ class Alpaca:
             "order_id": str(oid) if (oid := getattr(resp, "id", None)) is not None else None,
             "dry_run": False,
         }
+
+    # ---- protective stops -------------------------------------------------
+    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal,
+                   dry_run: bool = False) -> dict:
+        """GTC SELL STOP for an existing long. Alpaca stop orders are
+        whole-share only — fractional quantity rounds DOWN (residual fraction
+        stays unprotected rather than over-selling)."""
+        qty = int(quantity)
+        if qty <= 0:
+            return {"status": "skipped", "reason": "whole-share qty rounds to 0",
+                    "ticker": ticker}
+        if dry_run:
+            return {"status": "dry-run", "ticker": ticker,
+                    "stop_price": float(stop_price), "dry_run": True}
+        req = StopOrderRequest(symbol=ticker, qty=qty, side=OrderSide.SELL,
+                               time_in_force=TimeInForce.GTC,
+                               stop_price=round(float(stop_price), 2))
+        try:
+            resp = self._client.submit_order(req)
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "ticker": ticker}
+        return {"status": str(getattr(resp, "status", "submitted")),
+                "ticker": ticker, "order_id": str(getattr(resp, "id", "")),
+                "quantity": float(qty), "stop_price": float(stop_price),
+                "dry_run": False}
+
+    def open_stops(self) -> dict[str, list[dict]]:
+        req = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500)
+        out: dict[str, list[dict]] = {}
+        for o in self._client.get_orders(req):
+            if str(getattr(o, "order_type", "")).lower() != "stop":
+                continue
+            tkr = getattr(o, "symbol", None)
+            if not tkr:
+                continue
+            out.setdefault(tkr, []).append({
+                "order_id": str(o.id),
+                "quantity": Decimal(str(o.qty or 0)),
+                "stop_price": Decimal(str(o.stop_price or 0)),
+            })
+        return out
+
+    def cancel_order(self, order_id: str) -> dict:
+        try:
+            self._client.cancel_order_by_id(order_id)
+            return {"status": "CANCELLED", "order_id": order_id}
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "order_id": order_id}
