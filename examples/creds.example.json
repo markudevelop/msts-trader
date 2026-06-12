@@ -12,5 +12,10 @@
 
   "IBKR_HOST": "127.0.0.1",
   "IBKR_PORT": "4002",
-  "IBKR_CLIENT_ID": "17"
+  "IBKR_CLIENT_ID": "17",
+  "IBKR_ACCOUNT_ID": "your-ibkr-account-or-omit-to-autodiscover",
+
+  "SCHWAB_APP_KEY": "your-schwab-app-key",
+  "SCHWAB_APP_SECRET": "your-schwab-app-secret",
+  "SCHWAB_CALLBACK_URL": "https://127.0.0.1:8182"
 }

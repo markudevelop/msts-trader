@@ -403,3 +403,97 @@ def test_qty_rounding_to_zero_is_skipped():
     )
     assert all(o.ticker != "BRKA" or o.quantity > 0 for o in p.orders)
     assert any(r.ticker == "BRKA" and "rounds to 0" in r.note for r in p.rows)
+
+
+# ----- min_weight -----
+
+def test_min_weight_drops_tiny_target_without_touching_position():
+    # 0.005 < min_weight 0.01: no buy for the flat ticker, no sell for the
+    # held one — "ignore" means neither side trades.
+    targets = [
+        Target(ticker="SPY", weight=Decimal("0.50")),
+        Target(ticker="TINY", weight=Decimal("0.005")),   # flat, would be a buy
+        Target(ticker="DUSTY", weight=Decimal("0.005")),  # held, must NOT be exit-swept
+    ]
+    positions = {"DUSTY": Position(ticker="DUSTY", quantity=Decimal("100"), price=Decimal("50"))}
+    p = build_preview(
+        targets=targets, positions=positions,
+        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        quotes={"SPY": Decimal("500"), "TINY": Decimal("10"), "DUSTY": Decimal("50")},
+        min_weight=Decimal("0.01"),
+    )
+    tickers = {o.ticker for o in p.orders}
+    assert tickers == {"SPY"}
+    assert sum(1 for r in p.rows if "below min weight" in r.note) == 2
+
+
+def test_min_weight_none_keeps_all_targets():
+    targets = [Target(ticker="TINY", weight=Decimal("0.005"))]
+    p = build_preview(
+        targets=targets, positions={},
+        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        quotes={"TINY": Decimal("10")},
+        drift_threshold=Decimal("0.001"),
+    )
+    assert [o.ticker for o in p.orders] == ["TINY"]
+
+
+def test_min_weight_keeps_explicit_zero_exit_semantics():
+    # weight == 0 is an explicit exit instruction, not a tiny weight — it
+    # must still sell even when min_weight is set.
+    targets = [Target(ticker="OUT", weight=Decimal("0"))]
+    positions = {"OUT": Position(ticker="OUT", quantity=Decimal("100"), price=Decimal("50"))}
+    p = build_preview(
+        targets=targets, positions=positions,
+        nav=Decimal("50000"), cash=Decimal("0"), buying_power=Decimal("0"),
+        quotes={"OUT": Decimal("50")},
+        min_weight=Decimal("0.01"),
+    )
+    assert len(p.orders) == 1
+    assert p.orders[0].ticker == "OUT" and p.orders[0].side == Side.SELL
+
+
+# ----- allocation (sub-portfolio sizing) -----
+
+def test_allocation_sizes_against_dollar_base_not_nav():
+    # $200k account, weights apply to a $50k sleeve: 50% SPY = $25k = 50 sh.
+    targets = [Target(ticker="SPY", weight=Decimal("0.50"))]
+    p = build_preview(
+        targets=targets, positions={},
+        nav=Decimal("200000"), cash=Decimal("200000"), buying_power=Decimal("200000"),
+        quotes={"SPY": Decimal("500")},
+        allocation=Decimal("50000"),
+    )
+    assert len(p.orders) == 1
+    assert p.orders[0].quantity == Decimal("50.00")
+    assert p.nav == Decimal("200000")  # display NAV stays the real account NAV
+    assert any("allocation" in w.lower() for w in p.warnings)
+
+
+def test_allocation_drift_relative_to_allocation():
+    # Held $24.9k vs $25k target on a $50k allocation = 0.2% drift -> skip.
+    # Against the full $200k NAV the same delta would be far below threshold
+    # anyway, so check the converse: a 6% drift OF THE ALLOCATION trades even
+    # though it is only 1.5% of NAV.
+    targets = [Target(ticker="SPY", weight=Decimal("0.50"))]
+    positions = {"SPY": Position(ticker="SPY", quantity=Decimal("44"), price=Decimal("500"))}  # 22k vs 25k = 6% of 50k
+    p = build_preview(
+        targets=targets, positions=positions,
+        nav=Decimal("200000"), cash=Decimal("178000"), buying_power=Decimal("178000"),
+        quotes={"SPY": Decimal("500")},
+        allocation=Decimal("50000"),
+    )
+    assert len(p.orders) == 1 and p.orders[0].side == Side.BUY
+
+
+def test_allocation_above_nav_falls_back_to_nav():
+    targets = [Target(ticker="SPY", weight=Decimal("0.50"))]
+    p = build_preview(
+        targets=targets, positions={},
+        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        quotes={"SPY": Decimal("500")},
+        allocation=Decimal("999999"),
+    )
+    # sized against NAV: 25k @ 500 = 50 sh, and a warning explains why
+    assert p.orders[0].quantity == Decimal("50.00")
+    assert any("exceeds account NAV" in w for w in p.warnings)

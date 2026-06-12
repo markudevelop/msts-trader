@@ -186,10 +186,19 @@ msts-trader login --broker schwab
 ```
 
 Requires a Schwab Developer app (https://developer.schwab.com) with the
-callback URL set to `https://127.0.0.1:8182/`. msts-trader pops a
+callback URL set to `https://127.0.0.1:8182`. msts-trader pops a
 browser window, you authorize, and the token JSON is written to
 `~/.msts-trader/schwab_token.json`. Schwab refresh tokens expire every
 7 days — re-run `msts-trader login --broker schwab` when that happens.
+
+> **The callback URL must match your app's registration EXACTLY** —
+> character for character, trailing slash included. Schwab treats
+> `https://127.0.0.1:8182` and `https://127.0.0.1:8182/` as different
+> URLs: a mismatch shows an error page on schwab.com during
+> authorization, or fails the flow afterwards with "authorization
+> failed or the token expired". If your app is registered with a
+> different callback (port, slash, …), enter that exact value at the
+> login prompt or set `SCHWAB_CALLBACK_URL`.
 
 Don't wait for it to expire mid-week: run
 
@@ -254,6 +263,8 @@ msts-trader rebalance --yes                           # skip the confirm prompt
 msts-trader rebalance --threshold 0.02                # tighter rebalance (default 4%)
 msts-trader rebalance --csv-file targets.csv          # read from a file
 msts-trader rebalance --moc                           # market-on-close orders (see below)
+msts-trader rebalance --min-weight 0.01               # ignore CSV rows under 1% weight
+msts-trader rebalance --allocation 50000              # weights apply to $50k, not full NAV
 msts-trader --broker paper rebalance --csv-file ...   # test against paper
 ```
 
@@ -264,6 +275,17 @@ msts-trader --broker paper rebalance --csv-file ...   # test against paper
   the CLI refuses rather than silently downgrading). MOC orders are
   whole-share only, and exchanges stop accepting them around **15:50 ET**,
   so submit before then. Also available as `moc = true` in the config file.
+- **`--min-weight`:** rows with `0 < weight < min-weight` are ignored
+  entirely — no buy, and an existing position in that ticker is *not*
+  exit-swept either. An explicit weight of `0` still means "sell it all".
+  Useful when the CSV carries many tiny weights you don't want to trade.
+- **`--allocation`:** size the weights against a fixed dollar amount
+  instead of the whole account — e.g. run a $50k strategy sleeve inside
+  a $200k account. Positions in tickers *not* in the CSV are still
+  exited (the sweep is account-wide), so keep sleeve and non-sleeve
+  tickers disjoint or rebalance with a CSV that lists everything you
+  hold. Capped at NAV; use leveraged weights (sum > 1.0) for gross
+  exposure above the allocation.
 
 ### Safety, automation & output flags
 
@@ -301,6 +323,8 @@ max_stale_hours = 36
 notify_url = "https://discord.com/api/webhooks/..."
 margin_aware = true   # default; set false to disable buying-power-fit scaling
 moc = false           # set true to always use market-on-close orders
+min_weight = 0.01     # ignore CSV rows with weight under 1%
+allocation = 50000    # weights apply to $50k instead of full NAV
 quiet = false
 ```
 
@@ -546,8 +570,11 @@ Lowercase keys (`provider_secret`, `api_key`, etc.) also work, and
 what Tastytrade's portal calls it). Add `TT_TEST=1` if the keys are from
 Tastytrade's certification (sandbox) environment. For
 Alpaca use `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` / `APCA_PAPER`;
-for IBKR `IBKR_HOST` / `IBKR_PORT` / `IBKR_CLIENT_ID`; for Schwab
-`SCHWAB_APP_KEY` / `SCHWAB_APP_SECRET`.
+for IBKR `IBKR_HOST` / `IBKR_PORT` / `IBKR_CLIENT_ID` /
+`IBKR_ACCOUNT_ID` (optional — auto-discovered when omitted); for Schwab
+`SCHWAB_APP_KEY` / `SCHWAB_APP_SECRET` / `SCHWAB_CALLBACK_URL`
+(optional — defaults to `https://127.0.0.1:8182`; must exactly match
+your app's registered callback, trailing slash included).
 
 #### Or: set environment variables
 

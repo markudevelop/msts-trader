@@ -479,7 +479,9 @@ def _login_schwab() -> None:
         Panel.fit(
             "[bold]Schwab OAuth2 setup[/bold]\n\n"
             "1. Register a developer app at [cyan]https://developer.schwab.com[/cyan]\n"
-            "2. Set the callback URL to [bold]https://127.0.0.1:8182/[/bold]\n"
+            "2. Set the callback URL to [bold]https://127.0.0.1:8182[/bold]\n"
+            "   [yellow]The callback url below must match the registered one\n"
+            "   EXACTLY — character for character, trailing slash included.[/yellow]\n"
             "3. Copy your [bold]app key[/bold] and [bold]app secret[/bold]\n"
             "4. A browser will open for authorization. Refresh token lasts\n"
             "   [bold]7 days[/bold] — re-run this login when it expires.\n\n"
@@ -490,7 +492,10 @@ def _login_schwab() -> None:
     )
     app_key = ask_secret("app key", env_var="SCHWAB_APP_KEY")
     app_secret = ask_secret("app secret", env_var="SCHWAB_APP_SECRET")
-    callback_url = env_value("SCHWAB_CALLBACK_URL") or ask_text("callback url", default="https://127.0.0.1:8182/")
+    callback_url = env_value("SCHWAB_CALLBACK_URL") or ask_text(
+        "callback url (must EXACTLY match your app's registered callback)",
+        default="https://127.0.0.1:8182",
+    )
 
     try:
         b = make("schwab", app_key=app_key, app_secret=app_secret, callback_url=callback_url)
@@ -661,6 +666,8 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 @click.option("--dry-run", is_flag=True, help="Preview only — never sends orders.")
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirm prompt (auto-execute). Required for unattended runs.")
 @click.option("--threshold", default=None, type=float, help="Drift threshold (fraction of NAV). Default 0.04.")
+@click.option("--min-weight", type=float, default=None, help="Ignore CSV rows with 0 < weight < this (e.g. 0.01): no buy, no sell, existing position left untouched.")
+@click.option("--allocation", type=float, default=None, help="Dollar amount the weights apply to (run a sub-portfolio inside a bigger account). Default: full NAV.")
 @click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Read the target CSV from a file instead of stdin.")
 @click.option("--csv-url", default=None, help="Fetch the target CSV from a URL instead of stdin.")
 @click.option("--creds-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Load credentials from a JSON or KEY=VALUE file (headless).")
@@ -680,6 +687,8 @@ def rebalance(
     dry_run: bool,
     yes: bool,
     threshold: float | None,
+    min_weight: float | None,
+    allocation: float | None,
     csv_file: str | None,
     csv_url: str | None,
     creds_file: str | None,
@@ -701,6 +710,8 @@ def rebalance(
     """
     cfg = _load_config_or_exit(config_path)
     threshold = float(config.pick(threshold, cfg, "threshold", 0.04))
+    min_weight = config.pick(min_weight, cfg, "min_weight")
+    allocation = config.pick(allocation, cfg, "allocation")
     csv_file = config.pick(csv_file, cfg, "csv_file")
     csv_url = config.pick(csv_url, cfg, "csv_url")
     creds_file = config.pick(creds_file, cfg, "creds_file")
@@ -771,6 +782,8 @@ def rebalance(
         targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
         buying_power=bal.buying_power, quotes=quotes,
         drift_threshold=Decimal(str(threshold)),
+        min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
+        allocation=Decimal(str(allocation)) if allocation is not None else None,
     )
     if margin_aware:
         _apply_margin_aware(b, preview, bal.buying_power)
@@ -919,7 +932,7 @@ def _execute(broker, preview):
     return sent, failed, results
 
 
-def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False) -> dict:
+def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None) -> dict:
     """Run the full rebalance pipeline for one already-built broker.
 
     No interactive prompts, no rich rendering — returns a result dict.
@@ -938,6 +951,8 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
         targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
         buying_power=bal.buying_power, quotes=quotes,
         drift_threshold=Decimal(str(threshold)),
+        min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
+        allocation=Decimal(str(allocation)) if allocation is not None else None,
     )
     if margin_aware:
         _apply_margin_aware(b, preview, bal.buying_power)
@@ -999,6 +1014,8 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
         _fail("no [[account]] entries in the config.")
 
     threshold = float(cfg.get("threshold", 0.04))
+    min_weight = cfg.get("min_weight")
+    allocation_default = cfg.get("allocation")
     max_notional = cfg.get("max_notional")
     max_stale_hours = cfg.get("max_stale_hours")
     notify_url = cfg.get("notify_url")
@@ -1048,7 +1065,12 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
 
         say(f"\n[bold cyan]━━ {label} ({broker}) ━━[/bold cyan]")
         try:
-            r = _rebalance_one(b, targets, threshold=threshold, max_notional=max_notional, dry_run=dry_run, force=force, margin_aware=margin_aware)
+            # per-account `allocation` (dollar sizing base) wins over the top-level one
+            r = _rebalance_one(
+                b, targets, threshold=threshold, max_notional=max_notional, dry_run=dry_run,
+                force=force, margin_aware=margin_aware, min_weight=min_weight,
+                allocation=acct.get("allocation", allocation_default),
+            )
         except Exception as e:
             r = {"broker": broker, "status": "error", "reason": str(e)}
         r["name"] = label

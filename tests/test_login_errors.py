@@ -27,7 +27,16 @@ def test_ibkr_connection_refused():
 
 def test_schwab_token_expired():
     msg = explain_login_error("schwab", Exception("token expired"))
-    assert "schwab_token.json" in msg
+    assert "--reauth" in msg
+    # token-expiry errors can also be a first-login callback mismatch — the
+    # message must point at the exact-match requirement
+    assert "EXACTLY" in msg
+
+
+def test_schwab_callback_mismatch():
+    msg = explain_login_error("schwab", Exception("invalid_request: redirect_uri mismatch"))
+    assert "callback" in msg.lower()
+    assert "trailing slash" in msg.lower()
 
 
 def test_unknown_falls_back_to_raw():

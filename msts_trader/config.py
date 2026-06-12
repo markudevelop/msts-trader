@@ -30,6 +30,8 @@ _KNOWN = {
     "broker", "threshold", "csv_file", "csv_url", "creds_file",
     "max_notional", "max_stale_hours", "notify_url", "quiet", "margin_aware",
     "moc",
+    "min_weight",   # ignore CSV rows with 0 < weight < this
+    "allocation",   # dollar base the weights apply to (default: full NAV)
     "account",  # array of [[account]] tables for the `multi` command
 }
 

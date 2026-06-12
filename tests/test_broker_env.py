@@ -98,7 +98,17 @@ def test_schwab_from_env(monkeypatch):
     monkeypatch.setenv("SCHWAB_APP_KEY", "ak")
     monkeypatch.setenv("SCHWAB_APP_SECRET", "as")
     out = broker_kwargs_from_env("schwab")
-    assert out["app_key"] == "ak" and out["callback_url"] == "https://127.0.0.1:8182/"
+    # No trailing slash: must mirror the registration value in the setup
+    # instructions — Schwab requires an exact character-for-character match.
+    assert out["app_key"] == "ak" and out["callback_url"] == "https://127.0.0.1:8182"
+
+
+def test_schwab_callback_env_override(monkeypatch):
+    monkeypatch.setenv("SCHWAB_APP_KEY", "ak")
+    monkeypatch.setenv("SCHWAB_APP_SECRET", "as")
+    monkeypatch.setenv("SCHWAB_CALLBACK_URL", "https://127.0.0.1:9999/")
+    out = broker_kwargs_from_env("schwab")
+    assert out["callback_url"] == "https://127.0.0.1:9999/"
 
 
 def test_tradier_from_env(monkeypatch):

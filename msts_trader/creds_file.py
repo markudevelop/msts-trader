@@ -132,7 +132,7 @@ def broker_kwargs(broker: str, get) -> dict | None:
     if broker == "schwab":
         k, s = e("SCHWAB_APP_KEY"), e("SCHWAB_APP_SECRET")
         if k and s:
-            return {"app_key": k, "app_secret": s, "callback_url": e("SCHWAB_CALLBACK_URL") or "https://127.0.0.1:8182/"}
+            return {"app_key": k, "app_secret": s, "callback_url": e("SCHWAB_CALLBACK_URL") or "https://127.0.0.1:8182"}
         return None
     if broker == "hyperliquid":
         pk = e("HL_PRIVATE_KEY")

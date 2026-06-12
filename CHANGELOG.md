@@ -12,6 +12,42 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 _Nothing yet._
 
+## [0.11.0] — 2026-06-12
+
+### Added
+- **`rebalance --min-weight X`** (or `min_weight` in the config): CSV
+  rows with `0 < weight < X` are ignored entirely — no buy, and an
+  existing position in that ticker is left untouched (not exit-swept).
+  An explicit weight of `0` keeps its sell-it-all meaning.
+- **`rebalance --allocation X`** (or `allocation` in the config): size
+  the target weights against a fixed dollar amount instead of the full
+  account NAV — run a $50k strategy sleeve inside a $200k account.
+  Drift is measured against the allocation; capped at NAV (use
+  leveraged weights, not an oversized allocation, for gross >100%).
+  `multi` accepts a top-level `allocation` and a per-`[[account]]`
+  override.
+
+### Fixed
+- **IBKR login crashed with "There is no current event loop in thread
+  'MainThread'"** on new Python interpreters (3.12 deprecated implicit
+  event-loop creation; 3.14 removed it — exactly what `uv tool install`
+  picks up). The adapter now creates and sets an asyncio loop before
+  ib_insync needs one.
+- **Schwab OAuth callback mismatch**: the default callback URL was
+  `https://127.0.0.1:8182/` (trailing slash) while schwab-py's
+  recommended registration — and most real registrations — is
+  `https://127.0.0.1:8182`. Schwab matches the redirect URI character
+  for character, so the slash mismatch produced an error page on
+  schwab.com (or a post-authorization "token expired" failure). Default
+  is now slash-less everywhere; the login flow and README now say
+  loudly that the value must EXACTLY match the registered callback, and
+  the Schwab login-error hints explain the mismatch case.
+
+### Docs
+- Documented the optional `SCHWAB_CALLBACK_URL` and `IBKR_ACCOUNT_ID`
+  env vars / creds-file keys (both already worked); added them to
+  `examples/creds.example.json`.
+
 ## [0.10.0] — 2026-06-11
 
 ### Added

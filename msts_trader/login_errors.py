@@ -77,12 +77,28 @@ def explain_login_error(broker: str, err: Exception) -> str:
             )
 
     if broker == "schwab":
-        if "token" in low or "invalid_grant" in low or "expired" in low:
+        if "redirect" in low or "callback" in low or "mismatch" in low or "invalid_request" in low:
+            return (
+                "Schwab rejected the OAuth redirect — almost always a callback URL "
+                "mismatch.\n"
+                "The callback URL you enter at login must EXACTLY match the one "
+                "registered on your app at developer.schwab.com — character for "
+                "character, trailing slash included (https://127.0.0.1:8182 and "
+                "https://127.0.0.1:8182/ are DIFFERENT URLs to Schwab).\n"
+                "Check the app's configured callback in the Schwab portal and re-run "
+                "`msts-trader login --broker schwab` with that exact value."
+            )
+        if "token" in low or "invalid_grant" in low or "expired" in low or "timed out" in low or "timeout" in low:
             return (
                 "Schwab authorization failed or the token expired.\n"
-                "Schwab refresh tokens last 7 days. Delete "
-                "~/.msts-trader/schwab_token.json and re-run "
-                "`msts-trader login --broker schwab` to re-authorize in the browser."
+                "  - If this happened during the initial browser login (e.g. an error "
+                "page on schwab.com, or the flow never came back), the most common "
+                "cause is a callback URL that doesn't EXACTLY match the one "
+                "registered on your app — trailing slash included. Verify it at "
+                "developer.schwab.com and re-run login with the exact value.\n"
+                "  - Otherwise: Schwab refresh tokens last 7 days. Re-run "
+                "`msts-trader login --broker schwab --reauth` to re-authorize in "
+                "the browser (best on a weekend — restarts the 7-day clock)."
             )
 
     # Fallback: surface the raw error but framed.

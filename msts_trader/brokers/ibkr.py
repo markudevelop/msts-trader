@@ -20,6 +20,8 @@ overwrite with a fresh quote where available.
 """
 from __future__ import annotations
 
+import asyncio
+import warnings
 from decimal import Decimal
 from typing import Iterable
 
@@ -32,6 +34,31 @@ try:
     _IB_OK = True
 except ImportError:
     _IB_OK = False
+
+
+def _ensure_event_loop() -> None:
+    """Make sure the thread has a usable asyncio event loop for ib_insync.
+
+    ib_insync's sync API fetches the loop with `get_event_loop()`. Python
+    3.12 deprecated implicit loop creation and 3.14 removed it, so on new
+    interpreters a plain CLI invocation dies with "RuntimeError: There is
+    no current event loop in thread 'MainThread'" before we ever reach TWS.
+    """
+    try:
+        asyncio.get_running_loop()
+        return  # already inside a running loop — nothing to do
+    except RuntimeError:
+        pass
+    policy = asyncio.get_event_loop_policy()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            loop = policy.get_event_loop()
+        usable = not loop.is_closed()
+    except RuntimeError:
+        usable = False
+    if not usable:
+        asyncio.set_event_loop(policy.new_event_loop())
 
 
 class IBKR:
@@ -49,6 +76,7 @@ class IBKR:
     ):
         if not _IB_OK:
             raise BrokerError("ib_insync not installed. Run: pip install ib_insync")
+        _ensure_event_loop()
         self._ib = IB()
         try:
             self._ib.connect(host=str(host), port=int(port), clientId=int(client_id), timeout=float(timeout))

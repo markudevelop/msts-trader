@@ -11,7 +11,10 @@ One-time setup
 1. Apply for a Schwab Developer account at
    https://developer.schwab.com (approval can take days).
 2. Register an "Individual Developer" app. Set the callback URL to
-   `https://127.0.0.1:8182/` (we'll spin up a local listener at login).
+   `https://127.0.0.1:8182` (we'll spin up a local listener at login).
+   Schwab matches the callback character-for-character — the URL used
+   at login must EXACTLY equal the registered one, trailing slash
+   included.
 3. Copy the **app key** and **app secret** from the Schwab portal.
 4. Run `msts-trader login --broker schwab` — a browser window opens,
    you authorize, and the resulting token JSON is stored in your OS
@@ -49,7 +52,13 @@ class Schwab:
     supports_fractional = False  # Schwab Trader API places whole-share equity orders
     supports_moc = True  # orderType MARKET_ON_CLOSE
 
-    def __init__(self, app_key: str, app_secret: str, callback_url: str = "https://127.0.0.1:8182/", account_hash: str | None = None):
+    # No trailing slash — schwab-py's recommended registration value. Schwab
+    # rejects the OAuth redirect when this doesn't EXACTLY match the URL
+    # registered on the app (trailing slash included), so the default here
+    # must mirror what the setup instructions tell users to register.
+    DEFAULT_CALLBACK_URL = "https://127.0.0.1:8182"
+
+    def __init__(self, app_key: str, app_secret: str, callback_url: str = DEFAULT_CALLBACK_URL, account_hash: str | None = None):
         if not _SCHWAB_OK:
             raise BrokerError("schwab-py not installed. Run: pip install schwab-py")
         TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)

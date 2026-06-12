@@ -26,6 +26,8 @@ def build_preview(
     buying_power: Decimal,
     quotes: dict[str, Decimal],
     drift_threshold: Decimal = DRIFT_THRESHOLD,
+    min_weight: Decimal | None = None,
+    allocation: Decimal | None = None,
 ) -> Preview:
     warnings: list[str] = []
     blockers: list[str] = []
@@ -35,6 +37,21 @@ def build_preview(
     if nav <= 0:
         blockers.append("Account NAV is zero or negative — cannot size orders.")
         return Preview(nav=nav, buying_power=buying_power, cash=cash, rows=[], orders=[], warnings=warnings, blockers=blockers)
+
+    # Sizing base: weights apply to `allocation` dollars when given (sub-
+    # portfolio sizing — e.g. run a $50k book inside a $200k account),
+    # otherwise to the full NAV. Never above NAV: leverage should come from
+    # the weights summing past 1.0, not from an oversized allocation.
+    base = nav
+    if allocation is not None and allocation > 0:
+        if allocation > nav:
+            warnings.append(
+                f"--allocation ${allocation:,.0f} exceeds account NAV ${nav:,.2f} — using NAV. "
+                f"(Use leveraged weights, not an oversized allocation, for gross >100%.)"
+            )
+        else:
+            base = allocation
+            warnings.append(f"Sizing against ${allocation:,.0f} allocation (account NAV ${nav:,.2f}).")
 
     target_map = {t.ticker: t.weight for t in targets}
 
@@ -64,11 +81,11 @@ def build_preview(
     for t in targets:
         tkr = t.ticker
         target_w = t.weight
-        target_dollars = nav * target_w
+        target_dollars = base * target_w
         cur_pos = positions.get(tkr)
         cur_dollars = cur_pos.market_value if cur_pos else Decimal(0)
         delta_dollars = target_dollars - cur_dollars
-        current_pct = (cur_dollars / nav) if nav else Decimal(0)
+        current_pct = (cur_dollars / base) if base else Decimal(0)
 
         row = RebalanceRow(
             ticker=tkr,
@@ -78,7 +95,16 @@ def build_preview(
             order=None,
         )
 
-        if abs(delta_dollars) / nav < drift_threshold:
+        # Below min-weight → don't trade it at all. The ticker stays in
+        # target_map, so an existing position is also left alone (NOT swept
+        # by the exit-all pass) — "ignore" means neither buy nor sell.
+        # An explicit weight of 0 keeps its exit semantics.
+        if min_weight is not None and Decimal(0) < target_w < min_weight:
+            row.note = f"below min weight {min_weight} — ignored"
+            rows.append(row)
+            continue
+
+        if abs(delta_dollars) / base < drift_threshold:
             row.note = "within drift"
             rows.append(row)
             continue
@@ -123,7 +149,7 @@ def build_preview(
         if pos.quantity <= 0:  # shorts left untouched in v1
             continue
         cur_dollars = pos.market_value
-        current_pct = cur_dollars / nav if nav else Decimal(0)
+        current_pct = cur_dollars / base if base else Decimal(0)
         row = RebalanceRow(
             ticker=tkr,
             current_pct=current_pct,

@@ -147,3 +147,55 @@ def test_balances_zero_values_do_not_fall_through():
     bal = b.balances()
     assert bal.nav == Decimal("0")
     assert bal.buying_power == Decimal("0")
+
+
+# ----- event-loop bootstrap (Python 3.12+ removed implicit loop creation) -----
+
+def test_ensure_event_loop_creates_loop_when_unset():
+    # set_event_loop(None) reproduces a fresh Python 3.14 main thread:
+    # get_event_loop() raises "There is no current event loop ...".
+    import asyncio
+
+    from msts_trader.brokers.ibkr import _ensure_event_loop
+
+    asyncio.set_event_loop(None)
+    try:
+        _ensure_event_loop()
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+        assert loop is not None and not loop.is_closed()
+    finally:
+        asyncio.get_event_loop_policy().get_event_loop().close()
+        asyncio.set_event_loop(None)
+
+
+def test_ensure_event_loop_replaces_closed_loop():
+    import asyncio
+
+    from msts_trader.brokers.ibkr import _ensure_event_loop
+
+    dead = asyncio.new_event_loop()
+    asyncio.set_event_loop(dead)
+    dead.close()
+    try:
+        _ensure_event_loop()
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+        assert not loop.is_closed()
+        assert loop is not dead
+    finally:
+        asyncio.get_event_loop_policy().get_event_loop().close()
+        asyncio.set_event_loop(None)
+
+
+def test_ensure_event_loop_keeps_existing_loop():
+    import asyncio
+
+    from msts_trader.brokers.ibkr import _ensure_event_loop
+
+    existing = asyncio.new_event_loop()
+    asyncio.set_event_loop(existing)
+    try:
+        _ensure_event_loop()
+        assert asyncio.get_event_loop_policy().get_event_loop() is existing
+    finally:
+        existing.close()
+        asyncio.set_event_loop(None)
