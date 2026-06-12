@@ -962,37 +962,64 @@ def _reconcile_stops(broker, preview, results):
         return
     filled = {r.get("ticker"): r for r in results
               if r.get("status") not in ("error", "skipped", "dry-run")}
-    # 1) cancel stops on tickers we just exited/reduced
-    sold = {o.ticker for o in preview.orders if o.side.value == "SELL" and o.ticker in filled}
-    for tkr in sold:
+    # Post-trade positions: the authoritative remaining quantity per ticker.
+    try:
+        post_positions = broker.positions()
+    except Exception:
+        post_positions = {}
+
+    def _cancel_all(tkr, why):
         for stop in open_stops.get(tkr, []):
             try:
                 broker.cancel_order(stop["order_id"])
-                say(f"  stop cancelled: {tkr} (position reduced)")
+                say(f"  stop cancelled: {tkr} ({why})")
                 fill_log.append({"event": "stop_cancel", "broker": broker.name,
                                  "ticker": tkr, "order_id": stop["order_id"]})
             except Exception as e:
                 say(f"[yellow]  stop cancel failed for {tkr}: {e}[/yellow]")
-    # 2) place stops for filled BUYs that asked for one (replace any stale stop)
+
+    def _place(tkr, qty, px, stop_pct):
+        stop_price = (px * (Decimal(1) - stop_pct)).quantize(Decimal("0.01"))
+        try:
+            res = broker.place_stop(tkr, qty, stop_price)
+            say(f"  stop placed: {tkr} {qty} @ {stop_price} ({stop_pct:.1%} below ref)")
+            fill_log.append({"event": "stop_place", "broker": broker.name, **res})
+        except Exception as e:
+            say(f"[yellow]  stop place failed for {tkr}: {e}[/yellow]")
+
+    stop_pcts = {o.ticker: o.stop_pct for o in preview.orders if o.stop_pct}
+
+    # 1) SELLs: cancel existing stops; if a REMAINDER is still held and the
+    #    target wants a stop, re-place for the remaining quantity (anchored
+    #    at the current price — the original entry is gone with the trim).
+    for o in preview.orders:
+        if o.side.value != "SELL" or o.ticker not in filled:
+            continue
+        tkr = o.ticker
+        if not open_stops.get(tkr):
+            continue
+        _cancel_all(tkr, "position reduced")
+        remaining = post_positions.get(tkr)
+        pct = stop_pcts.get(tkr)
+        if remaining is not None and remaining.quantity > 0 and pct:
+            px = Decimal(str(filled[tkr].get("fill_price") or o.estimated_price
+                             or remaining.price or 0))
+            if px > 0:
+                _place(tkr, remaining.quantity, px, pct)
+
+    # 2) BUYs with stop_pct: protect the WHOLE post-trade position (an add-on
+    #    buy must not leave the pre-existing shares uncovered). Replace any
+    #    stale stop first.
     for o in preview.orders:
         if o.side.value != "BUY" or not o.stop_pct or o.ticker not in filled:
             continue
-        r = filled[o.ticker]
-        px = Decimal(str(r.get("fill_price") or o.estimated_price or 0))
+        px = Decimal(str(filled[o.ticker].get("fill_price") or o.estimated_price or 0))
         if px <= 0:
             continue
-        stop_price = (px * (Decimal(1) - o.stop_pct)).quantize(Decimal("0.01"))
-        for stale in open_stops.get(o.ticker, []):
-            try:
-                broker.cancel_order(stale["order_id"])
-            except Exception:
-                pass
-        try:
-            res = broker.place_stop(o.ticker, o.quantity, stop_price)
-            say(f"  stop placed: {o.ticker} @ {stop_price} ({o.stop_pct:.1%} below entry)")
-            fill_log.append({"event": "stop_place", "broker": broker.name, **res})
-        except Exception as e:
-            say(f"[yellow]  stop place failed for {o.ticker}: {e}[/yellow]")
+        _cancel_all(o.ticker, "replacing stale stop") if open_stops.get(o.ticker) else None
+        pos = post_positions.get(o.ticker)
+        qty = pos.quantity if pos is not None and pos.quantity > 0 else o.quantity
+        _place(o.ticker, qty, px, o.stop_pct)
 
 
 def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None) -> dict:
