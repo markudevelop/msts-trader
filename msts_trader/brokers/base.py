@@ -45,6 +45,11 @@ class Broker(Protocol):
     account_id: str
     supports_fractional: bool
     supports_moc: bool
+    # Adapters that can place/list/cancel GTC protective stop orders set
+    # supports_stops = True and implement the three stop methods below.
+    # Others leave it False (class attribute default works) — the CLI then
+    # warns once and skips stop placement instead of failing the rebalance.
+    supports_stops: bool = False
 
     def balances(self) -> Balances:
         """Net liquidating value, cash, equity buying power. Decimals throughout."""
@@ -70,3 +75,19 @@ class Broker(Protocol):
         Suggested keys: order_id, side, quantity, reason (on errors), dry_run
         """
         ...
+
+    # ---- Optional protective-stop API (supports_stops = True) ------------
+    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal,
+                   dry_run: bool = False) -> dict:
+        """Submit a GTC SELL STOP for an existing long. Same return contract
+        as place_market."""
+        raise NotImplementedError
+
+    def open_stops(self) -> dict[str, list[dict]]:
+        """Open stop orders keyed by ticker. Each item needs at least
+        {order_id, quantity, stop_price}."""
+        raise NotImplementedError
+
+    def cancel_order(self, order_id: str) -> dict:
+        """Cancel an open order by id."""
+        raise NotImplementedError

@@ -23,6 +23,7 @@ class Paper:
     name = "paper"
     supports_fractional = True
     supports_moc = True  # simulated: fills at the booked price, tagged moc
+    supports_stops = True  # simulated GTC stops, persisted in paper state
 
     def __init__(self, starting_cash: str | float | Decimal | None = None):
         if not STATE_PATH.exists():
@@ -135,6 +136,46 @@ class Paper:
             "fill_price": float(px),
             "dry_run": False,
         }
+
+    # ---- protective stops (simulated) ------------------------------------
+    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal,
+                   dry_run: bool = False) -> dict:
+        tkr = ticker.upper()
+        if dry_run:
+            return {"status": "dry-run", "ticker": tkr, "stop_price": float(stop_price), "dry_run": True}
+        s = self._load()
+        stops = dict(s.get("stop_orders", {}))
+        oid = f"paper-stop-{tkr}-{len(stops) + 1}"
+        per = list(stops.get(tkr, []))
+        per.append({"order_id": oid, "quantity": str(quantity), "stop_price": str(stop_price)})
+        stops[tkr] = per
+        s["stop_orders"] = stops
+        self._save(s)
+        return {"status": "ACCEPTED", "ticker": tkr, "order_id": oid,
+                "stop_price": float(stop_price), "quantity": float(quantity), "dry_run": False}
+
+    def open_stops(self) -> dict[str, list[dict]]:
+        s = self._load()
+        out: dict[str, list[dict]] = {}
+        for tkr, lst in s.get("stop_orders", {}).items():
+            out[tkr] = [{"order_id": o["order_id"], "quantity": Decimal(o["quantity"]),
+                         "stop_price": Decimal(o["stop_price"])} for o in lst]
+        return out
+
+    def cancel_order(self, order_id: str) -> dict:
+        s = self._load()
+        stops = dict(s.get("stop_orders", {}))
+        for tkr, lst in list(stops.items()):
+            kept = [o for o in lst if o["order_id"] != order_id]
+            if len(kept) != len(lst):
+                if kept:
+                    stops[tkr] = kept
+                else:
+                    stops.pop(tkr)
+                s["stop_orders"] = stops
+                self._save(s)
+                return {"status": "CANCELLED", "order_id": order_id}
+        return {"status": "error", "reason": "order not found", "order_id": order_id}
 
     def reset(self, starting_cash: Decimal | None = None) -> None:
         STATE_PATH.write_text(json.dumps({

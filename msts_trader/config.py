@@ -31,6 +31,7 @@ _KNOWN = {
     "max_notional", "max_stale_hours", "notify_url", "quiet", "margin_aware",
     "moc",
     "min_weight",   # ignore CSV rows with 0 < weight < this
+    "threshold_mode",  # drift denominator: "nav" (default) | "position"
     "allocation",   # dollar base the weights apply to (default: full NAV)
     "account",  # array of [[account]] tables for the `multi` command
 }

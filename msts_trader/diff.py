@@ -28,6 +28,7 @@ def build_preview(
     drift_threshold: Decimal = DRIFT_THRESHOLD,
     min_weight: Decimal | None = None,
     allocation: Decimal | None = None,
+    drift_mode: str = "nav",
 ) -> Preview:
     warnings: list[str] = []
     blockers: list[str] = []
@@ -104,7 +105,16 @@ def build_preview(
             rows.append(row)
             continue
 
-        if abs(delta_dollars) / base < drift_threshold:
+        # Drift denominator. "nav": delta as fraction of the whole book —
+        # matches the engines' own NAV-relative rebalance thresholds at full
+        # weight scale. "position": delta relative to the line itself — use
+        # for scaled/composite books (a 1.8% line can never move 4% of NAV,
+        # so nav-mode would freeze it forever).
+        if drift_mode == "position":
+            denom = max(abs(target_dollars), abs(cur_dollars), MIN_ORDER_DOLLARS)
+        else:
+            denom = base
+        if abs(delta_dollars) / denom < drift_threshold:
             row.note = "within drift"
             rows.append(row)
             continue
@@ -136,6 +146,7 @@ def build_preview(
             quantity=qty,
             estimated_price=px,
             notional=qty * px,
+            stop_pct=(t.stop_pct if side == Side.BUY else None),
         )
         row.order = order
         row.note = ""

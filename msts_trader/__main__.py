@@ -667,6 +667,10 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirm prompt (auto-execute). Required for unattended runs.")
 @click.option("--threshold", default=None, type=float, help="Drift threshold (fraction of NAV). Default 0.04.")
 @click.option("--min-weight", type=float, default=None, help="Ignore CSV rows with 0 < weight < this (e.g. 0.01): no buy, no sell, existing position left untouched.")
+@click.option("--threshold-mode", type=click.Choice(["nav", "position"]), default=None,
+              help="Drift denominator: 'nav' (default, delta vs whole book) or 'position' "
+                   "(delta vs the line itself — for scaled/composite books whose small "
+                   "lines could never move 4%% of NAV).")
 @click.option("--allocation", type=float, default=None, help="Dollar amount the weights apply to (run a sub-portfolio inside a bigger account). Default: full NAV.")
 @click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Read the target CSV from a file instead of stdin.")
 @click.option("--csv-url", default=None, help="Fetch the target CSV from a URL instead of stdin.")
@@ -688,6 +692,7 @@ def rebalance(
     yes: bool,
     threshold: float | None,
     min_weight: float | None,
+    threshold_mode: str | None,
     allocation: float | None,
     csv_file: str | None,
     csv_url: str | None,
@@ -711,6 +716,7 @@ def rebalance(
     cfg = _load_config_or_exit(config_path)
     threshold = float(config.pick(threshold, cfg, "threshold", 0.04))
     min_weight = config.pick(min_weight, cfg, "min_weight")
+    threshold_mode = config.pick(threshold_mode, cfg, "threshold_mode", "nav")
     allocation = config.pick(allocation, cfg, "allocation")
     csv_file = config.pick(csv_file, cfg, "csv_file")
     csv_url = config.pick(csv_url, cfg, "csv_url")
@@ -784,6 +790,7 @@ def rebalance(
         drift_threshold=Decimal(str(threshold)),
         min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
         allocation=Decimal(str(allocation)) if allocation is not None else None,
+        drift_mode=threshold_mode or "nav",
     )
     if margin_aware:
         _apply_margin_aware(b, preview, bal.buying_power)
@@ -929,7 +936,63 @@ def _execute(broker, preview):
     # cron runs leave a trace.
     if not _JSON:
         c.print(f"[bold]Done.[/bold] {broker.name}: sent {sent}, failed {failed}")
+    _reconcile_stops(broker, preview, results)
     return sent, failed, results
+
+
+def _reconcile_stops(broker, preview, results):
+    """Protective-stop bookkeeping, run after fills.
+
+    - BUY orders carrying stop_pct (CSV `stop_pct` column): place a GTC SELL
+      STOP at fill_price * (1 - stop_pct) for the filled quantity.
+    - Tickers we just SOLD or that left the target book: cancel their open
+      stops (a resting stop with no position would open a naked short).
+    Brokers without supports_stops: warn once if the CSV asked for stops.
+    """
+    wants_stops = any(o.stop_pct for o in preview.orders)
+    if not getattr(broker, "supports_stops", False):
+        if wants_stops:
+            say(f"[yellow]{broker.name} does not support stop orders — "
+                f"stop_pct column ignored.[/yellow]")
+        return
+    try:
+        open_stops = broker.open_stops()
+    except Exception as e:
+        say(f"[yellow]stop reconcile skipped: open_stops failed ({e})[/yellow]")
+        return
+    filled = {r.get("ticker"): r for r in results
+              if r.get("status") not in ("error", "skipped", "dry-run")}
+    # 1) cancel stops on tickers we just exited/reduced
+    sold = {o.ticker for o in preview.orders if o.side.value == "SELL" and o.ticker in filled}
+    for tkr in sold:
+        for stop in open_stops.get(tkr, []):
+            try:
+                broker.cancel_order(stop["order_id"])
+                say(f"  stop cancelled: {tkr} (position reduced)")
+                fill_log.append({"event": "stop_cancel", "broker": broker.name,
+                                 "ticker": tkr, "order_id": stop["order_id"]})
+            except Exception as e:
+                say(f"[yellow]  stop cancel failed for {tkr}: {e}[/yellow]")
+    # 2) place stops for filled BUYs that asked for one (replace any stale stop)
+    for o in preview.orders:
+        if o.side.value != "BUY" or not o.stop_pct or o.ticker not in filled:
+            continue
+        r = filled[o.ticker]
+        px = Decimal(str(r.get("fill_price") or o.estimated_price or 0))
+        if px <= 0:
+            continue
+        stop_price = (px * (Decimal(1) - o.stop_pct)).quantize(Decimal("0.01"))
+        for stale in open_stops.get(o.ticker, []):
+            try:
+                broker.cancel_order(stale["order_id"])
+            except Exception:
+                pass
+        try:
+            res = broker.place_stop(o.ticker, o.quantity, stop_price)
+            say(f"  stop placed: {o.ticker} @ {stop_price} ({o.stop_pct:.1%} below entry)")
+            fill_log.append({"event": "stop_place", "broker": broker.name, **res})
+        except Exception as e:
+            say(f"[yellow]  stop place failed for {o.ticker}: {e}[/yellow]")
 
 
 def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None) -> dict:

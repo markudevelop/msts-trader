@@ -61,8 +61,19 @@ def parse_csv(text: str) -> list[Target]:
                 f"line {i}: weight {w} for {tkr} exceeds 3.0 (300%). "
                 f"If these are percentages, divide by 100 (e.g. 31.23 -> 0.3123)."
             )
+        stop_pct = None
+        raw_stop = (norm.get("stop_pct") or "").strip()
+        if raw_stop:
+            try:
+                stop_pct = Decimal(raw_stop)
+            except InvalidOperation:
+                raise CSVParseError(f"line {i}: stop_pct {raw_stop!r} is not a number")
+            if not (Decimal("0") < stop_pct < Decimal("0.5")):
+                raise CSVParseError(
+                    f"line {i}: stop_pct {stop_pct} for {tkr} outside (0, 0.5) — "
+                    f"it is a FRACTION below entry (0.015 = 1.5%), not a price.")
         seen.add(tkr)
-        targets.append(Target(ticker=tkr, weight=w))
+        targets.append(Target(ticker=tkr, weight=w, stop_pct=stop_pct))
 
     if not targets:
         raise CSVParseError("no targets parsed (all rows blank?)")

@@ -1,0 +1,30 @@
+# PNL Unified — lane 1 of the two-lane execution (Core + Apex composite).
+#
+# WHY TWO LANES: the unified product has three engines, but they do not share
+# execution semantics. Core and Apex are pure daily close-to-close books —
+# fully expressible as target weights (this lane). Hydra's edge depends on
+# intraday 1.5%-stop exits and per-entry stop prices; it runs through its
+# purpose-built runner in msts-live (lane 2) with its own stop book, in its
+# own account/ledger. Merging the books would put stops on commingled lines —
+# semantically wrong, not just inconvenient.
+#
+# Lane 1 (this file):
+#   msts-trader rebalance --config examples/pnl-unified.toml --yes
+#
+# CSV is produced daily by msts-live:
+#   python tools/export_unified_weights.py     (writes docs/data/pnl_unified_weights.csv)
+
+broker = "tastytrade"           # fractional shares required for the small lines
+
+# Drift relative to each LINE, not the whole book: the composite halves the
+# engines' native weight scale, so their 4%-of-NAV threshold becomes ~4%-of-
+# position here. nav-mode at 0.04 would freeze every line under 4% of NAV.
+threshold = 0.04
+threshold_mode = "position"
+
+# csv_url = "https://<your-pages-host>/data/pnl_unified_weights.csv"
+csv_file = "../msts-live/docs/data/pnl_unified_weights.csv"
+
+max_stale_hours = 30            # refuse to trade weights older than a day
+margin_aware = true             # scale into available buying power
+# max_notional = 60000          # optional per-run safety cap

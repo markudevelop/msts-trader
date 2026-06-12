@@ -14,6 +14,10 @@ class Side(str, Enum):
 class Target:
     ticker: str
     weight: Decimal
+    # Optional protective stop, fraction below entry (e.g. 0.015 = 1.5%).
+    # After a BUY fills, a GTC stop order is placed at fill * (1 - stop_pct)
+    # on brokers with supports_stops; reconciled on every rebalance.
+    stop_pct: Decimal | None = None
 
 
 @dataclass
@@ -38,6 +42,8 @@ class Order:
     # Only honoured by brokers with supports_moc = True; exchanges stop
     # accepting MOC around 15:50 ET.
     moc: bool = False
+    # Protective stop to attach after this BUY fills (fraction below entry).
+    stop_pct: Decimal | None = None
 
 
 @dataclass
