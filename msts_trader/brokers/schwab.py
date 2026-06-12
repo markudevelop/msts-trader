@@ -51,6 +51,7 @@ class Schwab:
     name = "schwab"
     supports_fractional = False  # Schwab Trader API places whole-share equity orders
     supports_moc = True  # orderType MARKET_ON_CLOSE
+    supports_stops = True  # GTC sell stop via schwab-py order spec
 
     # No trailing slash — schwab-py's recommended registration value. Schwab
     # rejects the OAuth redirect when this doesn't EXACTLY match the URL
@@ -187,3 +188,56 @@ def clear_token() -> None:
         TOKEN_PATH.unlink()
     except FileNotFoundError:
         pass
+
+    # ---- protective stops -------------------------------------------------
+    def place_stop(self, ticker: str, quantity, stop_price, dry_run: bool = False) -> dict:
+        qty = int(quantity)
+        if qty <= 0:
+            return {"status": "skipped", "reason": "whole-share qty rounds to 0", "ticker": ticker}
+        if dry_run:
+            return {"status": "dry-run", "ticker": ticker, "stop_price": float(stop_price), "dry_run": True}
+        from schwab.orders.common import Duration, OrderType as SOT  # type: ignore
+        spec = (equity_sell_market(ticker, qty)
+                .set_order_type(SOT.STOP)
+                .set_stop_price(f"{float(stop_price):.2f}")
+                .set_duration(Duration.GOOD_TILL_CANCEL))
+        try:
+            resp = self._client.place_order(self._account_hash, spec.build())
+            resp.raise_for_status()
+            oid = (resp.headers.get("Location") or "").rstrip("/").split("/")[-1]
+            return {"status": "submitted", "ticker": ticker, "order_id": oid,
+                    "quantity": qty, "stop_price": float(stop_price), "dry_run": False}
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "ticker": ticker}
+
+    def open_stops(self) -> dict:
+        out: dict = {}
+        try:
+            from schwab.client import Client  # type: ignore
+            resp = self._client.get_orders_for_account(
+                self._account_hash, status=Client.Order.Status.WORKING)
+            resp.raise_for_status()
+            orders = resp.json()
+        except Exception:
+            return out
+        for o in orders or []:
+            if str(o.get("orderType", "")).upper() != "STOP":
+                continue
+            for leg in o.get("orderLegCollection", []):
+                sym = (leg.get("instrument") or {}).get("symbol")
+                if not sym:
+                    continue
+                out.setdefault(sym, []).append({
+                    "order_id": str(o.get("orderId")),
+                    "quantity": Decimal(str(leg.get("quantity", 0))),
+                    "stop_price": Decimal(str(o.get("stopPrice", 0) or 0)),
+                })
+        return out
+
+    def cancel_order(self, order_id) -> dict:
+        try:
+            resp = self._client.cancel_order(order_id, self._account_hash)
+            resp.raise_for_status()
+            return {"status": "CANCELLED", "order_id": order_id}
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "order_id": order_id}

@@ -30,6 +30,7 @@ class Tradier:
     name = "tradier"
     supports_fractional = False
     supports_moc = False  # Tradier's API has no closing-auction order type
+    supports_stops = True  # GTC sell stop via type=stop
 
     def __init__(self, access_token: str, account_id: str | None = None, sandbox: bool = False, timeout: float = 20.0):
         if not access_token:
@@ -184,3 +185,52 @@ class Tradier:
             "order_id": str(o.get("id")) if o.get("id") is not None else None,
             "dry_run": False,
         }
+
+    # ---- protective stops -------------------------------------------------
+    def place_stop(self, ticker: str, quantity, stop_price, dry_run: bool = False) -> dict:
+        qty = int(quantity)
+        if qty <= 0:
+            return {"status": "skipped", "reason": "whole-share qty rounds to 0", "ticker": ticker}
+        params = {
+            "class": "equity", "symbol": ticker, "side": "sell",
+            "quantity": qty, "type": "stop", "duration": "gtc",
+            "stop": f"{float(stop_price):.2f}",
+        }
+        if dry_run:
+            return {"status": "dry-run", "ticker": ticker, "stop_price": float(stop_price), "dry_run": True}
+        resp = self._request("POST", f"/v1/accounts/{self.account_id}/orders", params)
+        o = resp.get("order") or {}
+        return {"status": str(o.get("status") or "submitted"), "ticker": ticker,
+                "order_id": str(o.get("id", "")), "quantity": qty,
+                "stop_price": float(stop_price), "dry_run": False}
+
+    def open_stops(self) -> dict:
+        resp = self._request("GET", f"/v1/accounts/{self.account_id}/orders", None)
+        raw = (resp.get("orders") or {})
+        items = raw.get("order") if isinstance(raw, dict) else None
+        if items is None:
+            return {}
+        if isinstance(items, dict):
+            items = [items]
+        out: dict = {}
+        for o in items:
+            if str(o.get("type", "")).lower() != "stop":
+                continue
+            if str(o.get("status", "")).lower() not in ("open", "pending", "partially_filled"):
+                continue
+            tkr = o.get("symbol")
+            if not tkr:
+                continue
+            out.setdefault(tkr, []).append({
+                "order_id": str(o.get("id")),
+                "quantity": Decimal(str(o.get("quantity", 0))),
+                "stop_price": Decimal(str(o.get("stop_price", 0) or 0)),
+            })
+        return out
+
+    def cancel_order(self, order_id) -> dict:
+        try:
+            self._request("DELETE", f"/v1/accounts/{self.account_id}/orders/{order_id}", None)
+            return {"status": "CANCELLED", "order_id": order_id}
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "order_id": order_id}
