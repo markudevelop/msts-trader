@@ -10,6 +10,23 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-06-13
+
+### Added
+- **Stop adapters for Tradier, IBKR, and Schwab** — `supports_stops` is now
+  implemented on 6 of 7 brokers (paper, tastytrade, alpaca, tradier, ibkr,
+  schwab). Each places a GTC SELL STOP, lists open stops, and cancels by id:
+  Tradier via `type=stop` REST, IBKR via `ib_insync.StopOrder`, Schwab via
+  the schwab-py STOP order spec. All whole-share (fractional stop quantity
+  rounds DOWN — the residual fraction stays unprotected rather than
+  over-selling). Hyperliquid stays unsupported by design (perps use
+  trigger-order semantics; the equity weights CSV never routes there).
+  These are SDK-pattern implementations — validate each with a 1-share stop
+  before relying on it live.
+- **`examples/pnl-unified.toml`** documents copy-trading the full Unified
+  composite from a `ticker,weight,stop_pct` CSV (hydra slots carry the
+  1.5%-below-entry stop policy; commingled core/apex lines do not).
+
 ## [0.13.0] — 2026-06-12
 
 ### Added
