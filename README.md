@@ -5,7 +5,8 @@ brokerage account. Multi-broker, local-only, no key custody.
 
 7 brokers (Tastytrade, Alpaca, Tradier, IBKR, Schwab, Hyperliquid, paper),
 leverage + margin-aware sizing (real broker margin, on by default),
-sells-before-buys, multi-account, headless (cron / GitHub Actions),
+sells-before-buys, optional protective stops (`stop_pct` column, 6/7
+brokers), multi-account, headless (cron / GitHub Actions),
 notifications, idempotency, and a `--json` API. Licensed PolyForm
 Noncommercial.
 
@@ -245,11 +246,11 @@ command with `--broker NAME`, or change the default by logging in again.
    build your own:
 
    ```csv
-   ticker,weight
-   SPY,0.42
-   GLD,0.18
-   EEM,0.20
-   SHV,0.20
+   ticker,weight,stop_pct
+   SPY,0.42,
+   GLD,0.18,0.05
+   EEM,0.20,
+   SHV,0.20,
    ```
 
    - `weight` is a fraction of NAV (e.g. `0.42` = 42%), not a percent.
@@ -257,6 +258,8 @@ command with `--broker NAME`, or change the default by logging in again.
      (e.g. `1.60` = 160% gross, financed on margin — see
      [Leveraged weights](#leveraged-weights)).
    - No shorts: negative weights are rejected.
+   - `stop_pct` is **optional** — a protective-stop column. See
+     [Protective stops](#protective-stops).
    - Comments starting with `#` are ignored (and `# asof: <iso>` enables
      the stale-CSV guard).
 
@@ -469,6 +472,35 @@ summary at the end. `multi` never prompts — `--yes` is required to
 execute, `--dry-run` to preview. See
 [`examples/multi-account.toml`](examples/multi-account.toml).
 
+## Protective stops
+
+Add an optional **`stop_pct`** column to the CSV and msts-trader places a
+GTC SELL STOP under each position it buys:
+
+```csv
+ticker,weight,stop_pct
+SPY,0.42,
+GLD,0.18,0.05
+WGMI,0.02,0.015
+```
+
+- `stop_pct` is a **fraction below the fill price**, not a price:
+  `0.05` = 5%, `0.015` = 1.5%. Must be in `(0, 0.5)`; a blank cell means
+  no stop.
+- After a BUY fills, a GTC SELL STOP is placed for the filled quantity at
+  `fill_price × (1 − stop_pct)`.
+- Stops are **reconciled every rebalance**: on a SELL the existing stop is
+  cancelled (and re-placed on the remaining quantity if you still hold
+  some and the target still wants a stop), so a resting stop never outlives
+  its position and turns into a naked short.
+- Supported on **6 of 7 brokers** — Tastytrade, Alpaca, Tradier, IBKR,
+  Schwab, and paper. **Hyperliquid** has no stop support: the column is
+  ignored with a one-time warning, weights still execute. Verify a broker
+  honors stops with a 1-share test before relying on it.
+
+See [`examples/pnl-unified.toml`](examples/pnl-unified.toml) for a full
+copy-trade + stop setup.
+
 ## Leveraged weights
 
 Target weights are fractions of your account NAV. They **can sum to more
@@ -535,7 +567,9 @@ Two things to know for a **fresh account**:
   09:30–16:00 ET (crypto via Hyperliquid trades 24/7).
 - Shorting. Negative weights are rejected.
 - Options or futures.
-- Active stop management (Hydra/Fusion-style watchers).
+- Active stop *management* (Hydra/Fusion-style trailing watchers). Static
+  protective stops **are** supported via the `stop_pct` CSV column — see
+  [Protective stops](#protective-stops).
 - Scheduling itself (use cron / GitHub Actions — see
   [Headless](#headless--automated-cron-github-actions)).
 
