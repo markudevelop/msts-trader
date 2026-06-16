@@ -29,11 +29,19 @@ def build_preview(
     min_weight: Decimal | None = None,
     allocation: Decimal | None = None,
     drift_mode: str = "nav",
+    whole_shares: bool = False,
 ) -> Preview:
     warnings: list[str] = []
     blockers: list[str] = []
     rows: list[RebalanceRow] = []
     orders: list[Order] = []
+
+    # Quantity precision: whole shares (for brokers/accounts without
+    # fractional-API permission — e.g. an IBKR account that rejects fractional
+    # orders with error 10243) vs the default 0.01-share granularity. Always
+    # rounds DOWN so a buy never exceeds its target and a sell never exceeds
+    # the held quantity.
+    qexp = Decimal("1") if whole_shares else Decimal("0.01")
 
     if nav <= 0:
         blockers.append("Account NAV is zero or negative — cannot size orders.")
@@ -134,9 +142,9 @@ def build_preview(
         side = Side.BUY if delta_dollars > 0 else Side.SELL
         # Round DOWN: never let share rounding push a buy above its target,
         # so a fully-invested book doesn't spuriously exceed buying power.
-        qty = (abs(delta_dollars) / px).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        qty = (abs(delta_dollars) / px).quantize(qexp, rounding=ROUND_DOWN)
         if qty <= 0:
-            row.note = "qty rounds to 0"
+            row.note = "qty rounds to 0 (whole-share)" if whole_shares else "qty rounds to 0"
             rows.append(row)
             continue
 
@@ -169,7 +177,10 @@ def build_preview(
             order=None,
             note="exit (not in targets)",
         )
-        qty = pos.quantity.quantize(Decimal("0.01"))
+        # Whole-share exits round DOWN — never try to sell more than is held
+        # (a fractional residual on a whole-share-only account stays put; the
+        # broker couldn't sell it anyway).
+        qty = pos.quantity.quantize(qexp, rounding=ROUND_DOWN) if whole_shares else pos.quantity.quantize(Decimal("0.01"))
         if qty > 0:
             order = Order(
                 ticker=tkr,
@@ -208,6 +219,7 @@ def apply_margin_aware(
     real_margin: Decimal | None = None,
     bp_safety: Decimal = BP_SAFETY,
     add_warning: bool = True,
+    whole_shares: bool = False,
 ) -> Decimal:
     """Scale all BUY orders by one factor so the book fits buying power.
 
@@ -247,10 +259,11 @@ def apply_margin_aware(
         return Decimal(1)  # already fits — nothing to scale
 
     scale = (available * bp_safety) / need
+    qexp = Decimal("1") if whole_shares else Decimal("0.01")
     kept: list[Order] = []
     for o in preview.orders:
         if o.side == Side.BUY:
-            o.quantity = (o.quantity * scale).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+            o.quantity = (o.quantity * scale).quantize(qexp, rounding=ROUND_DOWN)
             o.notional = o.quantity * (o.estimated_price or Decimal(0))
             if o.quantity <= 0:
                 continue

@@ -294,6 +294,14 @@ msts-trader --broker paper rebalance --csv-file ...   # test against paper
   the CLI refuses rather than silently downgrading). MOC orders are
   whole-share only, and exchanges stop accepting them around **15:50 ET**,
   so submit before then. Also available as `moc = true` in the config file.
+- **`--whole-shares`:** round every order *down* to whole shares (buys never
+  exceed target, sells never exceed the held quantity). Use it for an IBKR
+  account — or any broker/account — without fractional-trading permission on
+  the API, which otherwise rejects fractional orders with **error 10243**
+  ("Fractional-sized order cannot be placed via API"). Applied before the
+  preview, so what you see is exactly what's sent (and margin-aware scaling
+  re-rounds to whole shares too). Also available as `whole_shares = true` in
+  the config file.
 - **`--min-weight`:** rows with `0 < weight < min-weight` are ignored
   entirely — no buy, and an existing position in that ticker is *not*
   exit-swept either. An explicit weight of `0` still means "sell it all".
@@ -348,6 +356,7 @@ telegram_token = "123456:ABC-DEF..."   # optional, instead of MSTS_TELEGRAM_TOKE
 telegram_chat_id = "987654321"          # optional, instead of MSTS_TELEGRAM_CHAT_ID
 margin_aware = true   # default; set false to disable buying-power-fit scaling
 moc = false           # set true to always use market-on-close orders
+whole_shares = false  # set true to round every order to whole shares (IBKR/no-fractional accounts)
 min_weight = 0.01     # ignore CSV rows with weight under 1%
 allocation = 50000    # weights apply to $50k instead of full NAV
 quiet = false

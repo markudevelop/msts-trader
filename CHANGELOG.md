@@ -10,6 +10,30 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-06-16
+
+### Added
+- **`--whole-shares` flag (and `whole_shares` config key)** — rounds every
+  order *down* to whole shares. For an IBKR account (or any broker/account)
+  without fractional-trading permission on the API, which otherwise rejects
+  fractional orders with **error 10243** ("Fractional-sized order cannot be
+  placed via API. Please use desktop version"). Rounding happens in the
+  preview engine, so the preview, the `--max-notional` cap, and margin-aware
+  scaling all operate on the real integer quantities — what you preview is
+  exactly what's sent. Buys round down (never exceed target), exits round down
+  (never try to sell more than held), and margin-aware re-rounds after scaling
+  so it can't reintroduce a fraction. Available per-account in `multi` via the
+  config key. Default off (fractional preserved, unchanged behaviour).
+
+### Changed
+- **Whole-share sizing is now automatic for brokers that can't place
+  fractional equity orders** (`supports_fractional = False` — Schwab and
+  Tradier). They already truncated to whole shares at submit, so their
+  *preview* over-reported quantities, notional, and the `--max-notional`
+  cap vs. what was actually sent. The preview now sizes to whole shares for
+  these brokers (a one-line note says so), making preview == execution. No
+  change to the orders themselves, and fractional brokers are unaffected.
+
 ## [0.15.1] — 2026-06-16
 
 ### Fixed

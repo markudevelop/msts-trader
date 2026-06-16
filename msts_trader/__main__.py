@@ -196,7 +196,7 @@ def _fetch_url_or_exit(url: str) -> str:
         sys.exit(1)
 
 
-def _apply_margin_aware(broker, preview, buying_power, max_passes: int = 3) -> None:
+def _apply_margin_aware(broker, preview, buying_power, max_passes: int = 3, whole_shares: bool = False) -> None:
     """Scale buys to fit buying power, using the broker's REAL margin when it
     exposes it (Tastytrade / IBKR / Tradier), else the notional approximation.
 
@@ -235,7 +235,7 @@ def _apply_margin_aware(broker, preview, buying_power, max_passes: int = 3) -> N
             except Exception:
                 real = None
         used_real = used_real or real is not None
-        scale = apply_margin_aware(preview, buying_power=buying_power, real_margin=real, add_warning=False)
+        scale = apply_margin_aware(preview, buying_power=buying_power, real_margin=real, add_warning=False, whole_shares=whole_shares)
         passes += 1
         cumulative *= scale
         # Notional (real is None) is exact in one pass; stop once nothing scales.
@@ -697,6 +697,7 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 @click.option("--notify-url", default=None, help="Webhook (Discord/Slack/generic) to ping on execute.")
 @click.option("--margin-aware/--no-margin-aware", default=None, help="Scale buys to fit buying power (weight-preserving). On by default; --no-margin-aware to disable.")
 @click.option("--moc", is_flag=True, default=None, help="Submit market-on-close orders (fill in the closing auction). Alpaca / IBKR / Schwab / paper; whole shares; submit before ~15:50 ET.")
+@click.option("--whole-shares", is_flag=True, default=None, help="Round every order down to whole shares. Use for IBKR/accounts without fractional-API permission (avoids error 10243 'fractional order cannot be placed via API').")
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON instead of tables.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output (for cron logs).")
@@ -719,6 +720,7 @@ def rebalance(
     notify_url: str | None,
     margin_aware: bool | None,
     moc: bool | None,
+    whole_shares: bool | None,
     force: bool,
     json_out: bool,
     quiet: bool,
@@ -744,6 +746,7 @@ def rebalance(
     tg_chat = config.pick(None, cfg, "telegram_chat_id")
     margin_aware = bool(config.pick(margin_aware, cfg, "margin_aware", True))
     moc = bool(config.pick(True if moc else None, cfg, "moc", False))
+    whole_shares = bool(config.pick(True if whole_shares else None, cfg, "whole_shares", False))
     quiet = bool(config.pick(True if quiet else None, cfg, "quiet", False))
 
     global _QUIET, _JSON
@@ -787,6 +790,13 @@ def rebalance(
     say(f"[green]✓ loaded {len(targets)} targets.[/green]")
 
     b = _load_broker(broker)
+    # Brokers that can't place fractional equity orders (Schwab, Tradier)
+    # already truncate to whole shares at submit — so force whole-share sizing
+    # in the preview too, otherwise the preview / notional / --max-notional cap
+    # would over-report vs. what actually gets sent.
+    if not getattr(b, "supports_fractional", True) and not whole_shares:
+        whole_shares = True
+        say(f"[dim]{b.name} places whole-share equity orders — sizing to whole shares.[/dim]")
     if moc:
         if not getattr(b, "supports_moc", False):
             _fail(f"{b.name} does not support market-on-close orders (MOC works on: alpaca, ibkr, schwab, paper).")
@@ -809,9 +819,10 @@ def rebalance(
         min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
         allocation=Decimal(str(allocation)) if allocation is not None else None,
         drift_mode=threshold_mode or "nav",
+        whole_shares=whole_shares,
     )
     if margin_aware:
-        _apply_margin_aware(b, preview, bal.buying_power)
+        _apply_margin_aware(b, preview, bal.buying_power, whole_shares=whole_shares)
     if moc:
         for o in preview.orders:
             o.moc = True
@@ -1047,7 +1058,7 @@ def _reconcile_stops(broker, preview, results):
         _place(o.ticker, qty, px, o.stop_pct)
 
 
-def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None) -> dict:
+def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None, whole_shares: bool = False) -> dict:
     """Run the full rebalance pipeline for one already-built broker.
 
     No interactive prompts, no rich rendering — returns a result dict.
@@ -1055,6 +1066,8 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
     the same `_execute` (single-submit, no order retry) and idempotency
     rules as the interactive `rebalance`.
     """
+    # Whole-share brokers truncate at submit; size the preview to match.
+    whole_shares = whole_shares or not getattr(b, "supports_fractional", True)
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
     universe = sorted({t.ticker for t in targets} | set(pos.keys()))
@@ -1068,9 +1081,10 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
         drift_threshold=Decimal(str(threshold)),
         min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
         allocation=Decimal(str(allocation)) if allocation is not None else None,
+        whole_shares=whole_shares,
     )
     if margin_aware:
-        _apply_margin_aware(b, preview, bal.buying_power)
+        _apply_margin_aware(b, preview, bal.buying_power, whole_shares=whole_shares)
     cap = safety.check_max_notional(preview.orders, Decimal(str(max_notional)) if max_notional else None)
     if cap:
         preview.blockers.append(cap)
@@ -1136,6 +1150,7 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
     notify_url = cfg.get("notify_url")
     tg_token = cfg.get("telegram_token")
     tg_chat = cfg.get("telegram_chat_id")
+    whole_shares = bool(cfg.get("whole_shares", False))
     margin_aware = bool(config.pick(margin_aware, cfg, "margin_aware", True))
     csv_file = csv_file or cfg.get("csv_file")
     csv_url = csv_url or cfg.get("csv_url")
@@ -1187,6 +1202,7 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
                 b, targets, threshold=threshold, max_notional=max_notional, dry_run=dry_run,
                 force=force, margin_aware=margin_aware, min_weight=min_weight,
                 allocation=acct.get("allocation", allocation_default),
+                whole_shares=acct.get("whole_shares", whole_shares),
             )
         except Exception as e:
             r = {"broker": broker, "status": "error", "reason": str(e)}

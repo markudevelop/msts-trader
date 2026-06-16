@@ -497,3 +497,72 @@ def test_allocation_above_nav_falls_back_to_nav():
     # sized against NAV: 25k @ 500 = 50 sh, and a warning explains why
     assert p.orders[0].quantity == Decimal("50.00")
     assert any("exceeds account NAV" in w for w in p.warnings)
+
+
+# ----- whole-share mode (IBKR/accounts without fractional-API permission) -----
+
+def test_whole_shares_rounds_buy_down(basic_targets, empty_positions, basic_quotes):
+    # SHV 0.50 * 50k = 25k @ 110 = 227.27 sh -> 227 whole shares (rounds DOWN)
+    p = build_preview(
+        targets=basic_targets, positions=empty_positions, nav=_nav(),
+        cash=_nav(), buying_power=_nav(), quotes=basic_quotes, whole_shares=True,
+    )
+    by_t = {o.ticker: o for o in p.orders}
+    assert by_t["SPY"].quantity == Decimal("50")     # already whole
+    assert by_t["SHV"].quantity == Decimal("227")    # 227.27 truncated
+    # every order quantity is integral
+    assert all(o.quantity == o.quantity.to_integral_value() for o in p.orders)
+
+
+def test_whole_shares_off_keeps_fraction(basic_targets, empty_positions, basic_quotes):
+    p = build_preview(
+        targets=basic_targets, positions=empty_positions, nav=_nav(),
+        cash=_nav(), buying_power=_nav(), quotes=basic_quotes,  # default: fractional allowed
+    )
+    by_t = {o.ticker: o for o in p.orders}
+    assert by_t["SHV"].quantity == Decimal("227.27")
+
+
+def test_whole_shares_rounds_exit_down():
+    # Position not in targets -> full exit; fractional holding rounds DOWN so we
+    # never try to sell more than a whole-share broker can handle.
+    targets = [Target(ticker="SPY", weight=Decimal("1.0"))]
+    positions = {
+        "SPY": Position(ticker="SPY", quantity=Decimal("10"), price=Decimal("500")),
+        "GLD": Position(ticker="GLD", quantity=Decimal("5.6"), price=Decimal("200")),  # exit
+    }
+    p = build_preview(
+        targets=targets, positions=positions, nav=Decimal("50000"),
+        cash=Decimal("0"), buying_power=Decimal("0"),
+        quotes={"SPY": Decimal("500"), "GLD": Decimal("200")}, whole_shares=True,
+    )
+    gld = next(o for o in p.orders if o.ticker == "GLD")
+    assert gld.side == Side.SELL and gld.quantity == Decimal("5")  # 5.6 -> 5
+
+
+def test_whole_shares_buy_rounding_to_zero_is_skipped():
+    # Delta clears the 4% drift threshold ($2500 = 5% of NAV) but the high
+    # share price means it buys < 1 whole share -> dropped cleanly with a
+    # whole-share note (not a fractional 0.83-share order IBKR would reject).
+    targets = [Target(ticker="BRKA", weight=Decimal("0.05"))]  # 0.05 * 50k = $2500
+    p = build_preview(
+        targets=targets, positions={}, nav=Decimal("50000"),
+        cash=Decimal("50000"), buying_power=Decimal("50000"),
+        quotes={"BRKA": Decimal("3000")},  # $2500 / 3000 = 0.83 sh -> 0 whole
+        whole_shares=True,
+    )
+    assert p.orders == []
+    assert any("whole-share" in (r.note or "") for r in p.rows)
+
+
+def test_whole_shares_margin_aware_rerounds_to_integer():
+    from msts_trader.diff import apply_margin_aware
+    targets = [Target(ticker="SPY", weight=Decimal("1.0"))]
+    p = build_preview(
+        targets=targets, positions={}, nav=Decimal("100000"),
+        cash=Decimal("100000"), buying_power=Decimal("60000"),  # can't afford full 200 sh
+        quotes={"SPY": Decimal("500")}, whole_shares=True,
+    )
+    apply_margin_aware(p, buying_power=Decimal("60000"), whole_shares=True)
+    spy = next(o for o in p.orders if o.ticker == "SPY")
+    assert spy.quantity == spy.quantity.to_integral_value()  # scaling kept it whole

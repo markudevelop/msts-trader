@@ -267,3 +267,86 @@ def test_paper_reset_clears_book(tmp_path, monkeypatch):
     r = runner.invoke(main, ["paper-reset"])
     assert r.exit_code == 0
     assert "paper book reset" in r.output.lower()
+
+
+def test_rebalance_whole_shares_rounds_quantities(tmp_path, monkeypatch):
+    """--whole-shares must make every order quantity integral (the fix for
+    IBKR error 10243 'fractional order cannot be placed via API')."""
+    import json as _json
+    from decimal import Decimal
+
+    from msts_trader.brokers import paper
+
+    monkeypatch.setattr(paper, "STATE_PATH", tmp_path / "paper_state.json")
+    monkeypatch.setenv("PAPER_STARTING_CASH", "50000")  # satisfies headless creds resolution
+    p = paper.Paper(starting_cash="50000")
+    p.set_quote("SPY", Decimal("500"))
+    p.set_quote("SHV", Decimal("110"))
+
+    csv = tmp_path / "t.csv"
+    csv.write_text("ticker,weight\nSPY,0.6\nSHV,0.4\n")  # SHV 20000/110 = 181.81 sh
+
+    r = CliRunner().invoke(
+        main,
+        ["--broker", "paper", "rebalance", "--whole-shares", "--dry-run", "--json", "--csv-file", str(csv)],
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.output.strip().splitlines()[-1])
+    qtys = {o["ticker"]: Decimal(o["quantity"]) for o in payload["orders"]}
+    assert qtys["SHV"] == Decimal("181")  # 181.81 truncated to whole shares
+    assert all(q == q.to_integral_value() for q in qtys.values())
+
+
+def test_rebalance_without_whole_shares_allows_fraction(tmp_path, monkeypatch):
+    import json as _json
+    from decimal import Decimal
+
+    from msts_trader.brokers import paper
+
+    monkeypatch.setattr(paper, "STATE_PATH", tmp_path / "paper_state.json")
+    monkeypatch.setenv("PAPER_STARTING_CASH", "50000")  # satisfies headless creds resolution
+    p = paper.Paper(starting_cash="50000")
+    p.set_quote("SPY", Decimal("500"))
+    p.set_quote("SHV", Decimal("110"))
+
+    csv = tmp_path / "t.csv"
+    csv.write_text("ticker,weight\nSPY,0.6\nSHV,0.4\n")
+
+    r = CliRunner().invoke(
+        main, ["--broker", "paper", "rebalance", "--dry-run", "--json", "--csv-file", str(csv)],
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.output.strip().splitlines()[-1])
+    qtys = {o["ticker"]: Decimal(o["quantity"]) for o in payload["orders"]}
+    assert qtys["SHV"] == Decimal("181.81")  # fractional preserved by default
+
+
+def test_rebalance_auto_whole_shares_for_nonfractional_broker(tmp_path, monkeypatch):
+    """A broker with supports_fractional=False (e.g. Schwab/Tradier) must size
+    the preview to whole shares automatically — it truncates at submit anyway,
+    so the preview must match what's actually sent."""
+    import json as _json
+    from decimal import Decimal
+
+    from msts_trader.brokers import paper
+
+    monkeypatch.setattr(paper, "STATE_PATH", tmp_path / "paper_state.json")
+    monkeypatch.setenv("PAPER_STARTING_CASH", "50000")
+    p = paper.Paper(starting_cash="50000")
+    p.set_quote("SPY", Decimal("500"))
+    p.set_quote("SHV", Decimal("110"))
+    # Flip the loaded paper broker to look like a whole-share-only broker.
+    monkeypatch.setattr(paper.Paper, "supports_fractional", False, raising=False)
+
+    csv = tmp_path / "t.csv"
+    csv.write_text("ticker,weight\nSPY,0.6\nSHV,0.4\n")
+
+    r = CliRunner().invoke(
+        main,  # no --whole-shares flag — must auto-engage from the capability
+        ["--broker", "paper", "rebalance", "--dry-run", "--json", "--csv-file", str(csv)],
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.output.strip().splitlines()[-1])
+    qtys = {o["ticker"]: Decimal(o["quantity"]) for o in payload["orders"]}
+    assert qtys["SHV"] == Decimal("181")  # auto-rounded despite no flag
+    assert all(q == q.to_integral_value() for q in qtys.values())
