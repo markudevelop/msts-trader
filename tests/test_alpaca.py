@@ -145,3 +145,54 @@ def test_place_market_missing_order_id_is_none():
     b._client = SimpleNamespace(submit_order=lambda req: SimpleNamespace(status="accepted", id=None))
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
     assert r["order_id"] is None
+
+
+# ----- protective stops (regression: keep these methods bound + correct) -----
+
+def test_place_stop_submits_gtc_sell_stop():
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    captured = {}
+    b = _broker()
+    b._client = SimpleNamespace(
+        submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="ord-1"))
+    r = b.place_stop("SPY", Decimal("10.9"), Decimal("480.25"))
+    assert r["status"] == "accepted" and r["order_id"] == "ord-1" and r["quantity"] == 10.0
+    req = captured["req"]
+    assert req.symbol == "SPY" and int(req.qty) == 10
+    assert req.side == OrderSide.SELL and req.time_in_force == TimeInForce.GTC
+    assert req.stop_price == 480.25
+
+
+def test_place_stop_sub_share_skips():
+    r = _broker().place_stop("SPY", Decimal("0.4"), Decimal("480"))
+    assert r["status"] == "skipped" and "whole-share" in r["reason"]
+
+
+def test_place_stop_error_wrapped():
+    b = _broker()
+    b._client = SimpleNamespace(
+        submit_order=lambda req: (_ for _ in ()).throw(RuntimeError("422 potential wash trade")))
+    r = b.place_stop("SPY", Decimal("5"), Decimal("480"))
+    assert r["status"] == "error" and "422" in r["reason"]
+
+
+def test_open_stops_filters_to_stop_orders():
+    orders = [
+        SimpleNamespace(order_type="stop", symbol="SPY", id="o1", qty="10", stop_price="475"),
+        SimpleNamespace(order_type="market", symbol="QQQ", id="o2", qty="5", stop_price=None),  # not a stop
+    ]
+    b = _broker()
+    b._client = SimpleNamespace(get_orders=lambda req: orders)
+    out = b.open_stops()
+    assert set(out) == {"SPY"}
+    assert out["SPY"][0]["order_id"] == "o1" and out["SPY"][0]["stop_price"] == Decimal("475")
+
+
+def test_cancel_order_ok_and_error():
+    b = _broker()
+    b._client = SimpleNamespace(cancel_order_by_id=lambda oid: None)
+    assert b.cancel_order("o1")["status"] == "CANCELLED"
+    b._client = SimpleNamespace(
+        cancel_order_by_id=lambda oid: (_ for _ in ()).throw(RuntimeError("404 not found")))
+    r = b.cancel_order("o1")
+    assert r["status"] == "error" and "404" in r["reason"]

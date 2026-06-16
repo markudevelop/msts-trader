@@ -53,6 +53,40 @@ def test_moc_support_matrix():
 
 
 @pytest.mark.parametrize("name", SUPPORTED)
+def test_supports_stops_is_bool(name):
+    cls = _broker_classes()[name]
+    assert hasattr(cls, "supports_stops")
+    assert isinstance(cls.supports_stops, bool)
+
+
+STOP_METHODS = ("place_stop", "open_stops", "cancel_order")
+
+
+@pytest.mark.parametrize("name", SUPPORTED)
+def test_supports_stops_implies_methods_bound(name):
+    """Regression guard for the 0.13/0.14 bug: IBKR's *and* Schwab's stop
+    methods were mis-indented into a module-level function, so the class
+    silently lost them and every stop path raised AttributeError at runtime
+    (`'IBKR' object has no attribute 'open_stops'`). A broker that advertises
+    supports_stops MUST define all three on the class itself — checked via the
+    class __dict__ so a method leaked to module scope can't satisfy it."""
+    cls = _broker_classes()[name]
+    if not cls.supports_stops:
+        return
+    for m in STOP_METHODS:
+        assert m in vars(cls), f"{name} declares supports_stops but {m} is not defined on the class"
+        assert callable(getattr(cls, m)), f"{name}.{m} not callable"
+
+
+def test_stops_support_matrix():
+    # README/CHANGELOG promise 6 of 7 brokers; only hyperliquid abstains
+    # (perps use trigger-order semantics, never on the equity weights path).
+    classes = _broker_classes()
+    supported = {n for n, cls in classes.items() if cls.supports_stops}
+    assert supported == {"paper", "tastytrade", "alpaca", "tradier", "ibkr", "schwab"}
+
+
+@pytest.mark.parametrize("name", SUPPORTED)
 @pytest.mark.parametrize("method", REQUIRED_METHODS)
 def test_broker_class_has_required_methods(name, method):
     cls = _broker_classes()[name]

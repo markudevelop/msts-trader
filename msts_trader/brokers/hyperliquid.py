@@ -48,6 +48,7 @@ class Hyperliquid:
     name = "hyperliquid"
     supports_fractional = True
     supports_moc = False  # crypto perps trade 24/7 — no closing auction
+    supports_stops = False  # perps use trigger orders; equity stop path never routes here
 
     def __init__(self, private_key: str, account_address: str | None = None, testnet: bool = False):
         if not _HL_OK:

@@ -133,3 +133,66 @@ def test_place_market_fractional_fallback_reports_whole_qty():
     assert r["status"] == "Routed"
     assert r["quantity"] == 10.0
     assert calls[1].legs[0].quantity == Decimal("10")
+
+
+# ----- protective stops (regression: keep these methods bound + correct) -----
+
+def test_place_stop_builds_gtc_stop_order():
+    from tastytrade.order import OrderType, OrderTimeInForce
+    captured = {}
+
+    def place(sess, order, dry_run=False):
+        captured["order"] = order
+        captured["dry_run"] = dry_run
+        return SimpleNamespace(order=SimpleNamespace(status="Received", id=321))
+
+    b = _broker()
+    b._acct = SimpleNamespace(place_order=place)
+    r = b.place_stop("SPY", Decimal("10.9"), Decimal("480"))
+    assert r["status"] == "Received" and r["order_id"] == 321 and r["quantity"] == 10.0
+    o = captured["order"]
+    assert o.order_type == OrderType.STOP and o.time_in_force == OrderTimeInForce.GTC
+    assert o.stop_trigger == Decimal("480") and o.legs[0].quantity == Decimal("10")
+    assert captured["dry_run"] is False
+
+
+def test_place_stop_dry_run_flag_passed_through():
+    captured = {}
+
+    def place(sess, order, dry_run=False):
+        captured["dry_run"] = dry_run
+        return SimpleNamespace(order=SimpleNamespace(status="Received", id=1))
+
+    b = _broker()
+    b._acct = SimpleNamespace(place_order=place)
+    r = b.place_stop("SPY", Decimal("5"), Decimal("480"), dry_run=True)
+    assert captured["dry_run"] is True and r["dry_run"] is True
+
+
+def test_place_stop_sub_share_skips():
+    r = _broker().place_stop("SPY", Decimal("0.4"), Decimal("480"))
+    assert r["status"] == "skipped" and "whole-share" in r["reason"]
+
+
+def test_open_stops_filters_and_keys_by_leg_symbol():
+    from tastytrade.order import OrderType
+    leg = SimpleNamespace(symbol="SPY", quantity=Decimal("10"))
+    live = [
+        SimpleNamespace(order_type=OrderType.STOP, status="Live", id=1, legs=[leg], stop_trigger=Decimal("475")),
+        SimpleNamespace(order_type=OrderType.STOP, status="Cancelled", id=2, legs=[leg], stop_trigger=Decimal("1")),
+        SimpleNamespace(order_type=OrderType.LIMIT, status="Live", id=3, legs=[leg], stop_trigger=Decimal("9")),
+    ]
+    b = _broker()
+    b._acct = SimpleNamespace(get_live_orders=lambda sess: live)
+    out = b.open_stops()
+    assert set(out) == {"SPY"} and len(out["SPY"]) == 1
+    assert out["SPY"][0]["order_id"] == 1 and out["SPY"][0]["stop_price"] == Decimal("475")
+
+
+def test_cancel_order_ok_and_error():
+    b = _broker()
+    b._acct = SimpleNamespace(delete_order=lambda sess, oid: None)
+    assert b.cancel_order("55")["status"] == "CANCELLED"
+    b._acct = SimpleNamespace(delete_order=lambda sess, oid: (_ for _ in ()).throw(RuntimeError("404")))
+    r = b.cancel_order("55")
+    assert r["status"] == "error" and "404" in r["reason"]

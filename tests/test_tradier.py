@@ -187,3 +187,63 @@ def test_balances_zero_margin_bp_is_honored(monkeypatch):
         }},
     })
     assert b.balances().buying_power == Decimal("0")
+
+
+# ----- protective stops (regression: keep these methods bound + correct) -----
+
+def test_place_stop_posts_gtc_stop(monkeypatch):
+    captured = {}
+
+    def place(params):
+        captured.update(params)
+        return {"order": {"id": 7788, "status": "ok"}}
+
+    b = _broker(monkeypatch, {("POST", "/v1/accounts/VA123/orders"): place})
+    r = b.place_stop("SPY", Decimal("10.9"), Decimal("480"))
+    assert r["status"] == "ok" and r["order_id"] == "7788" and r["quantity"] == 10
+    assert captured["type"] == "stop" and captured["duration"] == "gtc"
+    assert captured["side"] == "sell" and captured["stop"] == "480.00"
+
+
+def test_place_stop_dry_run_no_post(monkeypatch):
+    b = _broker(monkeypatch, {})  # any request would AssertionError
+    r = b.place_stop("SPY", Decimal("10"), Decimal("480"), dry_run=True)
+    assert r["status"] == "dry-run" and r["dry_run"] is True
+
+
+def test_place_stop_sub_share_skips(monkeypatch):
+    r = _broker(monkeypatch, {}).place_stop("SPY", Decimal("0.4"), Decimal("480"))
+    assert r["status"] == "skipped" and "whole-share" in r["reason"]
+
+
+def test_open_stops_filters_type_and_status(monkeypatch):
+    orders = {"orders": {"order": [
+        {"id": 1, "type": "stop", "status": "open", "symbol": "SPY", "quantity": 10, "stop_price": 475},
+        {"id": 2, "type": "market", "status": "open", "symbol": "QQQ", "quantity": 5},          # not a stop
+        {"id": 3, "type": "stop", "status": "filled", "symbol": "IWM", "quantity": 3, "stop_price": 200},  # not open
+    ]}}
+    b = _broker(monkeypatch, {("GET", "/v1/accounts/VA123/orders"): orders})
+    out = b.open_stops()
+    assert set(out) == {"SPY"}
+    assert out["SPY"][0]["order_id"] == "1" and out["SPY"][0]["stop_price"] == Decimal("475")
+
+
+def test_open_stops_single_object_and_null(monkeypatch):
+    one = {"orders": {"order": {"id": 9, "type": "stop", "status": "pending",
+                                "symbol": "SPY", "quantity": 2, "stop_price": 1}}}
+    b = _broker(monkeypatch, {("GET", "/v1/accounts/VA123/orders"): one})
+    assert set(b.open_stops()) == {"SPY"}  # single dict normalised to a list
+    b2 = _broker(monkeypatch, {("GET", "/v1/accounts/VA123/orders"): {"orders": "null"}})
+    assert b2.open_stops() == {}  # Tradier returns "null" when there are none
+
+
+def test_cancel_order_ok_and_error(monkeypatch):
+    b = _broker(monkeypatch, {("DELETE", "/v1/accounts/VA123/orders/9"): {"order": {"status": "ok"}}})
+    assert b.cancel_order("9")["status"] == "CANCELLED"
+
+    def boom(params):
+        raise RuntimeError("404 not found")
+
+    b2 = _broker(monkeypatch, {("DELETE", "/v1/accounts/VA123/orders/9"): boom})
+    r = b2.cancel_order("9")
+    assert r["status"] == "error" and "404" in r["reason"]

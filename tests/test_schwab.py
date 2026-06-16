@@ -149,6 +149,71 @@ def test_place_market_error():
     assert r["status"] == "error" and "401" in r["reason"]
 
 
+# ----- protective stops (regression: these methods were once mis-indented
+# into the module-level clear_token() and silently absent from the class) -----
+
+def test_place_stop_builds_gtc_stop_spec():
+    captured = {}
+    b = _broker()
+    b._client = SimpleNamespace(
+        place_order=lambda h, spec: captured.update(spec=spec) or _OrderResp(
+            "https://api.schwab.com/v1/accounts/HASH/orders/55501")
+    )
+    r = b.place_stop("SPY", Decimal("10.9"), Decimal("480"))
+    assert r["status"] == "submitted" and r["order_id"] == "55501"
+    assert r["quantity"] == 10  # whole shares (int truncation)
+    spec = captured["spec"]
+    assert spec.get("orderType") == "STOP"
+    assert spec.get("stopPrice") == "480.00"
+    assert spec.get("duration") == "GOOD_TILL_CANCEL"
+
+
+def test_place_stop_dry_run_sends_nothing():
+    called = {"placed": False}
+    b = _broker()
+    b._client = SimpleNamespace(place_order=lambda h, spec: called.update(placed=True))
+    r = b.place_stop("SPY", Decimal("10"), Decimal("480"), dry_run=True)
+    assert r["status"] == "dry-run" and r["dry_run"] is True
+    assert called["placed"] is False
+
+
+def test_place_stop_sub_share_skips():
+    r = _broker().place_stop("SPY", Decimal("0.4"), Decimal("480"))
+    assert r["status"] == "skipped" and "whole-share" in r["reason"]
+
+
+def test_open_stops_filters_and_keys_by_symbol():
+    orders = [
+        {"orderType": "STOP", "orderId": 9001, "stopPrice": 475.5,
+         "orderLegCollection": [{"instrument": {"symbol": "SPY"}, "quantity": 10}]},
+        {"orderType": "MARKET", "orderId": 9002,  # not a stop -> ignored
+         "orderLegCollection": [{"instrument": {"symbol": "QQQ"}, "quantity": 5}]},
+    ]
+    b = _broker()
+    b._client = SimpleNamespace(get_orders_for_account=lambda h, status=None: _Resp(orders))
+    out = b.open_stops()
+    assert set(out) == {"SPY"}
+    assert out["SPY"][0]["order_id"] == "9001"
+    assert out["SPY"][0]["stop_price"] == Decimal("475.5")
+
+
+def test_open_stops_swallows_errors():
+    b = _broker()
+    b._client = SimpleNamespace(
+        get_orders_for_account=lambda h, status=None: (_ for _ in ()).throw(RuntimeError("403")))
+    assert b.open_stops() == {}
+
+
+def test_cancel_order_ok_and_error():
+    b = _broker()
+    b._client = SimpleNamespace(cancel_order=lambda oid, h: _OrderResp())
+    assert b.cancel_order("9001")["status"] == "CANCELLED"
+    b._client = SimpleNamespace(
+        cancel_order=lambda oid, h: (_ for _ in ()).throw(RuntimeError("404")))
+    r = b.cancel_order("9001")
+    assert r["status"] == "error" and "404" in r["reason"]
+
+
 def test_balances_zero_values_do_not_fall_through():
     # A legitimate 0 (account in liquidation, exhausted BP) must not fall
     # through to the secondary field.

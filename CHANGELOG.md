@@ -10,6 +10,35 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-06-16
+
+### Fixed
+- **Schwab protective stops were completely non-functional** — the *same*
+  regression as the IBKR bug in 0.15.0, in the same stop-adapter commit.
+  `place_stop`, `open_stops`, and `cancel_order` had been indented into the
+  module-level `clear_token()` helper instead of the `Schwab` class, so any
+  stop path raised `'Schwab' object has no attribute 'open_stops'`. Rebound
+  to the class.
+- **Hyperliquid did not declare `supports_stops`.** Because the broker
+  classes implement the `Broker` *protocol* structurally (no inheritance),
+  the attribute was simply absent rather than defaulting to `False`. The CLI
+  read it defensively (`getattr(..., False)`) so nothing crashed, but any
+  direct attribute access would have. Now declared `supports_stops = False`
+  explicitly, matching every other capability flag.
+
+### Tests
+- **Conformance guard so this class of bug can't ship again:** a parametrised
+  test asserts every broker that advertises `supports_stops` defines all three
+  stop methods in its own class `__dict__` (a method leaked to module scope no
+  longer satisfies it), plus a stops-support matrix pinning the exact 6-of-7
+  set. This would have caught both the IBKR and Schwab regressions.
+- **Functional stop unit tests for all six stop-capable brokers** (paper,
+  tastytrade, alpaca, tradier, ibkr, schwab): GTC SELL STOP construction,
+  whole-share rounding, dry-run, sub-share skip, `open_stops` filtering, and
+  `cancel_order` success/error. The stop adapters previously had no
+  broker-level tests — the reason the IBKR/Schwab breakage went unnoticed.
+- Test count: 360 → 428.
+
 ## [0.15.0] — 2026-06-16
 
 ### Fixed

@@ -174,21 +174,6 @@ class Schwab:
             "dry_run": False,
         }
 
-
-def has_token() -> bool:
-    return TOKEN_PATH.exists()
-
-
-def token_path() -> str:
-    return str(TOKEN_PATH)
-
-
-def clear_token() -> None:
-    try:
-        TOKEN_PATH.unlink()
-    except FileNotFoundError:
-        pass
-
     # ---- protective stops -------------------------------------------------
     def place_stop(self, ticker: str, quantity, stop_price, dry_run: bool = False) -> dict:
         qty = int(quantity)
@@ -241,3 +226,18 @@ def clear_token() -> None:
             return {"status": "CANCELLED", "order_id": order_id}
         except Exception as e:
             return {"status": "error", "reason": str(e), "order_id": order_id}
+
+
+def has_token() -> bool:
+    return TOKEN_PATH.exists()
+
+
+def token_path() -> str:
+    return str(TOKEN_PATH)
+
+
+def clear_token() -> None:
+    try:
+        TOKEN_PATH.unlink()
+    except FileNotFoundError:
+        pass
