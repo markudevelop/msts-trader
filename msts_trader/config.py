@@ -12,6 +12,8 @@ Example ~/.msts-trader/config.toml:
     max_notional = 60000
     max_stale_hours = 36
     notify_url = "https://discord.com/api/webhooks/..."
+    telegram_token = "123456:ABC-DEF..."   # optional, instead of MSTS_TELEGRAM_TOKEN
+    telegram_chat_id = "987654321"          # optional, instead of MSTS_TELEGRAM_CHAT_ID
     quiet = false
 """
 from __future__ import annotations
@@ -30,6 +32,7 @@ _KNOWN = {
     "broker", "threshold", "csv_file", "csv_url", "creds_file",
     "max_notional", "max_stale_hours", "notify_url", "quiet", "margin_aware",
     "moc",
+    "telegram_token", "telegram_chat_id",  # Telegram bot creds (else MSTS_TELEGRAM_* env)
     "min_weight",   # ignore CSV rows with 0 < weight < this
     "threshold_mode",  # drift denominator: "nav" (default) | "position"
     "allocation",   # dollar base the weights apply to (default: full NAV)

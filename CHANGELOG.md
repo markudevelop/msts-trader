@@ -10,6 +10,37 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-06-16
+
+### Fixed
+- **IBKR protective stops were completely non-functional** (regression in
+  0.13.0/0.14.0). `place_stop`, `open_stops`, and `cancel_order` had been
+  indented one level too deep and were silently parsed as dead nested
+  functions inside a module-level helper instead of methods on the `IBKR`
+  class. Any stop path raised `'IBKR' object has no attribute 'open_stops'`
+  (seen as `stop reconcile skipped: open_stops failed (...)` at the end of a
+  rebalance). The three methods are now bound to the class, and a structural
+  test asserts they stay methods so this can't regress again. The bug was
+  invisible to the suite because the stop tests exercise the paper broker
+  (IBKR needs a live TWS socket); the misindent still compiled.
+
+### Added
+- **Telegram credentials can now live in `config.toml`** via `telegram_token`
+  and `telegram_chat_id`, instead of only the `MSTS_TELEGRAM_TOKEN` /
+  `MSTS_TELEGRAM_CHAT_ID` environment variables. The env vars still work and
+  are used as a fallback when the config keys are absent.
+- **`--dry-run` now sends a notification too** when a notify target is
+  configured. The message is clearly headed `DRY-RUN preview · N orders
+  (nothing sent)` so a webhook/Telegram recipient can't mistake a preview for
+  a live fill. Lets you wire up and confirm a webhook without placing orders.
+
+### Changed
+- **Failed notifications are now surfaced instead of swallowed.** A configured
+  webhook or Telegram channel that doesn't deliver is reported as
+  `notify failed: <channel>` rather than silently doing nothing — so a dead
+  URL, a bad token, or an n8n test webhook that wasn't actively listening is
+  visible. `notifications.notify()` now returns `(sent, failed)`.
+
 ## [0.14.0] — 2026-06-13
 
 ### Added

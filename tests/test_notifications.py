@@ -22,22 +22,50 @@ def test_notify_webhook_called(monkeypatch):
     calls = {}
     monkeypatch.setattr(notifications, "_send_webhook", lambda url, text: calls.setdefault("url", url) or True)
     monkeypatch.setattr(notifications, "env_value", lambda k: None)
-    out = notifications.notify("hi", notify_url="https://discord.com/api/webhooks/x")
-    assert "webhook" in out
+    sent, failed = notifications.notify("hi", notify_url="https://discord.com/api/webhooks/x")
+    assert "webhook" in sent and failed == []
     assert calls["url"].startswith("https://discord.com")
+
+
+def test_notify_webhook_failure_reported(monkeypatch):
+    monkeypatch.setattr(notifications, "_send_webhook", lambda url, text: False)
+    monkeypatch.setattr(notifications, "env_value", lambda k: None)
+    sent, failed = notifications.notify("hi", notify_url="https://example.com/hook")
+    assert sent == [] and "webhook" in failed
 
 
 def test_notify_nothing_configured(monkeypatch):
     monkeypatch.setattr(notifications, "env_value", lambda k: None)
-    assert notifications.notify("hi") == []
+    assert notifications.notify("hi") == ([], [])
 
 
 def test_notify_telegram(monkeypatch):
     env = {"MSTS_TELEGRAM_TOKEN": "tok", "MSTS_TELEGRAM_CHAT_ID": "123"}
     monkeypatch.setattr(notifications, "env_value", lambda k: env.get(k))
     monkeypatch.setattr(notifications, "_send_telegram", lambda t, c, text: True)
-    out = notifications.notify("hi")
-    assert "telegram" in out
+    sent, failed = notifications.notify("hi")
+    assert "telegram" in sent and failed == []
+
+
+def test_notify_telegram_explicit_args_override_env(monkeypatch):
+    # config.toml path: creds come in as explicit args, no env set.
+    captured = {}
+    monkeypatch.setattr(notifications, "env_value", lambda k: None)
+    monkeypatch.setattr(
+        notifications, "_send_telegram",
+        lambda t, c, text: captured.update(token=t, chat=c) or True,
+    )
+    sent, _ = notifications.notify("hi", telegram_token="TOK", telegram_chat_id="CID")
+    assert "telegram" in sent
+    assert captured == {"token": "TOK", "chat": "CID"}
+
+
+def test_format_summary_dry_run_announces_preview():
+    from decimal import Decimal
+    from msts_trader.models import Order, Side
+    orders = [Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10"))]
+    s = notifications.format_summary("ibkr", "ACC", 0, 0, orders, dry_run=True)
+    assert "DRY-RUN" in s and "nothing sent" in s and "BUY 10 SPY" in s
 
 
 def test_webhook_failure_does_not_raise(monkeypatch):

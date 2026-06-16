@@ -325,7 +325,11 @@ msts-trader rebalance --config my.toml       # load defaults from a config file
   CSV and `--max-stale-hours` refuses to trade on old weights.
 - **Notifications:** set `--notify-url` or `MSTS_NOTIFY_URL`
   (Discord/Slack/generic webhook), or `MSTS_TELEGRAM_TOKEN` +
-  `MSTS_TELEGRAM_CHAT_ID`. A failed webhook never blocks trading.
+  `MSTS_TELEGRAM_CHAT_ID` (Telegram creds can also go in `config.toml` as
+  `telegram_token` / `telegram_chat_id`). A failed webhook never blocks
+  trading, but the failure is now reported (`notify failed: webhook`) instead
+  of swallowed. `--dry-run` also fires a clearly-labelled preview
+  notification, so you can wire up and test a webhook without sending orders.
 - **Retries:** transient broker errors (429s, timeouts) are retried with
   backoff; real errors fail fast.
 
@@ -340,6 +344,8 @@ csv_url = "https://example.com/weights.csv"
 max_notional = 60000
 max_stale_hours = 36
 notify_url = "https://discord.com/api/webhooks/..."
+telegram_token = "123456:ABC-DEF..."   # optional, instead of MSTS_TELEGRAM_TOKEN
+telegram_chat_id = "987654321"          # optional, instead of MSTS_TELEGRAM_CHAT_ID
 margin_aware = true   # default; set false to disable buying-power-fit scaling
 moc = false           # set true to always use market-on-close orders
 min_weight = 0.01     # ignore CSV rows with weight under 1%

@@ -44,26 +44,49 @@ def _send_telegram(token: str, chat_id: str, text: str) -> bool:
     return _post_json(url, {"chat_id": chat_id, "text": text})
 
 
-def notify(text: str, *, notify_url: Optional[str] = None) -> list[str]:
-    """Send `text` to whatever channels are configured. Returns channels hit.
+def notify(
+    text: str,
+    *,
+    notify_url: Optional[str] = None,
+    telegram_token: Optional[str] = None,
+    telegram_chat_id: Optional[str] = None,
+) -> tuple[list[str], list[str]]:
+    """Send `text` to whatever channels are configured.
 
-    notify_url overrides MSTS_NOTIFY_URL when given (e.g. from a config file).
+    Returns ``(sent, failed)`` — the channels that delivered and the channels
+    that were configured but failed to deliver. A channel absent from both was
+    simply not configured.
+
+    The explicit args override their env vars when given (e.g. from a config
+    file): `notify_url` → MSTS_NOTIFY_URL, `telegram_token` →
+    MSTS_TELEGRAM_TOKEN, `telegram_chat_id` → MSTS_TELEGRAM_CHAT_ID.
     """
     sent: list[str] = []
+    failed: list[str] = []
     url = notify_url or env_value("MSTS_NOTIFY_URL")
-    if url and _send_webhook(url, text):
-        sent.append("webhook")
+    if url:
+        (sent if _send_webhook(url, text) else failed).append("webhook")
 
-    tg_token = env_value("MSTS_TELEGRAM_TOKEN")
-    tg_chat = env_value("MSTS_TELEGRAM_CHAT_ID")
-    if tg_token and tg_chat and _send_telegram(tg_token, tg_chat, text):
-        sent.append("telegram")
-    return sent
+    tg_token = telegram_token or env_value("MSTS_TELEGRAM_TOKEN")
+    tg_chat = telegram_chat_id or env_value("MSTS_TELEGRAM_CHAT_ID")
+    if tg_token and tg_chat:
+        (sent if _send_telegram(tg_token, tg_chat, text) else failed).append("telegram")
+    return sent, failed
 
 
-def format_summary(broker: str, account_id: str, sent: int, failed: int, orders: list) -> str:
-    """Build a concise human-readable summary line for a rebalance."""
-    lines = [f"msts-trader · {broker} ({account_id}) · {sent} filled, {failed} failed"]
+def format_summary(
+    broker: str, account_id: str, sent: int, failed: int, orders: list, *, dry_run: bool = False
+) -> str:
+    """Build a concise human-readable summary line for a rebalance.
+
+    With `dry_run=True` the header announces a preview and that nothing was
+    sent, so a webhook/Telegram recipient can't mistake it for a live fill.
+    """
+    if dry_run:
+        head = f"msts-trader · {broker} ({account_id}) · DRY-RUN preview · {len(orders)} orders (nothing sent)"
+    else:
+        head = f"msts-trader · {broker} ({account_id}) · {sent} filled, {failed} failed"
+    lines = [head]
     for o in orders[:20]:
         side = getattr(o, "side", None)
         side = side.value if side is not None else "?"

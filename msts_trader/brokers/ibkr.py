@@ -290,6 +290,46 @@ class IBKR:
             result["reason"] = reason
         return result
 
+    # ---- protective stops -------------------------------------------------
+    def place_stop(self, ticker: str, quantity, stop_price, dry_run: bool = False) -> dict:
+        qty = float(int(quantity))  # whole shares for stops
+        if qty <= 0:
+            return {"status": "skipped", "reason": "whole-share qty rounds to 0", "ticker": ticker}
+        if dry_run:
+            return {"status": "dry-run", "ticker": ticker, "stop_price": float(stop_price), "dry_run": True}
+        ct = Stock(ticker, "SMART", "USD")
+        self._ib.qualifyContracts(ct)
+        o = StopOrder("SELL", qty, float(stop_price), account=self.account_id, tif="GTC")
+        trade = self._ib.placeOrder(ct, o)
+        self._ib.sleep(1.0)
+        return {"status": str(trade.orderStatus.status or "submitted"), "ticker": ticker,
+                "order_id": str(trade.order.orderId), "quantity": qty,
+                "stop_price": float(stop_price), "dry_run": False}
+
+    def open_stops(self) -> dict:
+        out: dict = {}
+        for t in self._ib.openTrades():
+            o = t.order
+            if getattr(o, "orderType", "") != "STP":
+                continue
+            sym = getattr(t.contract, "symbol", None)
+            if not sym:
+                continue
+            out.setdefault(sym, []).append({
+                "order_id": str(o.orderId),
+                "quantity": Decimal(str(o.totalQuantity)),
+                "stop_price": Decimal(str(getattr(o, "auxPrice", 0) or 0)),
+            })
+        return out
+
+    def cancel_order(self, order_id) -> dict:
+        for t in self._ib.openTrades():
+            if str(t.order.orderId) == str(order_id):
+                self._ib.cancelOrder(t.order)
+                self._ib.sleep(0.5)
+                return {"status": "CANCELLED", "order_id": order_id}
+        return {"status": "error", "reason": "order not found", "order_id": order_id}
+
 
 def _reject_reason(trade) -> str | None:
     """Extract the meaningful rejection message from an ib_insync trade log.
@@ -333,43 +373,3 @@ def _midpoint(bid, ask) -> float | None:
     if b is None or a is None or b <= 0 or a <= 0:
         return None
     return (b + a) / 2.0
-
-    # ---- protective stops -------------------------------------------------
-    def place_stop(self, ticker: str, quantity, stop_price, dry_run: bool = False) -> dict:
-        qty = float(int(quantity))  # whole shares for stops
-        if qty <= 0:
-            return {"status": "skipped", "reason": "whole-share qty rounds to 0", "ticker": ticker}
-        if dry_run:
-            return {"status": "dry-run", "ticker": ticker, "stop_price": float(stop_price), "dry_run": True}
-        ct = Stock(ticker, "SMART", "USD")
-        self._ib.qualifyContracts(ct)
-        o = StopOrder("SELL", qty, float(stop_price), account=self.account_id, tif="GTC")
-        trade = self._ib.placeOrder(ct, o)
-        self._ib.sleep(1.0)
-        return {"status": str(trade.orderStatus.status or "submitted"), "ticker": ticker,
-                "order_id": str(trade.order.orderId), "quantity": qty,
-                "stop_price": float(stop_price), "dry_run": False}
-
-    def open_stops(self) -> dict:
-        out: dict = {}
-        for t in self._ib.openTrades():
-            o = t.order
-            if getattr(o, "orderType", "") != "STP":
-                continue
-            sym = getattr(t.contract, "symbol", None)
-            if not sym:
-                continue
-            out.setdefault(sym, []).append({
-                "order_id": str(o.orderId),
-                "quantity": Decimal(str(o.totalQuantity)),
-                "stop_price": Decimal(str(getattr(o, "auxPrice", 0) or 0)),
-            })
-        return out
-
-    def cancel_order(self, order_id) -> dict:
-        for t in self._ib.openTrades():
-            if str(t.order.orderId) == str(order_id):
-                self._ib.cancelOrder(t.order)
-                self._ib.sleep(0.5)
-                return {"status": "CANCELLED", "order_id": order_id}
-        return {"status": "error", "reason": "order not found", "order_id": order_id}

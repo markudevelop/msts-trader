@@ -84,6 +84,22 @@ def _load_config_or_exit(path: str | None) -> dict:
         _fail(str(e))
 
 
+def _do_notify(text, *, notify_url, tg_token, tg_chat) -> None:
+    """Send a notification and surface the outcome (best-effort, never raises).
+
+    A configured channel that fails to deliver is reported as a warning so a
+    dead webhook (or an n8n test URL that wasn't actively listening) can't fail
+    silently — the previous behaviour left users guessing why nothing arrived.
+    """
+    sent, failed = notifications.notify(
+        text, notify_url=notify_url, telegram_token=tg_token, telegram_chat_id=tg_chat
+    )
+    if sent:
+        say(f"[dim]notified: {', '.join(sent)}[/dim]")
+    if failed:
+        say(f"[yellow]notify failed (check URL/token, see channel): {', '.join(failed)}[/yellow]")
+
+
 def _emit_json(broker, preview, *, dry_run: bool, duplicate: bool) -> None:
     gross = sum((row.target_pct for row in preview.rows), Decimal(0))
     payload = {
@@ -724,6 +740,8 @@ def rebalance(
     max_notional = config.pick(max_notional, cfg, "max_notional")
     max_stale_hours = config.pick(max_stale_hours, cfg, "max_stale_hours")
     notify_url = config.pick(notify_url, cfg, "notify_url")
+    tg_token = config.pick(None, cfg, "telegram_token")
+    tg_chat = config.pick(None, cfg, "telegram_chat_id")
     margin_aware = bool(config.pick(margin_aware, cfg, "margin_aware", True))
     moc = bool(config.pick(True if moc else None, cfg, "moc", False))
     quiet = bool(config.pick(True if quiet else None, cfg, "quiet", False))
@@ -815,6 +833,11 @@ def rebalance(
         if preview.has_blockers:
             sys.exit(1)
         if dry_run or not preview.orders or duplicate:
+            if dry_run and preview.orders:
+                _do_notify(
+                    notifications.format_summary(b.name, b.account_id, 0, 0, preview.orders, dry_run=True),
+                    notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat,
+                )
             return
         if not yes:
             print(json.dumps({"error": "refusing to execute without --yes in JSON/non-interactive mode"}))
@@ -822,9 +845,9 @@ def rebalance(
         sent, failed, results = _execute(b, preview)
         if sent > 0 and failed == 0:
             runstate.record(fp)  # only mark done on clean success, so a partial run can re-complete
-        notifications.notify(
+        _do_notify(
             notifications.format_summary(b.name, b.account_id, sent, failed, preview.orders),
-            notify_url=notify_url,
+            notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat,
         )
         print(json.dumps({"executed": True, "sent": sent, "failed": failed, "results": results}, default=str))
         return
@@ -838,6 +861,10 @@ def rebalance(
         return
     if dry_run:
         say("[yellow]--dry-run set, exiting without sending orders.[/yellow]")
+        _do_notify(
+            notifications.format_summary(b.name, b.account_id, 0, 0, preview.orders, dry_run=True),
+            notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat,
+        )
         return
     if duplicate:
         say("[yellow]Identical targets already executed today — skipping (use --force to override).[/yellow]")
@@ -855,9 +882,7 @@ def rebalance(
 
     # Notify (best-effort, never raises).
     summary = notifications.format_summary(b.name, b.account_id, sent, failed, preview.orders)
-    channels = notifications.notify(summary, notify_url=notify_url)
-    if channels and not quiet:
-        say(f"[dim]notified: {', '.join(channels)}[/dim]")
+    _do_notify(summary, notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
 
 
 def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
@@ -1109,6 +1134,8 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
     max_notional = cfg.get("max_notional")
     max_stale_hours = cfg.get("max_stale_hours")
     notify_url = cfg.get("notify_url")
+    tg_token = cfg.get("telegram_token")
+    tg_chat = cfg.get("telegram_chat_id")
     margin_aware = bool(config.pick(margin_aware, cfg, "margin_aware", True))
     csv_file = csv_file or cfg.get("csv_file")
     csv_url = csv_url or cfg.get("csv_url")
@@ -1167,11 +1194,11 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
         results.append(r)
 
     executed = any(r.get("status") in ("executed", "partial") for r in results)
-    if executed and notify_url:
+    if executed and (notify_url or (tg_token and tg_chat)):
         lines = [f"msts-trader multi · {len(results)} accounts"]
         for r in results:
             lines.append(f"  {r.get('name')}: {r.get('status')} ({r.get('sent', 0)} sent, {r.get('failed', 0)} failed)")
-        notifications.notify("\n".join(lines), notify_url=notify_url)
+        _do_notify("\n".join(lines), notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
 
     if json_out:
         print(json.dumps({"accounts": results}, default=str))

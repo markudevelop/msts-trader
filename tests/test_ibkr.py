@@ -136,6 +136,59 @@ def test_place_market_without_moc_stays_mkt():
     assert captured["order"].totalQuantity == 10.7  # fractional preserved
 
 
+def test_stop_methods_are_bound_to_class():
+    # Regression guard: a misindent once nested these inside a module-level
+    # helper, so the IBKR class silently lost them and stop reconcile blew up
+    # with "'IBKR' object has no attribute 'open_stops'". They must be real
+    # instance methods, not module functions.
+    for name in ("place_stop", "open_stops", "cancel_order"):
+        assert callable(getattr(IBKR, name, None)), f"IBKR.{name} is not a method"
+
+
+def _stp_trade(symbol, order_id, qty, aux, order_type="STP"):
+    return SimpleNamespace(
+        contract=SimpleNamespace(symbol=symbol),
+        order=SimpleNamespace(orderId=order_id, orderType=order_type, totalQuantity=qty, auxPrice=aux),
+    )
+
+
+def test_open_stops_filters_to_stop_orders():
+    b = _ibkr()
+    b._ib.openTrades = lambda: [
+        _stp_trade("SPY", 11, 10, 480.0),
+        _stp_trade("QQQ", 12, 5, 0, order_type="MKT"),  # not a stop — ignored
+        _stp_trade("SPY", 13, 3, 475.0),
+    ]
+    out = b.open_stops()
+    assert set(out) == {"SPY"}
+    assert {s["order_id"] for s in out["SPY"]} == {"11", "13"}
+    assert out["SPY"][0]["stop_price"] == Decimal("480.0")
+
+
+def test_place_stop_submits_gtc_sell_and_rounds_to_whole_shares():
+    captured = {}
+    b = _ibkr()
+    b._ib.placeOrder = lambda ct, o: captured.update(order=o) or SimpleNamespace(
+        orderStatus=SimpleNamespace(status="Submitted"), order=SimpleNamespace(orderId=99),
+    )
+    b._ib.sleep = lambda s: None
+    r = b.place_stop("SPY", Decimal("10.9"), Decimal("480"))
+    assert captured["order"].action == "SELL" and captured["order"].tif == "GTC"
+    assert captured["order"].totalQuantity == 10  # whole shares
+    assert r["status"] == "Submitted" and r["order_id"] == "99"
+
+
+def test_cancel_order_finds_and_cancels():
+    cancelled = {}
+    b = _ibkr()
+    b._ib.openTrades = lambda: [_stp_trade("SPY", 42, 10, 480.0)]
+    b._ib.cancelOrder = lambda o: cancelled.update(id=o.orderId)
+    b._ib.sleep = lambda s: None
+    r = b.cancel_order("42")
+    assert cancelled["id"] == 42 and r["status"] == "CANCELLED"
+    assert b.cancel_order("999")["status"] == "error"  # unknown id
+
+
 def test_balances_zero_values_do_not_fall_through():
     # A legitimate 0 must not fall through to the fallback tag.
     b = _ibkr(summary=[
