@@ -349,6 +349,10 @@ def _reject_reason(trade) -> str | None:
         entry = f"IBKR {code}: {msg}"
         if code == 10349:
             fallback = entry + " (check TWS → Global Configuration → Presets)"
+        elif code == 10243:
+            # Fractional order rejected: the account lacks fractional-share
+            # API permission. Point at the flag that sizes to whole shares.
+            specific = entry + " (re-run with --whole-shares, or enable fractional trading for this account)"
         else:
             specific = entry
     return specific or fallback

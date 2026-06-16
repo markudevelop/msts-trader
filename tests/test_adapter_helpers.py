@@ -34,6 +34,22 @@ def test_reject_reason_10349_fallback_with_hint():
     assert "Presets" in msg  # points at the TWS fix
 
 
+def test_reject_reason_10243_suggests_whole_shares():
+    t = _trade((10243, "Fractional-sized order cannot be placed via API. Please use desktop version to place this order."))
+    msg = ibkr._reject_reason(t)
+    assert "IBKR 10243" in msg
+    assert "--whole-shares" in msg  # points at the fix
+
+
+def test_reject_reason_10243_beats_10349_noise():
+    # When both fire, the actionable fractional message wins over the cosmetic
+    # 10349 preset note.
+    t = _trade((10349, "TIF set to DAY based on order preset."),
+               (10243, "Fractional-sized order cannot be placed via API."))
+    msg = ibkr._reject_reason(t)
+    assert "10243" in msg and "--whole-shares" in msg
+
+
 def test_reject_reason_none_when_clean():
     assert ibkr._reject_reason(_trade((0, ""), (0, "Submitted"))) is None
 

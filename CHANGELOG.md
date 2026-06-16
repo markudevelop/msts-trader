@@ -10,6 +10,16 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-06-16
+
+### Changed
+- **IBKR error 10243 now suggests the fix in its message.** When a fractional
+  order is rejected ("Fractional-sized order cannot be placed via API"), the
+  surfaced rejection reason now appends "(re-run with `--whole-shares`, or
+  enable fractional trading for this account)" instead of leaving you to
+  decode the raw IBKR text. The actionable 10243 message also wins over the
+  cosmetic 10349 preset note when both fire on the same order.
+
 ## [0.16.0] — 2026-06-16
 
 ### Added
