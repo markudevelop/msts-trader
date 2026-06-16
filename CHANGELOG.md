@@ -10,6 +10,19 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.16.2] — 2026-06-16
+
+### Fixed
+- **Webhook notifications (`--notify-url`) now send a real `User-Agent`.** The
+  POST went out with Python's default `Python-urllib/x.y` agent, which WAFs and
+  CDNs in front of webhook endpoints (Cloudflare, self-hosted n8n behind a
+  proxy) reject with **403 Forbidden** — so the notification silently failed
+  (`notify failed … webhook`) even though the URL was correct and reachable in
+  a browser. The request now identifies itself as `msts-trader/<version>`,
+  which these hosts accept. Telegram was unaffected; Discord/Slack/generic
+  webhooks all benefit. A browser or `curl` test of the URL passed because they
+  send their own User-Agent — masking the real cause.
+
 ## [0.16.1] — 2026-06-16
 
 ### Changed
@@ -874,7 +887,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.16.2...HEAD
+[0.16.2]: https://github.com/markudevelop/msts-trader/compare/v0.16.1...v0.16.2
 [0.13.0]: https://github.com/markudevelop/msts-trader/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/markudevelop/msts-trader/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/markudevelop/msts-trader/compare/v0.10.0...v0.11.0

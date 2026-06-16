@@ -93,3 +93,26 @@ def test_generic_webhook_uses_text(monkeypatch):
     monkeypatch.setattr(notifications, "_post_json", lambda url, payload, timeout=10.0: captured.update(payload) or True)
     notifications._send_webhook("https://example.com/hook", "hello")
     assert captured.get("text") == "hello"
+
+
+def test_post_json_sends_real_user_agent(monkeypatch):
+    # The default Python-urllib User-Agent gets 403'd by WAFs/CDNs (Cloudflare,
+    # n8n behind a proxy), so generic webhooks silently failed. We must send a
+    # real User-Agent identifying msts-trader.
+    captured = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=10.0):
+        captured["ua"] = req.get_header("User-agent")
+        return _Resp()
+
+    monkeypatch.setattr(notifications.urllib.request, "urlopen", fake_urlopen)
+    assert notifications._post_json("https://example.com/hook", {"text": "hi"}) is True
+    assert captured["ua"] and "msts-trader" in captured["ua"]
+    assert "Python-urllib" not in captured["ua"]

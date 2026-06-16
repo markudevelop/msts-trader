@@ -16,12 +16,23 @@ import json
 import urllib.request
 from typing import Optional
 
+from . import __version__
 from .prompts import env_value
+
+# Some webhook hosts sit behind a WAF/CDN (e.g. Cloudflare) that 403s the
+# default ``Python-urllib/x.y`` User-Agent. Send a real one so generic
+# webhooks (n8n, self-hosted automations) accept the POST.
+_USER_AGENT = f"msts-trader/{__version__}"
 
 
 def _post_json(url: str, payload: dict, timeout: float = 10.0) -> bool:
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT},
+        method="POST",
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout):  # noqa: S310
             return True
