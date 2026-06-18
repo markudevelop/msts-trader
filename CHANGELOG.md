@@ -10,6 +10,21 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-06-18
+
+### Fixed
+- **Resting stops no longer block exit sells.** A broker (e.g. tastytrade) rejects a sell of
+  shares reserved by an open stop order (`cannot_close_against_more_than_existing_position`).
+  `_execute` now **pre-cancels** any resting stop on every name it is about to SELL, *before*
+  submitting the sells — so exits/trims don't bounce. (Previously stops were only reconciled
+  after fills, by which point the sells had already failed.)
+
+### Added
+- **Fill-anchored protective stops.** After submitting orders, `_execute` briefly polls for BUY
+  fills and folds the **actual fill price** into the stop calculation, so a `stop_pct` GTC stop
+  is placed at `fill × (1 − stop_pct)` rather than anchored to the stale pre-trade quote. New
+  `BrokerBase.fills()` (implemented for tastytrade) reads average fill price per filled buy.
+
 ## [0.16.2] — 2026-06-16
 
 ### Fixed

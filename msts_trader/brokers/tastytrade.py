@@ -244,6 +244,26 @@ class Tastytrade:
             })
         return out
 
+    def fills(self) -> dict:
+        """Average fill price per ticker from today's FILLED buy orders, so a protective stop can be
+        anchored on the REAL entry (not the pre-trade quote). Empty for names not yet filled."""
+        out: dict = {}
+        for o in self._acct.get_live_orders(self._sess):
+            if "filled" not in str(getattr(o, "status", "")).lower():
+                continue
+            legs = getattr(o, "legs", None) or []
+            if not legs or "buy" not in str(getattr(legs[0], "action", "")).lower():
+                continue
+            fl = getattr(legs[0], "fills", None) or []
+            try:
+                q = sum(Decimal(str(x.quantity)) for x in fl)
+                n = sum(Decimal(str(x.quantity)) * Decimal(str(x.fill_price)) for x in fl)
+                if q > 0:
+                    out[getattr(legs[0], "symbol", None)] = n / q
+            except Exception:
+                continue
+        return out
+
     def cancel_order(self, order_id) -> dict:
         try:
             self._acct.delete_order(self._sess, int(order_id))

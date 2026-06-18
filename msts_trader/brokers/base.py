@@ -91,3 +91,8 @@ class Broker(Protocol):
     def cancel_order(self, order_id: str) -> dict:
         """Cancel an open order by id."""
         raise NotImplementedError
+
+    def fills(self) -> dict:
+        """Average fill price per ticker from today's filled BUY orders, for anchoring protective
+        stops on the real entry. Default {} (override where the broker exposes fills)."""
+        return {}

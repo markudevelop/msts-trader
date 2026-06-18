@@ -947,6 +947,26 @@ def _execute(broker, preview):
     sent = 0
     failed = 0
     results = []
+    # Pre-cancel resting stops on names we're about to SELL. A broker (e.g. tastytrade) rejects a
+    # sell of shares that are reserved by an open stop order
+    # ("cannot_close_against_more_than_existing_position"), so the protective stop MUST be cancelled
+    # BEFORE the sell — not in _reconcile_stops afterwards (by then the sell has already bounced).
+    if getattr(broker, "supports_stops", False):
+        sell_tkrs = {o.ticker for o in preview.orders if o.side.value == "SELL"}
+        if sell_tkrs:
+            try:
+                open_stops = broker.open_stops()
+                for tkr in sell_tkrs:
+                    for st in open_stops.get(tkr, []):
+                        try:
+                            broker.cancel_order(st["order_id"])
+                            say(f"[dim]  pre-cancel stop {tkr} (frees shares to sell)[/dim]")
+                            fill_log.append({"event": "stop_precancel", "broker": broker.name,
+                                             "ticker": tkr, "order_id": st["order_id"]})
+                        except Exception as e:
+                            say(f"[yellow]  pre-cancel stop failed for {tkr}: {e}[/yellow]")
+            except Exception as e:
+                say(f"[yellow]  pre-cancel skipped: open_stops failed ({e}) — sells may bounce on resting stops[/yellow]")
     for i, o in enumerate(preview.orders, 1):
         order_type = "MOC" if o.moc else "MKT"
         say(f"[{i}/{total}] {o.ticker} {o.side.value} {o.quantity:.2f} @ {order_type} ...", end=" ")
@@ -972,6 +992,26 @@ def _execute(broker, preview):
     # cron runs leave a trace.
     if not _JSON:
         c.print(f"[bold]Done.[/bold] {broker.name}: sent {sent}, failed {failed}")
+
+    # Wait for BUY fills so protective stops anchor on the REAL entry price, not the pre-trade
+    # quote. Market orders fill in seconds; poll the broker a few times, then fold the actual
+    # fill prices into `results` for _reconcile_stops.
+    need_fills = {o.ticker for o in preview.orders if o.side.value == "BUY" and o.stop_pct}
+    if need_fills and getattr(broker, "supports_stops", False) and hasattr(broker, "fills"):
+        import time as _time
+        for _attempt in range(6):  # ~ up to ~10s
+            try:
+                fp = broker.fills()
+            except Exception:
+                fp = {}
+            for r in results:
+                t = r.get("ticker")
+                if t in fp and not r.get("fill_price"):
+                    r["fill_price"] = float(fp[t])
+            if all(any(r.get("ticker") == t and r.get("fill_price") for r in results) for t in need_fills):
+                break
+            _time.sleep(1.5)
+
     _reconcile_stops(broker, preview, results)
     return sent, failed, results
 
