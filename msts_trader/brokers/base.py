@@ -92,7 +92,7 @@ class Broker(Protocol):
         """Cancel an open order by id."""
         raise NotImplementedError
 
-    def fills(self) -> dict:
-        """Average fill price per ticker from today's filled BUY orders, for anchoring protective
-        stops on the real entry. Default {} (override where the broker exposes fills)."""
-        return {}
+    # NOTE: `fills()` is an OPTIONAL capability, deliberately NOT part of this runtime_checkable
+    # Protocol — adding it here would force every adapter to implement it or fail isinstance().
+    # Adapters that can report average fill price (e.g. tastytrade) define `def fills(self) -> dict`
+    # returning {ticker: avg_fill_price}; _execute calls it via hasattr() to fill-anchor stops.

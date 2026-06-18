@@ -10,6 +10,11 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.17.1] — 2026-06-18
+
+### Fixed
+- `fills()` removed from the runtime_checkable `Broker` Protocol (it's an optional capability) — adding it in 0.17.0 broke `isinstance(broker, Broker)` for adapters that don't implement it (paper/alpaca/etc.). tastytrade keeps its `fills()`; `_execute` calls it via `hasattr`.
+
 ## [0.17.0] — 2026-06-18
 
 ### Fixed
