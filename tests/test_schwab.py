@@ -1,6 +1,10 @@
 """Schwab adapter parsing — mock the schwab-py client (no network)."""
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("schwab")  # optional dep — skip when the SDK is not installed
+
 from decimal import Decimal
 from types import SimpleNamespace
 

@@ -1,6 +1,10 @@
 """IBKR read-path parsing — faked ib_insync socket (no live connection)."""
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("ib_insync")  # optional dep — skip when the SDK is not installed
+
 from decimal import Decimal
 from types import SimpleNamespace
 

@@ -210,7 +210,9 @@ def test_multi_no_accounts_errors(tmp_path):
     r = CliRunner().invoke(main, ["multi", "--config", str(cfg), "--csv-file", str(csv), "--dry-run"])
     assert r.exit_code != 0
     # brackets must survive (rich-escaped), not be eaten to "no [] entries"
-    assert "[[account]]" in r.output
+    import re as _re
+    _clean = _re.sub(r"\x1b\[[0-9;]*m", "", r.output)  # strip ANSI color (env-dependent in CliRunner)
+    assert "[[account]]" in _clean
 
 
 def test_multi_no_csv_source_errors(tmp_path):
