@@ -113,6 +113,25 @@ def build_preview(
             rows.append(row)
             continue
 
+        # Explicit weight 0 == "exit this position fully", IDENTICAL to dropping
+        # the row from the book. It must bypass the drift/dust gates below — a
+        # small holding (< drift_threshold of NAV) would otherwise be frozen as
+        # "within drift" and never sold, silently keeping a position the book
+        # said to close. Sell the whole held quantity (like the exit-all pass).
+        if target_w == 0 and cur_pos is not None and cur_pos.quantity > 0:
+            qty = cur_pos.quantity.quantize(qexp, rounding=ROUND_DOWN)
+            if qty > 0:
+                order = Order(ticker=tkr, side=Side.SELL, quantity=qty,
+                              estimated_price=(px if (px := quotes.get(tkr)) and px > 0 else cur_pos.price),
+                              notional=cur_dollars)
+                row.order = order
+                row.note = "exit (weight 0)"
+                orders.append(order)
+            else:
+                row.note = "exit qty rounds to 0 (whole-share)"
+            rows.append(row)
+            continue
+
         # Drift denominator. "nav": delta as fraction of the whole book —
         # matches the engines' own NAV-relative rebalance thresholds at full
         # weight scale. "position": delta relative to the line itself — use

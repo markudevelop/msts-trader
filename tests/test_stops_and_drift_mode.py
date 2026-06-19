@@ -69,6 +69,22 @@ def test_position_mode_respects_threshold_on_small_drift():
 
 # ------------------------------------------------------------- stop carry ----
 
+def test_weight_zero_exits_small_position_like_missing_row():
+    """Explicit weight 0 must fully exit even a sub-drift (<4% NAV) holding —
+    identical to dropping the row — not freeze it as 'within drift'."""
+    pos = {"AAA": Position("AAA", Decimal("10"), Decimal("100"))}   # $1000 = 1% of $100k NAV
+    # weight 0 (explicit) -> full exit
+    p0 = _preview([Target("AAA", Decimal("0"))], positions=pos, quotes={"AAA": Decimal("100")})
+    assert len(p0.orders) == 1
+    assert p0.orders[0].side == Side.SELL
+    assert p0.orders[0].quantity == Decimal("10")
+    # dropping the row entirely -> same full exit (the exit-all sweep)
+    pmiss = _preview([Target("BBB", Decimal("1.0"))], positions=pos,
+                     quotes={"AAA": Decimal("100"), "BBB": Decimal("50")})
+    aaa = [o for o in pmiss.orders if o.ticker == "AAA"]
+    assert len(aaa) == 1 and aaa[0].side == Side.SELL and aaa[0].quantity == Decimal("10")
+
+
 def test_buy_order_carries_stop_pct():
     p = _preview([Target("WGMI", Decimal("0.018"), stop_pct=Decimal("0.015"))],
                  quotes={"WGMI": Decimal("10")}, drift_mode="position")

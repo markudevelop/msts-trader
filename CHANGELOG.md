@@ -10,6 +10,15 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.20.1] — 2026-06-19
+
+### Fixed
+- **Explicit `weight 0` now fully exits the position — identical to dropping the row.**
+  Previously a `0` row for a holding smaller than the drift threshold (default 4% of NAV, nav
+  mode) was frozen as "within drift" and silently *not* sold, despite `0` meaning "close it".
+  `0` now bypasses the drift/dust gates and sells the whole held quantity (its stop is then
+  cleared by reconciliation), matching the exit-all behavior of a removed ticker.
+
 ## [0.20.0] — 2026-06-19
 
 ### Added
