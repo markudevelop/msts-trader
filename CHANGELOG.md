@@ -10,6 +10,27 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-06-19
+
+### Added
+- **`rebalance --no-sweep`** (or `sweep = false` in the config / per `[[account]]`):
+  touch **only** the tickers listed in the CSV and leave every other held
+  position untouched — for running a strategy sleeve inside a **mixed account**.
+  - Default (`--sweep`) is unchanged: the CSV is the complete book, so any held
+    ticker **not** in it is liquidated (the account-wide sweep).
+  - Under `--no-sweep`, close a rotated-out name by listing it explicitly with
+    **weight 0** (handled by the existing weight-0 exit path). Held-but-unlisted
+    positions are surfaced in the preview as `kept — not in targets (--no-sweep)`
+    with no order, and never trigger a whole-book snap.
+  - Threaded through `rebalance`, `multi`, and the post-trade verify/self-heal path.
+
+### Note
+- This addresses a long-standing footgun: pointing the rebalance at an account
+  that holds positions outside the target CSV would liquidate them. `--no-sweep`
+  makes that opt-out explicit. Companion change in **msts-live**: the published
+  weights feed can emit `weight=0` rows for rotated-out names (the `removed` set
+  it already computes) so liquidations are explicit rather than sweep-implicit.
+
 ## [0.23.0] — 2026-06-19
 
 ### Added

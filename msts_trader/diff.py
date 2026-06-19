@@ -33,6 +33,7 @@ def build_preview(
     allocation: Decimal | None = None,
     drift_mode: str = "nav",
     rebalance_scope: str = "whole-book",
+    sweep: bool = True,
     whole_shares: bool = False,
 ) -> Preview:
     warnings: list[str] = []
@@ -104,7 +105,7 @@ def build_preview(
             if abs(dd) >= MIN_ORDER_DOLLARS and abs(dd) / _denom(tgt_d, cur_d) >= drift_threshold:
                 book_breached = True
                 break
-        if not book_breached:  # any holding to exit also makes the book live
+        if sweep and not book_breached:  # a sweep exit also makes the book live
             for tkr, pos in positions.items():
                 if tkr in target_map:
                     continue
@@ -229,7 +230,12 @@ def build_preview(
         orders.append(order)
         rows.append(row)
 
-    # 2) Tickers in positions but not in targets → exit
+    # 2) Tickers in positions but not in targets → exit.
+    # The sweep treats the CSV as the COMPLETE book: anything held but unlisted is
+    # liquidated. With sweep=False (--no-sweep) the engine touches ONLY the CSV's
+    # tickers and leaves every other position untouched — for running a strategy
+    # sleeve inside a mixed account. To CLOSE a rotated-out name under --no-sweep,
+    # list it explicitly with weight 0 (handled in section 1 above).
     for tkr, pos in positions.items():
         if tkr in target_map:
             continue
@@ -245,6 +251,14 @@ def build_preview(
             order=None,
             note="exit (not in targets)",
         )
+        # --no-sweep: surface the held-but-unlisted position so the operator sees
+        # it's deliberately left alone, but generate NO order. List it with weight
+        # 0 to actually close it.
+        if not sweep:
+            row.delta_dollars = Decimal(0)
+            row.note = "kept — not in targets (--no-sweep)"
+            rows.append(row)
+            continue
         # Whole-share exits round DOWN — never try to sell more than is held
         # (a fractional residual on a whole-share-only account stays put; the
         # broker couldn't sell it anyway).

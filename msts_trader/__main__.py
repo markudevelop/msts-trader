@@ -694,6 +694,11 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
                    "line breaches it, snap the WHOLE book to target (higher CAGR, more turnover). "
                    "'per-ticker': trade ONLY the breaching lines, leave the rest (lower turnover, "
                    "better Sharpe/drawdown).")
+@click.option("--sweep/--no-sweep", default=None,
+              help="Sweep (default): liquidate any held ticker NOT in the CSV — the CSV is the "
+                   "complete book. --no-sweep: touch ONLY the CSV's tickers and leave all other "
+                   "positions untouched (run a sleeve inside a mixed account). Under --no-sweep, "
+                   "close a rotated-out name by listing it with weight 0.")
 @click.option("--allocation", type=float, default=None, help="Dollar amount the weights apply to (run a sub-portfolio inside a bigger account). Default: full NAV.")
 @click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Read the target CSV from a file instead of stdin.")
 @click.option("--csv-url", default=None, help="Fetch the target CSV from a URL instead of stdin.")
@@ -728,6 +733,7 @@ def rebalance(
     default_stop: float | None,
     threshold_mode: str | None,
     rebalance_scope: str | None,
+    sweep: bool | None,
     allocation: float | None,
     csv_file: str | None,
     csv_url: str | None,
@@ -766,6 +772,7 @@ def rebalance(
         _fail(f"--stop-pct {default_stop} outside (0, 0.5) — it is a FRACTION below entry (0.015 = 1.5%), not a price.")
     threshold_mode = config.pick(threshold_mode, cfg, "threshold_mode", "nav")
     rebalance_scope = config.pick(rebalance_scope, cfg, "rebalance_scope", "whole-book")
+    sweep = bool(config.pick(sweep, cfg, "sweep", True))
     allocation = config.pick(allocation, cfg, "allocation")
     csv_file = config.pick(csv_file, cfg, "csv_file")
     csv_url = config.pick(csv_url, cfg, "csv_url")
@@ -870,6 +877,7 @@ def rebalance(
         allocation=Decimal(str(allocation)) if allocation is not None else None,
         drift_mode=threshold_mode or "nav",
         rebalance_scope=rebalance_scope or "whole-book",
+        sweep=sweep,
         whole_shares=whole_shares,
     )
     if margin_aware:
@@ -913,7 +921,7 @@ def rebalance(
         )
         vres = None if no_verify else _post_trade_verify(
             b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
-            allocation=allocation, whole_shares=whole_shares, rebalance_scope=rebalance_scope,
+            allocation=allocation, whole_shares=whole_shares, rebalance_scope=rebalance_scope, sweep=sweep,
             self_heal=not no_self_heal, heal_passes=heal_passes, order_type=order_type, chase_cfg=chase_cfg,
             notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
         out = {"executed": True, "sent": sent, "failed": failed, "results": results}
@@ -959,7 +967,7 @@ def rebalance(
     if not no_verify:
         _post_trade_verify(
             b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
-            allocation=allocation, whole_shares=whole_shares, rebalance_scope=rebalance_scope,
+            allocation=allocation, whole_shares=whole_shares, rebalance_scope=rebalance_scope, sweep=sweep,
             self_heal=not no_self_heal, heal_passes=heal_passes, order_type=order_type, chase_cfg=chase_cfg,
             notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
 
@@ -1141,7 +1149,7 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
 
 
 def _verify_once(b, targets, *, threshold, threshold_mode, min_weight, allocation, whole_shares,
-                 rebalance_scope="whole-book"):
+                 rebalance_scope="whole-book", sweep=True):
     """Re-fetch broker state and rebuild the diff. Returns (VerifyResult, post_fill_preview)."""
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
@@ -1157,13 +1165,14 @@ def _verify_once(b, targets, *, threshold, threshold_mode, min_weight, allocatio
         allocation=Decimal(str(allocation)) if allocation is not None else None,
         drift_mode=threshold_mode or "nav",
         rebalance_scope=rebalance_scope or "whole-book",
+        sweep=sweep,
         whole_shares=whole_shares,
     )
     return check_convergence(post), post
 
 
 def _post_trade_verify(b, targets, *, threshold=None, threshold_mode="nav", min_weight=None,
-                       allocation=None, whole_shares=False, rebalance_scope="whole-book",
+                       allocation=None, whole_shares=False, rebalance_scope="whole-book", sweep=True,
                        settle_seconds=2.0,
                        self_heal=False, heal_passes=1, order_type="market", chase_cfg=None,
                        notify_url=None, tg_token=None, tg_chat=None):
@@ -1188,7 +1197,7 @@ def _post_trade_verify(b, targets, *, threshold=None, threshold_mode="nav", min_
             res, post = _verify_once(
                 b, targets, threshold=threshold, threshold_mode=threshold_mode,
                 min_weight=min_weight, allocation=allocation, whole_shares=whole_shares,
-                rebalance_scope=rebalance_scope)
+                rebalance_scope=rebalance_scope, sweep=sweep)
             if res.ok or not self_heal or attempt >= heal_passes or not post.orders:
                 break
             if market_status().status != "open":
@@ -1344,7 +1353,7 @@ def _reconcile_stops(broker, preview, results, targets=None):
             _cancel_all(tkr, "no position (orphan)")
 
 
-def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None, whole_shares: bool = False, threshold_mode: str = "nav", rebalance_scope: str = "whole-book", order_type: str = "market", chase_cfg=None) -> dict:
+def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None, whole_shares: bool = False, threshold_mode: str = "nav", rebalance_scope: str = "whole-book", sweep: bool = True, order_type: str = "market", chase_cfg=None) -> dict:
     """Run the full rebalance pipeline for one already-built broker.
 
     No interactive prompts, no rich rendering — returns a result dict.
@@ -1369,6 +1378,7 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
         allocation=Decimal(str(allocation)) if allocation is not None else None,
         drift_mode=threshold_mode or "nav",
         rebalance_scope=rebalance_scope or "whole-book",
+        sweep=sweep,
         whole_shares=whole_shares,
     )
     if margin_aware:
@@ -1433,6 +1443,7 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
     threshold = float(cfg.get("threshold", 0.04))
     threshold_mode = str(cfg.get("threshold_mode", "nav"))
     rebalance_scope = str(cfg.get("rebalance_scope", "whole-book"))
+    sweep_default = bool(cfg.get("sweep", True))
     min_weight = cfg.get("min_weight")
     allocation_default = cfg.get("allocation")
     max_notional = cfg.get("max_notional")
@@ -1520,6 +1531,7 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
                 whole_shares=acct.get("whole_shares", whole_shares),
                 threshold_mode=str(acct.get("threshold_mode", threshold_mode)),
                 rebalance_scope=str(acct.get("rebalance_scope", rebalance_scope)),
+                sweep=bool(acct.get("sweep", sweep_default)),
                 order_type=acct_order_type,
                 chase_cfg=chase_cfg if acct_order_type == "limit-chase" else None,
             )
