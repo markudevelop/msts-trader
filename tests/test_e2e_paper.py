@@ -106,6 +106,37 @@ def test_full_paper_rebalance_limit_chase_executes_and_fills(tmp_path):
     assert held.get("SHV") == Decimal("181.81")      # 0.4*50000/110, rounded down
 
 
+def test_mixed_rebalance_stops_and_no_stops(tmp_path):
+    """A single rebalance with a MIX: one name wants a protective stop, one does
+    not. Both must fill; a stop is armed ONLY on the stop name, sized to the
+    held quantity and anchored on the fill price."""
+    runner = CliRunner()
+    assert runner.invoke(main, ["login", "--broker", "paper"], input="100000\n").exit_code == 0
+    from msts_trader.brokers.paper import Paper
+    p = Paper(starting_cash="100000")
+    p.set_quote("AAA", Decimal("100"))
+    p.set_quote("BBB", Decimal("50"))
+
+    csv = tmp_path / "t.csv"
+    csv.write_text("ticker,weight,stop_pct\nAAA,0.5,0.02\nBBB,0.5,\n")
+    r = runner.invoke(main, ["--broker", "paper", "rebalance", "--csv-file", str(csv), "--yes"])
+    assert r.exit_code == 0, r.output
+    assert "Done." in r.output
+
+    # Both names filled.
+    out = runner.invoke(main, ["--broker", "paper", "status", "--json"])
+    held = {p["ticker"]: Decimal(p["quantity"])
+            for p in _json.loads(out.output.strip().splitlines()[-1])["positions"]}
+    assert held["AAA"] == Decimal("500")    # 0.5*100000/100
+    assert held["BBB"] == Decimal("1000")   # 0.5*100000/50
+
+    # Stop armed only on AAA, sized to the holding, anchored on the 100 fill.
+    stops = Paper().open_stops()
+    assert "BBB" not in stops, "stop placed on a name with no stop_pct"
+    assert stops["AAA"][0]["quantity"] == Decimal("500")
+    assert stops["AAA"][0]["stop_price"] == Decimal("98.00")  # 100 * (1 - 0.02)
+
+
 def test_full_paper_rebalance_json_execute(tmp_path):
     runner = CliRunner()
     runner.invoke(main, ["login", "--broker", "paper"], input="50000\n")

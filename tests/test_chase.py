@@ -507,7 +507,7 @@ def test_rebalance_one_routes_order_type_to_execute(monkeypatch):
     p = Paper()
     p.set_quote("SPY", D("100"))
     captured = {}
-    monkeypatch.setattr(m, "_execute", lambda b, preview, *, order_type="market", chase_cfg=None:
+    monkeypatch.setattr(m, "_execute", lambda b, preview, *, order_type="market", chase_cfg=None, targets=None:
                         (captured.update(order_type=order_type, cfg=chase_cfg) or (1, 0, [])))
     cfg = _fast_cfg()
     r = m._rebalance_one(p, [Target(ticker="SPY", weight=D("1.0"))],

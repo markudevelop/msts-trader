@@ -881,7 +881,7 @@ def rebalance(
         if not yes:
             print(json.dumps({"error": "refusing to execute without --yes in JSON/non-interactive mode"}))
             sys.exit(1)
-        sent, failed, results = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg)
+        sent, failed, results = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
         if sent > 0 and failed == 0:
             runstate.record(fp)  # only mark done on clean success, so a partial run can re-complete
         _do_notify(
@@ -915,7 +915,7 @@ def rebalance(
             say("[red]Cancelled.[/red]")
             sys.exit(0)
 
-    sent, failed, _ = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg)
+    sent, failed, _ = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
     if sent > 0 and failed == 0:
         runstate.record(fp)  # only mark done on clean success, so a partial run can re-complete
 
@@ -970,7 +970,7 @@ def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
         c.print(f"[red]✗ {escape(b)}[/red]")
 
 
-def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None):
+def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, targets=None):
     total = len(preview.orders)
     sent = 0
     failed = 0
@@ -1037,39 +1037,76 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None):
     if not _JSON:
         c.print(f"[bold]Done.[/bold] {broker.name}: sent {sent}, failed {failed}")
 
-    # Wait for BUY fills so protective stops anchor on the REAL entry price, not the pre-trade
-    # quote. Market orders fill in seconds; poll the broker a few times, then fold the actual
-    # fill prices into `results` for _reconcile_stops.
+    # CONFIRM BUY fills before any protective stop is placed. A stop must never
+    # be set for shares we don't actually hold yet — an unconfirmed/unfilled buy
+    # would otherwise get a naked stop that opens a short if it triggers. Fill
+    # confirmation is broker-agnostic: poll broker.positions() until the bought
+    # shares appear. Where the broker also exposes fills(), fold the real fill
+    # price into `results` so the stop anchors on the actual entry, not the quote.
     need_fills = {o.ticker for o in preview.orders if o.side.value == "BUY" and o.stop_pct}
-    if need_fills and getattr(broker, "supports_stops", False) and hasattr(broker, "fills"):
+    if need_fills and getattr(broker, "supports_stops", False):
         import time as _time
         for _attempt in range(6):  # ~ up to ~10s
             try:
-                fp = broker.fills()
+                pos_now = broker.positions()
             except Exception:
-                fp = {}
+                pos_now = {}
+            # Anchor the stop on the REAL entry, not the position's avg/current
+            # price: pull the actual fill price from the order itself via
+            # order_status (every adapter exposes filled_avg_price), with
+            # tastytrade's fills() as a fallback.
             for r in results:
                 t = r.get("ticker")
-                if t in fp and not r.get("fill_price"):
-                    r["fill_price"] = float(fp[t])
-            if all(any(r.get("ticker") == t and r.get("fill_price") for r in results) for t in need_fills):
+                oid = r.get("order_id")
+                if t not in need_fills or r.get("fill_price") or not oid:
+                    continue
+                if hasattr(broker, "order_status"):
+                    try:
+                        st = broker.order_status(oid)
+                    except Exception:
+                        st = {}
+                    avg = st.get("filled_avg_price")
+                    if avg:
+                        r["fill_price"] = float(avg)
+            if hasattr(broker, "fills"):
+                try:
+                    fp = broker.fills()
+                except Exception:
+                    fp = {}
+                for r in results:
+                    t = r.get("ticker")
+                    if t in fp and not r.get("fill_price"):
+                        r["fill_price"] = float(fp[t])
+            if all(t in pos_now and pos_now[t].quantity > 0 for t in need_fills):
                 break
             _time.sleep(1.5)
 
-    _reconcile_stops(broker, preview, results)
+    _reconcile_stops(broker, preview, results, targets=targets)
     return sent, failed, results
 
 
-def _reconcile_stops(broker, preview, results):
-    """Protective-stop bookkeeping, run after fills.
+def _reconcile_stops(broker, preview, results, targets=None):
+    """Idempotent protective-stop reconciliation, run after fills are confirmed.
 
-    - BUY orders carrying stop_pct (CSV `stop_pct` column): place a GTC SELL
-      STOP at fill_price * (1 - stop_pct) for the filled quantity.
-    - Tickers we just SOLD or that left the target book: cancel their open
-      stops (a resting stop with no position would open a naked short).
+    Every rebalance, make the broker stop book match reality:
+
+    * **Fill-confirmed sizing.** A stop is placed only for shares we actually
+      hold — quantity always comes from ``broker.positions()``, never the
+      intended order size — so an unconfirmed / unfilled buy can never leave a
+      naked stop (which would open a short if it triggered).
+    * **SELLs / trims.** Cancel the old stop; if a remainder is still held and
+      the target wants protection, re-place for the remaining quantity.
+    * **Missing stops (self-heal).** Any HELD name the target wants protected
+      that has no open stop gets one — even if it didn't trade this run (a stop
+      that was missed, rejected, or filled-and-not-replaced last time is
+      backfilled on the next rebalance).
+    * **Orphan stops.** Any open stop with no live position is cancelled (a
+      resting stop with nothing behind it is a naked-short risk).
+
     Brokers without supports_stops: warn once if the CSV asked for stops.
     """
-    wants_stops = any(o.stop_pct for o in preview.orders)
+    wants_stops = any(o.stop_pct for o in preview.orders) or any(
+        getattr(t, "stop_pct", None) for t in (targets or []))
     if not getattr(broker, "supports_stops", False):
         if wants_stops:
             say(f"[yellow]{broker.name} does not support stop orders — "
@@ -1080,23 +1117,27 @@ def _reconcile_stops(broker, preview, results):
     except Exception as e:
         say(f"[yellow]stop reconcile skipped: open_stops failed ({e})[/yellow]")
         return
-    # A clean send is eligible for stop bookkeeping. A limit-chase that
-    # partially filled and THEN failed to complete (fallback errored) comes
-    # back status="error" but carries a real fill — those shares still need a
-    # protective stop, so include them too (anchored strictly on the actual
-    # post-trade position below, never on the intended order qty).
-    def _has_real_fill(r):
-        return bool(r.get("chase_limit_filled") or r.get("filled_quantity"))
-
-    filled = {}
-    for r in results:
-        if r.get("status") not in ("error", "skipped", "dry-run") or _has_real_fill(r):
-            filled[r.get("ticker")] = r
-    # Post-trade positions: the authoritative remaining quantity per ticker.
     try:
         post_positions = broker.positions()
     except Exception:
         post_positions = {}
+
+    # Desired protection per ticker. The target book is authoritative (it covers
+    # held-but-not-traded names too); fall back to BUY-order stop_pct when no
+    # targets were threaded in (keeps the direct-call/unit-test shape working).
+    desired = {t.ticker: t.stop_pct for t in (targets or []) if getattr(t, "stop_pct", None)}
+    for o in preview.orders:
+        if getattr(o, "stop_pct", None):
+            desired.setdefault(o.ticker, o.stop_pct)
+
+    results_by_tkr = {r.get("ticker"): r for r in results}
+
+    def _traded(tkr) -> bool:
+        # The order for this ticker actually did something (clean send or a
+        # partial chase fill) — vs. a failed/skipped order we should ignore.
+        r = results_by_tkr.get(tkr)
+        return bool(r and (r.get("status") not in ("error", "skipped", "dry-run")
+                           or r.get("chase_limit_filled") or r.get("filled_quantity")))
 
     def _cancel_all(tkr, why):
         for stop in open_stops.get(tkr, []):
@@ -1108,57 +1149,70 @@ def _reconcile_stops(broker, preview, results):
             except Exception as e:
                 say(f"[yellow]  stop cancel failed for {tkr}: {e}[/yellow]")
 
-    def _place(tkr, qty, px, stop_pct):
+    def _place(tkr, qty, px, stop_pct, why):
         stop_price = (px * (Decimal(1) - stop_pct)).quantize(Decimal("0.01"))
         try:
             res = broker.place_stop(tkr, qty, stop_price)
-            say(f"  stop placed: {tkr} {qty} @ {stop_price} ({stop_pct:.1%} below ref)")
+            say(f"  stop placed: {tkr} {qty} @ {stop_price} ({stop_pct:.1%} below ref) — {why}")
             fill_log.append({"event": "stop_place", "broker": broker.name, **res})
         except Exception as e:
             say(f"[yellow]  stop place failed for {tkr}: {e}[/yellow]")
 
-    stop_pcts = {o.ticker: o.stop_pct for o in preview.orders if o.stop_pct}
+    handled: set[str] = set()
 
-    # 1) SELLs: cancel existing stops; if a REMAINDER is still held and the
-    #    target wants a stop, re-place for the remaining quantity (anchored
-    #    at the current price — the original entry is gone with the trim).
+    # 1) SELLs / trims: cancel the old stop; re-place for any still-held
+    #    remainder the target still wants protected (anchored at current price —
+    #    the original entry is gone with the trim).
     for o in preview.orders:
-        if o.side.value != "SELL" or o.ticker not in filled:
+        if o.side.value != "SELL" or not _traded(o.ticker):
             continue
         tkr = o.ticker
-        if not open_stops.get(tkr):
-            continue
-        _cancel_all(tkr, "position reduced")
+        handled.add(tkr)
+        if open_stops.get(tkr):
+            _cancel_all(tkr, "position reduced")
         remaining = post_positions.get(tkr)
-        pct = stop_pcts.get(tkr)
+        pct = desired.get(tkr)
         if remaining is not None and remaining.quantity > 0 and pct:
-            px = Decimal(str(filled[tkr].get("fill_price") or o.estimated_price
-                             or remaining.price or 0))
+            px = Decimal(str(results_by_tkr.get(tkr, {}).get("fill_price")
+                             or o.estimated_price or remaining.price or 0))
             if px > 0:
-                _place(tkr, remaining.quantity, px, pct)
+                _place(tkr, remaining.quantity, px, pct, "remainder")
 
-    # 2) BUYs with stop_pct: protect the WHOLE post-trade position (an add-on
-    #    buy must not leave the pre-existing shares uncovered). Replace any
-    #    stale stop first.
-    for o in preview.orders:
-        if o.side.value != "BUY" or not o.stop_pct or o.ticker not in filled:
+    # 2) Ensure every HELD name the target wants protected has exactly one stop
+    #    for the held quantity. Covers fresh BUYs (re-anchored on the real fill)
+    #    AND held-but-not-traded names whose stop went missing. Quantity is the
+    #    confirmed holding — never an unfilled order size.
+    for tkr, pct in desired.items():
+        if tkr in handled:
             continue
-        r = filled[o.ticker]
-        px = Decimal(str(r.get("fill_price") or o.estimated_price or 0))
-        if px <= 0:
+        held = post_positions.get(tkr)
+        qty = held.quantity if (held is not None and held.quantity > 0) else Decimal(0)
+        if qty <= 0:
+            continue  # nothing held -> nothing to protect (no naked stop)
+        existing = open_stops.get(tkr, [])
+        r = results_by_tkr.get(tkr)
+        fill_px = None
+        if r and r.get("side") == "BUY" and r.get("fill_price"):
+            fill_px = Decimal(str(r.get("fill_price")))
+        existing_ok = len(existing) == 1 and existing[0].get("quantity") == qty
+        if fill_px is None and existing_ok:
+            continue  # correct stop already resting and no fresh entry -> don't churn it
+        px = fill_px if fill_px is not None else (held.price if held.price > 0 else None)
+        if px is None or px <= 0:
+            continue  # no usable anchor -> leave for the next run
+        if existing:
+            _cancel_all(tkr, "replacing stale stop" if fill_px is not None else "syncing stop")
+        _place(tkr, qty, px, pct, "fresh entry" if fill_px is not None else "backfill")
+        handled.add(tkr)
+
+    # 3) Orphan sweep: an open stop with no live position is a naked-short risk —
+    #    cancel it (manual exits, dropped tickers, leftovers from a prior run).
+    for tkr in list(open_stops):
+        if tkr in handled:
             continue
-        pos = post_positions.get(o.ticker)
-        if r.get("status") in ("error", "skipped"):
-            # Order didn't complete cleanly (e.g. chase partial + fallback fail).
-            # Protect ONLY shares we actually hold — never the intended qty, or a
-            # stop could be placed for shares that never filled (naked short risk).
-            if pos is None or pos.quantity <= 0:
-                continue
-            qty = pos.quantity
-        else:
-            qty = pos.quantity if pos is not None and pos.quantity > 0 else o.quantity
-        _cancel_all(o.ticker, "replacing stale stop") if open_stops.get(o.ticker) else None
-        _place(o.ticker, qty, px, o.stop_pct)
+        held = post_positions.get(tkr)
+        if held is None or held.quantity <= 0:
+            _cancel_all(tkr, "no position (orphan)")
 
 
 def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None, whole_shares: bool = False, order_type: str = "market", chase_cfg=None) -> dict:
@@ -1213,7 +1267,7 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
         result["status"] = "duplicate"
         return result
 
-    sent, failed, _ = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg)
+    sent, failed, _ = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
     if sent > 0 and failed == 0:
         runstate.record(fp)
     result.update(sent=sent, failed=failed, status="executed" if failed == 0 else "partial")

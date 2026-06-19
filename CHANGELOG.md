@@ -10,6 +10,33 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-06-19
+
+### Fixed
+- **Protective stops are now placed only for confirmed-held shares.** Before placing a
+  `stop_pct` stop after a BUY, `_execute` now polls `broker.positions()` (broker-agnostic,
+  not just tastytrade's `fills()`) until the bought shares actually show up, and
+  `_reconcile_stops` sizes every stop from the real holding — never the intended order
+  size. An accepted-but-unfilled buy can no longer leave a **naked stop** (which would open
+  a short if it triggered).
+- **Protective stops now anchor on the real fill price on every broker.** After a BUY, the
+  actual entry is pulled from the order itself via `order_status().filled_avg_price` (with
+  tastytrade's `fills()` as a fallback) — previously only tastytrade got the true fill and
+  Alpaca/Tradier/IBKR/Schwab anchored on the position's avg/current price. The stop now sits
+  at `real_fill × (1 − stop_pct)`.
+
+### Changed
+- **Stop reconciliation is now a full idempotent sweep every rebalance**, not just bookkeeping
+  for the tickers traded this run:
+  - **Missing stops self-heal** — any held name the target wants protected that has no open
+    stop gets one, even if it didn't trade this run (recovers a stop that was missed,
+    rejected, or filled-and-not-replaced previously). Needs the target book, so `targets`
+    is now threaded into `_execute` → `_reconcile_stops`.
+  - **Orphan stops are cancelled** — any open stop with no live position (manual exit,
+    dropped ticker, prior-run leftover) is removed.
+  - **No churn** — a held name whose stop is already correct is left untouched (fresh BUYs
+    still re-anchor on the real fill).
+
 ## [0.18.0] — 2026-06-19
 
 ### Added

@@ -170,3 +170,134 @@ def test_full_exit_cancels_without_replacing(tmp_path, monkeypatch):
     res = b.place_market(sell)
     _reconcile_stops(b, preview, [res])
     assert b.open_stops() == {}, "full exit must not leave or re-place stops"
+
+
+# ----------------------------------------- concern 1: no naked stops ----
+
+def test_no_stop_when_buy_fill_unconfirmed(tmp_path, monkeypatch):
+    """A broker that accepts a BUY but whose positions() does not (yet) show the
+    shares must NOT get a protective stop — never anchor on the intended size."""
+    from msts_trader.__main__ import _reconcile_stops
+    from msts_trader.models import Order, Preview, Side, Target
+
+    class UnconfirmedBroker:
+        name = "uc"
+        supports_stops = True
+
+        def __init__(self):
+            self.placed = []
+
+        def open_stops(self):
+            return {}
+
+        def positions(self):
+            return {}  # fill not yet reflected
+
+        def place_stop(self, tkr, qty, stop_price, dry_run=False):
+            self.placed.append((tkr, qty))
+            return {"status": "ACCEPTED", "ticker": tkr}
+
+        def cancel_order(self, oid):
+            return {"status": "CANCELLED"}
+
+    b = UnconfirmedBroker()
+    buy = Order("WGMI", Side.BUY, Decimal("100"), Decimal("50"), stop_pct=Decimal("0.015"))
+    preview = Preview(nav=Decimal(0), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[buy])
+    # broker reports "accepted" (not filled) and positions() is empty
+    res = {"status": "accepted", "ticker": "WGMI", "side": "BUY", "order_id": "x"}
+    _reconcile_stops(b, preview, [res], targets=[Target("WGMI", Decimal("0.5"), stop_pct=Decimal("0.015"))])
+    assert b.placed == [], "placed a stop for shares not confirmed held (naked stop)"
+
+
+# --------------------------------- concern 2: orphan + missing-stop sweep ----
+
+def test_orphan_stop_cancelled_when_no_position(tmp_path, monkeypatch):
+    """A resting stop with no live position (manual exit / leftover) is cancelled
+    even though the ticker isn't traded this run."""
+    from msts_trader.__main__ import _reconcile_stops
+    from msts_trader.models import Preview
+    b = _mk_cli_env(tmp_path, monkeypatch)
+    b.place_stop("WGMI", Decimal("100"), Decimal("49.25"))   # stop, but no position
+    assert "WGMI" in b.open_stops()
+    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[])
+    _reconcile_stops(b, preview, [], targets=[])
+    assert b.open_stops() == {}, "orphan stop with no position must be cancelled"
+
+
+def test_missing_stop_backfilled_for_held_untraded_name(tmp_path, monkeypatch):
+    """A held position the target wants protected, with no open stop and no trade
+    this run, gets a stop backfilled from the target book."""
+    from msts_trader.__main__ import _reconcile_stops
+    from msts_trader.models import Order, Preview, Side, Target
+    b = _mk_cli_env(tmp_path, monkeypatch)
+    b.set_quote("WGMI", Decimal("50"))
+    b.place_market(Order("WGMI", Side.BUY, Decimal("100"), Decimal("50")))  # held, no stop
+    assert b.open_stops() == {}
+    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[])
+    _reconcile_stops(b, preview, [], targets=[Target("WGMI", Decimal("0.5"), stop_pct=Decimal("0.02"))])
+    stops = b.open_stops()
+    assert "WGMI" in stops, "missing stop on a held target name was not backfilled"
+    assert stops["WGMI"][0]["quantity"] == Decimal("100")
+    assert stops["WGMI"][0]["stop_price"] == Decimal("49.00")  # 50 * (1 - 0.02)
+
+
+def test_stop_anchors_on_order_status_fill_price(tmp_path, monkeypatch):
+    """A broker whose place_market returns no fill price (async ack) still gets
+    its stop anchored on the REAL entry, pulled from order_status — not the
+    position's avg/current price."""
+    from msts_trader.__main__ import _execute
+    from msts_trader.models import Order, Position, Preview, Side, Target
+
+    class AsyncFillBroker:
+        name = "af"
+        supports_stops = True
+
+        def __init__(self):
+            self.placed = []
+
+        def open_stops(self):
+            return {}
+
+        def place_market(self, o, dry_run=False):
+            # async ack: confirms nothing, carries no fill price
+            return {"status": "accepted", "ticker": o.ticker, "side": o.side.value,
+                    "quantity": float(o.quantity), "order_id": "o1"}
+
+        def positions(self):
+            # position shows up (qty + a stale avg price of 500)
+            return {"SPY": Position("SPY", Decimal("10"), Decimal("500"))}
+
+        def order_status(self, oid):
+            # the true fill came in at 501.23, not the 500 the position shows
+            return {"status": "filled", "filled_qty": 10.0, "filled_avg_price": 501.23}
+
+        def place_stop(self, tkr, qty, stop_price, dry_run=False):
+            self.placed.append((tkr, qty, float(stop_price)))
+            return {"status": "ACCEPTED", "ticker": tkr, "order_id": "s1"}
+
+        def cancel_order(self, oid):
+            return {"status": "CANCELLED"}
+
+    b = AsyncFillBroker()
+    buy = Order("SPY", Side.BUY, Decimal("10"), Decimal("500"), stop_pct=Decimal("0.02"))
+    preview = Preview(nav=Decimal(0), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[buy])
+    _execute(b, preview, targets=[Target("SPY", Decimal("1.0"), stop_pct=Decimal("0.02"))])
+    # 501.23 * (1 - 0.02) = 491.21, NOT 500 * 0.98 = 490.00
+    assert b.placed == [("SPY", Decimal("10"), 491.21)]
+
+
+def test_existing_correct_stop_not_churned(tmp_path, monkeypatch):
+    """A held name with an already-correct stop and no trade this run is left
+    untouched (no cancel/replace churn that would re-anchor the stop daily)."""
+    from msts_trader.__main__ import _reconcile_stops
+    from msts_trader.models import Order, Preview, Side, Target
+    b = _mk_cli_env(tmp_path, monkeypatch)
+    b.set_quote("WGMI", Decimal("50"))
+    b.place_market(Order("WGMI", Side.BUY, Decimal("100"), Decimal("50")))
+    placed = b.place_stop("WGMI", Decimal("100"), Decimal("49.25"))
+    oid = placed["order_id"]
+    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[])
+    _reconcile_stops(b, preview, [], targets=[Target("WGMI", Decimal("0.5"), stop_pct=Decimal("0.015"))])
+    stops = b.open_stops()
+    assert len(stops["WGMI"]) == 1
+    assert stops["WGMI"][0]["order_id"] == oid, "correct stop was needlessly cancelled/replaced"
