@@ -10,6 +10,20 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-06-19
+
+### Added
+- **Post-trade verification — confirm the account actually reached target.** After a rebalance's
+  fills (and stop reconciliation), the broker state is re-fetched and the rebalance diff is run
+  again; any leg that would *still* trade is a position that did not converge (partial fill,
+  failed close, rejected order, or not-yet-settled). Reported on the console and as a follow-up
+  notification (`✅ converged` / `🔴 NOT converged — N leg(s) off target …`), and included in
+  `--json` output as a `verify` object. Broker-agnostic (Broker Protocol only — works on every
+  adapter). Reuses the existing `diff.build_preview`, so "converged" honors the same drift
+  threshold/mode as the rebalance. Disable with `--no-verify`. New module `msts_trader/verify.py`
+  (`check_convergence`, pure + unit-tested). This catches the failure mode where a `sent N,
+  failed M` summary looks fine but the resulting book is materially off target.
+
 ## [0.20.1] — 2026-06-19
 
 ### Fixed
