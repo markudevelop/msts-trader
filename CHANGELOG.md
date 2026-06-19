@@ -10,6 +10,17 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-06-19
+
+### Added
+- **Self-heal — post-trade verify now closes the gap on a second pass.** When verification finds
+  the book off target (partial fill, failed close, rejected order), the residual legs are
+  automatically re-executed once and re-verified, so a single rebalance command converges the
+  account instead of just reporting the miss. Bounded by `--heal-passes` (default 1), only
+  re-trades while the market is OPEN, and each pass runs through the normal executor (re-bought
+  legs get their protective stops). On by default; `--no-self-heal` for report-only. A leg that
+  cannot fill stops after the cap and is reported 🔴.
+
 ## [0.21.0] — 2026-06-19
 
 ### Added

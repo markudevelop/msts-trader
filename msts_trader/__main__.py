@@ -708,6 +708,8 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 @click.option("--chase-fallback/--no-chase-fallback", default=None, help="limit-chase: send a market order for any unfilled remainder when the chase exhausts (default on).")
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
 @click.option("--no-verify", is_flag=True, default=False, help="Skip the post-trade verification (by default, after fills the account is re-fetched and checked against target; any leg still off-target is reported/alerted).")
+@click.option("--no-self-heal", is_flag=True, default=False, help="Disable self-heal. By default, if post-trade verify finds the book off target, the residual legs are re-executed once (market-open only) to converge — set this to report-only.")
+@click.option("--heal-passes", type=int, default=1, show_default=True, help="Max self-heal re-execution passes when the book hasn't converged.")
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON instead of tables.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output (for cron logs).")
 @click.pass_context
@@ -739,6 +741,8 @@ def rebalance(
     chase_fallback: bool | None,
     force: bool,
     no_verify: bool,
+    no_self_heal: bool,
+    heal_passes: int,
     json_out: bool,
     quiet: bool,
 ) -> None:
@@ -902,6 +906,7 @@ def rebalance(
         vres = None if no_verify else _post_trade_verify(
             b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
             allocation=allocation, whole_shares=whole_shares,
+            self_heal=not no_self_heal, heal_passes=heal_passes, order_type=order_type, chase_cfg=chase_cfg,
             notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
         out = {"executed": True, "sent": sent, "failed": failed, "results": results}
         if vres is not None:
@@ -947,6 +952,7 @@ def rebalance(
         _post_trade_verify(
             b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
             allocation=allocation, whole_shares=whole_shares,
+            self_heal=not no_self_heal, heal_passes=heal_passes, order_type=order_type, chase_cfg=chase_cfg,
             notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
 
 
@@ -1126,37 +1132,69 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
     return sent, failed, results
 
 
+def _verify_once(b, targets, *, threshold, threshold_mode, min_weight, allocation, whole_shares):
+    """Re-fetch broker state and rebuild the diff. Returns (VerifyResult, post_fill_preview)."""
+    bal = retry.with_retry(b.balances)
+    pos = retry.with_retry(b.positions)
+    universe = sorted({tg.ticker for tg in targets} | set(pos.keys()))
+    quotes = retry.with_retry(lambda: b.quote(universe))
+    for tk, p in pos.items():
+        quotes.setdefault(tk, p.price)
+    post = build_preview(
+        targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
+        buying_power=bal.buying_power, quotes=quotes,
+        drift_threshold=Decimal(str(threshold)) if threshold is not None else DRIFT_THRESHOLD,
+        min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
+        allocation=Decimal(str(allocation)) if allocation is not None else None,
+        drift_mode=threshold_mode or "nav",
+        whole_shares=whole_shares,
+    )
+    return check_convergence(post), post
+
+
 def _post_trade_verify(b, targets, *, threshold=None, threshold_mode="nav", min_weight=None,
                        allocation=None, whole_shares=False, settle_seconds=2.0,
+                       self_heal=False, heal_passes=1, order_type="market", chase_cfg=None,
                        notify_url=None, tg_token=None, tg_chat=None):
     """After fills, re-fetch broker state and confirm the account CONVERGED to target.
 
     Reuses the exact rebalance diff (build_preview) against fresh positions: any residual order
     is a leg that didn't reach target (partial fill / failed close / not-yet-settled). Broker-
-    agnostic (Broker Protocol only) and best-effort — never raises, never trades.
+    agnostic (Broker Protocol only) and best-effort — never raises.
+
+    SELF-HEAL (self_heal=True): if not converged, RE-EXECUTE the residual orders and re-verify,
+    up to `heal_passes` times. Only re-trades while the market is OPEN; each pass goes through the
+    normal _execute path (so re-bought legs get their protective stops too). A leg that simply
+    cannot fill (no liquidity / repeatedly rejected) stops after the cap and is reported 🔴.
     """
+    healed = 0
+    res = None
     try:
         import time as _t
-        if settle_seconds:
-            _t.sleep(settle_seconds)  # give fills a moment to reflect in positions()
-        bal = retry.with_retry(b.balances)
-        pos = retry.with_retry(b.positions)
-        universe = sorted({tg.ticker for tg in targets} | set(pos.keys()))
-        quotes = retry.with_retry(lambda: b.quote(universe))
-        for tk, p in pos.items():
-            quotes.setdefault(tk, p.price)
-        post = build_preview(
-            targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
-            buying_power=bal.buying_power, quotes=quotes,
-            drift_threshold=Decimal(str(threshold)) if threshold is not None else DRIFT_THRESHOLD,
-            min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
-            allocation=Decimal(str(allocation)) if allocation is not None else None,
-            drift_mode=threshold_mode or "nav",
-            whole_shares=whole_shares,
-        )
-        res = check_convergence(post)
-        say(("[green]" if res.ok else "[red]") + "post-trade verify: " + escape(res.summary()) + "[/]")
-        _do_notify(f"post-trade verify · {b.name} ({b.account_id}) · {res.summary()}",
+        for attempt in range(heal_passes + 1):
+            if settle_seconds:
+                _t.sleep(settle_seconds)  # give fills a moment to reflect in positions()
+            res, post = _verify_once(
+                b, targets, threshold=threshold, threshold_mode=threshold_mode,
+                min_weight=min_weight, allocation=allocation, whole_shares=whole_shares)
+            if res.ok or not self_heal or attempt >= heal_passes or not post.orders:
+                break
+            if market_status().status != "open":
+                say("[yellow]self-heal skipped — market not open.[/yellow]")
+                break
+            say(f"[yellow]self-heal pass {attempt + 1}/{heal_passes}: re-executing "
+                f"{len(post.orders)} residual leg(s)…[/yellow]")
+            try:
+                _execute(b, post, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
+                healed += 1
+            except Exception as e:
+                say(f"[red]self-heal execute failed: {e}[/red]")
+                break
+        if res is None:
+            return None
+        tag = f" (after {healed} self-heal pass{'es' if healed != 1 else ''})" if healed else ""
+        say(("[green]" if res.ok else "[red]") + "post-trade verify: " + escape(res.summary()) + tag + "[/]")
+        _do_notify(f"post-trade verify · {b.name} ({b.account_id}) · {res.summary()}{tag}",
                    notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
         return res
     except Exception as e:
