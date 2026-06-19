@@ -689,6 +689,11 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
               help="Drift denominator: 'nav' (default, delta vs whole book) or 'position' "
                    "(delta vs the line itself — for scaled/composite books whose small "
                    "lines could never move 4%% of NAV).")
+@click.option("--rebalance-scope", type=click.Choice(["whole-book", "per-ticker"]), default=None,
+              help="Execution scope. 'whole-book' (default): the threshold is a TRIGGER — if any "
+                   "line breaches it, snap the WHOLE book to target (higher CAGR, more turnover). "
+                   "'per-ticker': trade ONLY the breaching lines, leave the rest (lower turnover, "
+                   "better Sharpe/drawdown).")
 @click.option("--allocation", type=float, default=None, help="Dollar amount the weights apply to (run a sub-portfolio inside a bigger account). Default: full NAV.")
 @click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Read the target CSV from a file instead of stdin.")
 @click.option("--csv-url", default=None, help="Fetch the target CSV from a URL instead of stdin.")
@@ -722,6 +727,7 @@ def rebalance(
     min_weight: float | None,
     default_stop: float | None,
     threshold_mode: str | None,
+    rebalance_scope: str | None,
     allocation: float | None,
     csv_file: str | None,
     csv_url: str | None,
@@ -759,6 +765,7 @@ def rebalance(
     if default_stop is not None and not (0 < float(default_stop) < 0.5):
         _fail(f"--stop-pct {default_stop} outside (0, 0.5) — it is a FRACTION below entry (0.015 = 1.5%), not a price.")
     threshold_mode = config.pick(threshold_mode, cfg, "threshold_mode", "nav")
+    rebalance_scope = config.pick(rebalance_scope, cfg, "rebalance_scope", "whole-book")
     allocation = config.pick(allocation, cfg, "allocation")
     csv_file = config.pick(csv_file, cfg, "csv_file")
     csv_url = config.pick(csv_url, cfg, "csv_url")
@@ -862,6 +869,7 @@ def rebalance(
         min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
         allocation=Decimal(str(allocation)) if allocation is not None else None,
         drift_mode=threshold_mode or "nav",
+        rebalance_scope=rebalance_scope or "whole-book",
         whole_shares=whole_shares,
     )
     if margin_aware:
@@ -905,7 +913,7 @@ def rebalance(
         )
         vres = None if no_verify else _post_trade_verify(
             b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
-            allocation=allocation, whole_shares=whole_shares,
+            allocation=allocation, whole_shares=whole_shares, rebalance_scope=rebalance_scope,
             self_heal=not no_self_heal, heal_passes=heal_passes, order_type=order_type, chase_cfg=chase_cfg,
             notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
         out = {"executed": True, "sent": sent, "failed": failed, "results": results}
@@ -951,7 +959,7 @@ def rebalance(
     if not no_verify:
         _post_trade_verify(
             b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
-            allocation=allocation, whole_shares=whole_shares,
+            allocation=allocation, whole_shares=whole_shares, rebalance_scope=rebalance_scope,
             self_heal=not no_self_heal, heal_passes=heal_passes, order_type=order_type, chase_cfg=chase_cfg,
             notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
 
@@ -1132,7 +1140,8 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
     return sent, failed, results
 
 
-def _verify_once(b, targets, *, threshold, threshold_mode, min_weight, allocation, whole_shares):
+def _verify_once(b, targets, *, threshold, threshold_mode, min_weight, allocation, whole_shares,
+                 rebalance_scope="whole-book"):
     """Re-fetch broker state and rebuild the diff. Returns (VerifyResult, post_fill_preview)."""
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
@@ -1147,13 +1156,15 @@ def _verify_once(b, targets, *, threshold, threshold_mode, min_weight, allocatio
         min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
         allocation=Decimal(str(allocation)) if allocation is not None else None,
         drift_mode=threshold_mode or "nav",
+        rebalance_scope=rebalance_scope or "whole-book",
         whole_shares=whole_shares,
     )
     return check_convergence(post), post
 
 
 def _post_trade_verify(b, targets, *, threshold=None, threshold_mode="nav", min_weight=None,
-                       allocation=None, whole_shares=False, settle_seconds=2.0,
+                       allocation=None, whole_shares=False, rebalance_scope="whole-book",
+                       settle_seconds=2.0,
                        self_heal=False, heal_passes=1, order_type="market", chase_cfg=None,
                        notify_url=None, tg_token=None, tg_chat=None):
     """After fills, re-fetch broker state and confirm the account CONVERGED to target.
@@ -1176,7 +1187,8 @@ def _post_trade_verify(b, targets, *, threshold=None, threshold_mode="nav", min_
                 _t.sleep(settle_seconds)  # give fills a moment to reflect in positions()
             res, post = _verify_once(
                 b, targets, threshold=threshold, threshold_mode=threshold_mode,
-                min_weight=min_weight, allocation=allocation, whole_shares=whole_shares)
+                min_weight=min_weight, allocation=allocation, whole_shares=whole_shares,
+                rebalance_scope=rebalance_scope)
             if res.ok or not self_heal or attempt >= heal_passes or not post.orders:
                 break
             if market_status().status != "open":
@@ -1332,7 +1344,7 @@ def _reconcile_stops(broker, preview, results, targets=None):
             _cancel_all(tkr, "no position (orphan)")
 
 
-def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None, whole_shares: bool = False, order_type: str = "market", chase_cfg=None) -> dict:
+def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None, whole_shares: bool = False, threshold_mode: str = "nav", rebalance_scope: str = "whole-book", order_type: str = "market", chase_cfg=None) -> dict:
     """Run the full rebalance pipeline for one already-built broker.
 
     No interactive prompts, no rich rendering — returns a result dict.
@@ -1355,6 +1367,8 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
         drift_threshold=Decimal(str(threshold)),
         min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
         allocation=Decimal(str(allocation)) if allocation is not None else None,
+        drift_mode=threshold_mode or "nav",
+        rebalance_scope=rebalance_scope or "whole-book",
         whole_shares=whole_shares,
     )
     if margin_aware:
@@ -1417,6 +1431,8 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
         _fail("no [[account]] entries in the config.")
 
     threshold = float(cfg.get("threshold", 0.04))
+    threshold_mode = str(cfg.get("threshold_mode", "nav"))
+    rebalance_scope = str(cfg.get("rebalance_scope", "whole-book"))
     min_weight = cfg.get("min_weight")
     allocation_default = cfg.get("allocation")
     max_notional = cfg.get("max_notional")
@@ -1502,6 +1518,8 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
                 force=force, margin_aware=margin_aware, min_weight=min_weight,
                 allocation=acct.get("allocation", allocation_default),
                 whole_shares=acct.get("whole_shares", whole_shares),
+                threshold_mode=str(acct.get("threshold_mode", threshold_mode)),
+                rebalance_scope=str(acct.get("rebalance_scope", rebalance_scope)),
                 order_type=acct_order_type,
                 chase_cfg=chase_cfg if acct_order_type == "limit-chase" else None,
             )

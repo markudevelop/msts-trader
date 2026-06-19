@@ -132,13 +132,19 @@ def test_real_160pct_leveraged_book(basic_quotes):
         quotes=quotes,
     )
     assert not p.has_blockers
-    # 14 of 15 size up; PDBC (1.24% of NAV) is below the 4% drift gate on a
-    # fresh account, so it's skipped. Use a lower --threshold for initial setup.
-    assert len(p.orders) == 14
+    # whole-book default: QQQ breaches the 4% gate, so the WHOLE book snaps to
+    # target on a fresh account — all 15 sleeves (incl the 1.24% PDBC, which is
+    # above the $1 dust floor) are established in one pass.
+    assert len(p.orders) == 15
     ordered = {o.ticker for o in p.orders}
-    assert "PDBC" not in ordered
+    assert "PDBC" in ordered
     assert "QQQ" in ordered and p.orders[0].quantity == Decimal("312.30")  # 0.3123*100k/100
     assert any("160% gross" in w or "leveraged book" in w.lower() for w in p.warnings)
+    # under per-ticker scope the sub-4% PDBC sleeve stays frozen on a fresh account
+    pt = build_preview(targets=targets, positions={}, nav=Decimal("100000"),
+                       cash=Decimal("100000"), buying_power=Decimal("250000"),
+                       quotes=quotes, rebalance_scope="per-ticker")
+    assert len(pt.orders) == 14 and "PDBC" not in {o.ticker for o in pt.orders}
 
 
 def test_leveraged_book_low_threshold_captures_small_sleeve():
@@ -282,6 +288,7 @@ def test_sub_dollar_delta_is_dust_skipped():
         nav=Decimal("50000.50"), cash=Decimal("25000"), buying_power=Decimal("25000"),
         quotes={"SPY": Decimal("250.00")},
         drift_threshold=Decimal("0"),  # disable drift gate so we reach the dust check
+        rebalance_scope="per-ticker",  # dust gate is a per-line concept
     )
     assert p.orders == []
     assert any(r.ticker == "SPY" and r.note == "dust" for r in p.rows)

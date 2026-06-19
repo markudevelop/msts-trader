@@ -1,7 +1,10 @@
 """Build a Preview from targets + current positions + balances + quotes.
 
 Logic mirrors msts-live's live runner for parity:
-  - drift threshold 4% (skip ticker if |Δ| / NAV < threshold)
+  - drift threshold 4%
+  - execution scope (default "whole-book"): the threshold is a TRIGGER — if any
+    line breaches it, snap the whole book to target (msts-live's all-or-nothing
+    dead zone). "per-ticker" instead trades only the breaching lines.
   - exit-all for tickers not in targets
   - whole-NAV sizing (no margin-aware uniform scale in v1 — surfaces a warning instead)
   - dollar-based shares: qty = round(delta_$ / price, 2)
@@ -29,6 +32,7 @@ def build_preview(
     min_weight: Decimal | None = None,
     allocation: Decimal | None = None,
     drift_mode: str = "nav",
+    rebalance_scope: str = "whole-book",
     whole_shares: bool = False,
 ) -> Preview:
     warnings: list[str] = []
@@ -63,6 +67,50 @@ def build_preview(
             warnings.append(f"Sizing against ${allocation:,.0f} allocation (account NAV ${nav:,.2f}).")
 
     target_map = {t.ticker: t.weight for t in targets}
+
+    def _denom(target_dollars: Decimal, cur_dollars: Decimal) -> Decimal:
+        # Drift denominator. "position": delta relative to the line itself.
+        # "nav" (default): delta as fraction of the whole book.
+        if drift_mode == "position":
+            return max(abs(target_dollars), abs(cur_dollars), MIN_ORDER_DOLLARS)
+        return base
+
+    # Execution scope (orthogonal to drift_mode):
+    #   "whole-book" (default): the drift gate is a TRIGGER for the whole book —
+    #       if ANY line breaches it, every line is snapped to target (matches
+    #       msts-live's all-or-nothing dead-zone, the higher-CAGR behavior).
+    #       If nothing breaches, the book is frozen (no orders).
+    #   "per-ticker": each line is gated individually — only the breaching lines
+    #       trade, the rest keep their drifted value (lower turnover, the prior
+    #       msts-trader behavior).
+    # Pre-scan once to decide whether the whole book is "live" this run. An
+    # actionable breach is a target line past both the drift gate and the $1 dust
+    # floor, OR any holding the book wants to exit (weight 0 / not in targets).
+    book_breached = False
+    if rebalance_scope == "whole-book":
+        for t in targets:
+            tw = t.weight
+            if min_weight is not None and Decimal(0) < tw < min_weight:
+                continue  # ignored line — never trades, never triggers
+            tgt_d = base * tw
+            cur = positions.get(t.ticker)
+            cur_d = cur.market_value if cur else Decimal(0)
+            if tw == 0:
+                if cur is not None and cur.quantity > 0 and abs(cur_d) >= MIN_ORDER_DOLLARS:
+                    book_breached = True
+                    break
+                continue
+            dd = tgt_d - cur_d
+            if abs(dd) >= MIN_ORDER_DOLLARS and abs(dd) / _denom(tgt_d, cur_d) >= drift_threshold:
+                book_breached = True
+                break
+        if not book_breached:  # any holding to exit also makes the book live
+            for tkr, pos in positions.items():
+                if tkr in target_map:
+                    continue
+                if pos.quantity > 0 and pos.market_value >= MIN_ORDER_DOLLARS:
+                    book_breached = True
+                    break
 
     # Sanity: weight sum
     total = sum(target_map.values(), Decimal(0))
@@ -132,16 +180,17 @@ def build_preview(
             rows.append(row)
             continue
 
-        # Drift denominator. "nav": delta as fraction of the whole book —
-        # matches the engines' own NAV-relative rebalance thresholds at full
-        # weight scale. "position": delta relative to the line itself — use
-        # for scaled/composite books (a 1.8% line can never move 4% of NAV,
-        # so nav-mode would freeze it forever).
-        if drift_mode == "position":
-            denom = max(abs(target_dollars), abs(cur_dollars), MIN_ORDER_DOLLARS)
-        else:
-            denom = base
-        if abs(delta_dollars) / denom < drift_threshold:
+        # Drift gate, scope-aware. Per-ticker: skip THIS line if it's within
+        # drift. Whole-book: skip every line only when NO line breached (book
+        # frozen); once any line breached, snap this line to target too even if
+        # it is individually within drift.
+        within = abs(delta_dollars) / _denom(target_dollars, cur_dollars) < drift_threshold
+        if rebalance_scope == "whole-book":
+            if not book_breached:
+                row.note = "within drift (book frozen)"
+                rows.append(row)
+                continue
+        elif within:
             row.note = "within drift"
             rows.append(row)
             continue
