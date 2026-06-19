@@ -196,3 +196,41 @@ def test_cancel_order_ok_and_error():
         cancel_order_by_id=lambda oid: (_ for _ in ()).throw(RuntimeError("404 not found")))
     r = b.cancel_order("o1")
     assert r["status"] == "error" and "404" in r["reason"]
+
+
+# ---- limit chase --------------------------------------------------------
+def test_place_limit_submits_limit_day_and_returns_order_id():
+    from msts_trader.models import Order, Side
+
+    captured = {}
+
+    def submit(req):
+        captured["req"] = req
+        return SimpleNamespace(id="oid1", status="new")
+
+    b = _broker()
+    b._client = SimpleNamespace(submit_order=submit)
+    res = b.place_limit(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("3")), Decimal("499.49"))
+    assert res["order_id"] == "oid1"
+    assert res["limit_price"] == 499.49
+    assert float(captured["req"].limit_price) == 499.49
+
+
+def test_order_status_normalizes_enum_and_string():
+    from enum import Enum
+
+    from msts_trader.chase import FILLED, PARTIAL, WORKING
+
+    class OS(Enum):
+        FILLED = "filled"
+
+    def st(status, fq, avg):
+        b = _broker()
+        b._client = SimpleNamespace(
+            get_order_by_id=lambda oid: SimpleNamespace(status=status, filled_qty=fq, filled_avg_price=avg))
+        return b.order_status("x")
+
+    r = st(OS.FILLED, "3", "499.5")          # enum -> .value
+    assert r["status"] == FILLED and r["filled_qty"] == 3.0 and r["filled_avg_price"] == 499.5
+    assert st("partially_filled", "1", None)["status"] == PARTIAL
+    assert st("new", "0", None)["status"] == WORKING

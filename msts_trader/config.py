@@ -33,6 +33,8 @@ _KNOWN = {
     "broker", "threshold", "csv_file", "csv_url", "creds_file",
     "max_notional", "max_stale_hours", "notify_url", "quiet", "margin_aware",
     "moc",
+    "order_type",  # "market" (default) | "limit-chase"
+    "chase_retries", "chase_interval", "chase_poll", "chase_aggression", "chase_fallback",
     "whole_shares",  # round every order down to whole shares (no fractional)
     "telegram_token", "telegram_chat_id",  # Telegram bot creds (else MSTS_TELEGRAM_* env)
     "min_weight",   # ignore CSV rows with 0 < weight < this

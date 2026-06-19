@@ -50,6 +50,12 @@ class Broker(Protocol):
     # Others leave it False (class attribute default works) — the CLI then
     # warns once and skips stop placement instead of failing the rebalance.
     supports_stops: bool = False
+    # Adapters that can work a LIMIT order through the broker-agnostic
+    # limit-chase engine (msts_trader/chase.py) set supports_limit_chase = True
+    # and implement place_limit + order_status (and cancel_order, shared with
+    # the stop API). Others leave it False — when the user asks for
+    # --order-type limit-chase the CLI warns once and uses market orders.
+    supports_limit_chase: bool = False
 
     def balances(self) -> Balances:
         """Net liquidating value, cash, equity buying power. Decimals throughout."""
@@ -89,7 +95,30 @@ class Broker(Protocol):
         raise NotImplementedError
 
     def cancel_order(self, order_id: str) -> dict:
-        """Cancel an open order by id."""
+        """Cancel an open order by id. Shared by the stop API and the
+        limit-chase engine. A dict with status 'error'/'rejected' (or a
+        raised exception) signals the cancel FAILED — the chase engine then
+        aborts rather than risk two live orders."""
+        raise NotImplementedError
+
+    # ---- Optional limit-chase API (supports_limit_chase = True) ----------
+    def place_limit(self, order: Order, limit_price: Decimal,
+                    dry_run: bool = False) -> dict:
+        """Submit a LIMIT DAY order at `limit_price`. Same return contract as
+        place_market, with one extra REQUIREMENT for the chase engine: on a
+        successful (non-dry-run) submit the result MUST carry a usable
+        `order_id` — the engine polls and cancels by it, and aborts loudly if
+        it's missing (an unidentifiable live order can't be managed safely).
+        Whole-share rounding (where the broker requires it for limits) is the
+        adapter's responsibility — return status 'skipped' if the size rounds
+        away to nothing."""
+        raise NotImplementedError
+
+    def order_status(self, order_id: str) -> dict:
+        """Normalized status of one order, driving the chase loop. Returns
+        {status, filled_qty, filled_avg_price} where status is one of the
+        constants in msts_trader.chase: WORKING, PARTIAL, FILLED, CANCELLED,
+        REJECTED, UNKNOWN."""
         raise NotImplementedError
 
     # NOTE: `fills()` is an OPTIONAL capability, deliberately NOT part of this runtime_checkable

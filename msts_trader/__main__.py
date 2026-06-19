@@ -698,6 +698,12 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 @click.option("--margin-aware/--no-margin-aware", default=None, help="Scale buys to fit buying power (weight-preserving). On by default; --no-margin-aware to disable.")
 @click.option("--moc", is_flag=True, default=None, help="Submit market-on-close orders (fill in the closing auction). Alpaca / IBKR / Schwab / paper; whole shares; submit before ~15:50 ET.")
 @click.option("--whole-shares", is_flag=True, default=None, help="Round every order down to whole shares. Use for IBKR/accounts without fractional-API permission (avoids error 10243 'fractional order cannot be placed via API').")
+@click.option("--order-type", type=click.Choice(["market", "limit-chase"]), default=None, help="market (default) or limit-chase: work each order as a LIMIT pegged to the live mid, repricing every few seconds, then fall back to a market order. RTH only; supported brokers fall back to market.")
+@click.option("--chase-retries", type=int, default=None, help="limit-chase: reprice attempts before the market fallback (default 5).")
+@click.option("--chase-interval", type=float, default=None, help="limit-chase: seconds to wait for a fill before repricing (default 5).")
+@click.option("--chase-poll", type=float, default=None, help="limit-chase: status-poll cadence in seconds within each rung (default 1).")
+@click.option("--chase-aggression", type=float, default=None, help="limit-chase: fraction past the mid toward the fill side, e.g. 0.001 = 0.1%% (default 0 = pure mid).")
+@click.option("--chase-fallback/--no-chase-fallback", default=None, help="limit-chase: send a market order for any unfilled remainder when the chase exhausts (default on).")
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON instead of tables.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output (for cron logs).")
@@ -721,6 +727,12 @@ def rebalance(
     margin_aware: bool | None,
     moc: bool | None,
     whole_shares: bool | None,
+    order_type: str | None,
+    chase_retries: int | None,
+    chase_interval: float | None,
+    chase_poll: float | None,
+    chase_aggression: float | None,
+    chase_fallback: bool | None,
     force: bool,
     json_out: bool,
     quiet: bool,
@@ -748,6 +760,22 @@ def rebalance(
     moc = bool(config.pick(True if moc else None, cfg, "moc", False))
     whole_shares = bool(config.pick(True if whole_shares else None, cfg, "whole_shares", False))
     quiet = bool(config.pick(True if quiet else None, cfg, "quiet", False))
+
+    order_type = str(config.pick(order_type, cfg, "order_type", "market"))
+    if order_type not in ("market", "limit-chase"):
+        _fail(f"invalid order_type {order_type!r} — use 'market' or 'limit-chase'.")
+    chase_cfg = None
+    if order_type == "limit-chase":
+        if moc:
+            _fail("--moc and --order-type limit-chase are mutually exclusive.")
+        from .chase import ChaseConfig
+        chase_cfg = ChaseConfig(
+            retries=int(config.pick(chase_retries, cfg, "chase_retries", 5)),
+            reprice_interval=float(config.pick(chase_interval, cfg, "chase_interval", 5.0)),
+            poll_interval=float(config.pick(chase_poll, cfg, "chase_poll", 1.0)),
+            aggression=Decimal(str(config.pick(chase_aggression, cfg, "chase_aggression", 0.0))),
+            fallback_to_market=bool(config.pick(chase_fallback, cfg, "chase_fallback", True)),
+        )
 
     global _QUIET, _JSON
     _QUIET, _JSON = quiet, json_out
@@ -853,7 +881,7 @@ def rebalance(
         if not yes:
             print(json.dumps({"error": "refusing to execute without --yes in JSON/non-interactive mode"}))
             sys.exit(1)
-        sent, failed, results = _execute(b, preview)
+        sent, failed, results = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg)
         if sent > 0 and failed == 0:
             runstate.record(fp)  # only mark done on clean success, so a partial run can re-complete
         _do_notify(
@@ -887,7 +915,7 @@ def rebalance(
             say("[red]Cancelled.[/red]")
             sys.exit(0)
 
-    sent, failed, _ = _execute(b, preview)
+    sent, failed, _ = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg)
     if sent > 0 and failed == 0:
         runstate.record(fp)  # only mark done on clean success, so a partial run can re-complete
 
@@ -942,11 +970,20 @@ def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
         c.print(f"[red]✗ {escape(b)}[/red]")
 
 
-def _execute(broker, preview):
+def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None):
     total = len(preview.orders)
     sent = 0
     failed = 0
     results = []
+    # Limit-chase routing: each order is worked as a LIMIT pegged to the live
+    # mid (with a market fallback) instead of a plain market order. Brokers
+    # that can't chase degrade to market with a one-time warning — same pattern
+    # as unsupported protective stops.
+    use_chase = order_type == "limit-chase"
+    if use_chase and not getattr(broker, "supports_limit_chase", False):
+        say(f"[yellow]{broker.name} does not support limit-chase orders — "
+            f"using market orders instead.[/yellow]")
+        use_chase = False
     # Pre-cancel resting stops on names we're about to SELL. A broker (e.g. tastytrade) rejects a
     # sell of shares that are reserved by an open stop order
     # ("cannot_close_against_more_than_existing_position"), so the protective stop MUST be cancelled
@@ -968,14 +1005,21 @@ def _execute(broker, preview):
             except Exception as e:
                 say(f"[yellow]  pre-cancel skipped: open_stops failed ({e}) — sells may bounce on resting stops[/yellow]")
     for i, o in enumerate(preview.orders, 1):
-        order_type = "MOC" if o.moc else "MKT"
-        say(f"[{i}/{total}] {o.ticker} {o.side.value} {o.quantity:.2f} @ {order_type} ...", end=" ")
+        kind = "CHASE" if use_chase else ("MOC" if o.moc else "MKT")
+        say(f"[{i}/{total}] {o.ticker} {o.side.value} {o.quantity:.2f} @ {kind} ...",
+            end="\n" if use_chase else " ")
         try:
             # NOT retried: a market order is not idempotent. If submission
             # times out after the broker accepted it, a retry would double
             # the fill. On a transient error we report and move on; the
-            # drift gate self-corrects on the next run.
-            result = broker.place_market(o, dry_run=False)
+            # drift gate self-corrects on the next run. (The chase engine
+            # manages its own cancel/reprice lifecycle, including a final
+            # market fallback, so it is not wrapped in a retry either.)
+            if use_chase:
+                from . import chase as _chase
+                result = _chase.chase_fill(broker, o, chase_cfg, log=say)
+            else:
+                result = broker.place_market(o, dry_run=False)
         except Exception as e:
             result = {"status": "error", "reason": str(e), "ticker": o.ticker}
         status = result.get("status", "?")
@@ -1036,8 +1080,18 @@ def _reconcile_stops(broker, preview, results):
     except Exception as e:
         say(f"[yellow]stop reconcile skipped: open_stops failed ({e})[/yellow]")
         return
-    filled = {r.get("ticker"): r for r in results
-              if r.get("status") not in ("error", "skipped", "dry-run")}
+    # A clean send is eligible for stop bookkeeping. A limit-chase that
+    # partially filled and THEN failed to complete (fallback errored) comes
+    # back status="error" but carries a real fill — those shares still need a
+    # protective stop, so include them too (anchored strictly on the actual
+    # post-trade position below, never on the intended order qty).
+    def _has_real_fill(r):
+        return bool(r.get("chase_limit_filled") or r.get("filled_quantity"))
+
+    filled = {}
+    for r in results:
+        if r.get("status") not in ("error", "skipped", "dry-run") or _has_real_fill(r):
+            filled[r.get("ticker")] = r
     # Post-trade positions: the authoritative remaining quantity per ticker.
     try:
         post_positions = broker.positions()
@@ -1089,16 +1143,25 @@ def _reconcile_stops(broker, preview, results):
     for o in preview.orders:
         if o.side.value != "BUY" or not o.stop_pct or o.ticker not in filled:
             continue
-        px = Decimal(str(filled[o.ticker].get("fill_price") or o.estimated_price or 0))
+        r = filled[o.ticker]
+        px = Decimal(str(r.get("fill_price") or o.estimated_price or 0))
         if px <= 0:
             continue
-        _cancel_all(o.ticker, "replacing stale stop") if open_stops.get(o.ticker) else None
         pos = post_positions.get(o.ticker)
-        qty = pos.quantity if pos is not None and pos.quantity > 0 else o.quantity
+        if r.get("status") in ("error", "skipped"):
+            # Order didn't complete cleanly (e.g. chase partial + fallback fail).
+            # Protect ONLY shares we actually hold — never the intended qty, or a
+            # stop could be placed for shares that never filled (naked short risk).
+            if pos is None or pos.quantity <= 0:
+                continue
+            qty = pos.quantity
+        else:
+            qty = pos.quantity if pos is not None and pos.quantity > 0 else o.quantity
+        _cancel_all(o.ticker, "replacing stale stop") if open_stops.get(o.ticker) else None
         _place(o.ticker, qty, px, o.stop_pct)
 
 
-def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None, whole_shares: bool = False) -> dict:
+def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None, whole_shares: bool = False, order_type: str = "market", chase_cfg=None) -> dict:
     """Run the full rebalance pipeline for one already-built broker.
 
     No interactive prompts, no rich rendering — returns a result dict.
@@ -1150,7 +1213,7 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
         result["status"] = "duplicate"
         return result
 
-    sent, failed, _ = _execute(b, preview)
+    sent, failed, _ = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg)
     if sent > 0 and failed == 0:
         runstate.record(fp)
     result.update(sent=sent, failed=failed, status="executed" if failed == 0 else "partial")
@@ -1195,6 +1258,23 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
     csv_file = csv_file or cfg.get("csv_file")
     csv_url = csv_url or cfg.get("csv_url")
 
+    # Limit-chase routing for multi is config-driven (no per-flag CLI). Build a
+    # ChaseConfig once; per-account `order_type` can still override below.
+    order_type = str(cfg.get("order_type", "market"))
+    if order_type not in ("market", "limit-chase"):
+        _fail(f"invalid order_type {order_type!r} in config — use 'market' or 'limit-chase'.")
+    chase_cfg = None
+    if order_type == "limit-chase" or any(
+            str(a.get("order_type", "")) == "limit-chase" for a in accounts):
+        from .chase import ChaseConfig
+        chase_cfg = ChaseConfig(
+            retries=int(cfg.get("chase_retries", 5)),
+            reprice_interval=float(cfg.get("chase_interval", 5.0)),
+            poll_interval=float(cfg.get("chase_poll", 1.0)),
+            aggression=Decimal(str(cfg.get("chase_aggression", 0.0))),
+            fallback_to_market=bool(cfg.get("chase_fallback", True)),
+        )
+
     if csv_file and csv_url:
         _fail("pass only one of --csv-file / --csv-url (or set one in config).")
     if csv_file:
@@ -1237,12 +1317,16 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
 
         say(f"\n[bold cyan]━━ {label} ({broker}) ━━[/bold cyan]")
         try:
-            # per-account `allocation` (dollar sizing base) wins over the top-level one
+            # per-account `allocation` (dollar sizing base) and `order_type` win
+            # over the top-level ones.
+            acct_order_type = str(acct.get("order_type", order_type))
             r = _rebalance_one(
                 b, targets, threshold=threshold, max_notional=max_notional, dry_run=dry_run,
                 force=force, margin_aware=margin_aware, min_weight=min_weight,
                 allocation=acct.get("allocation", allocation_default),
                 whole_shares=acct.get("whole_shares", whole_shares),
+                order_type=acct_order_type,
+                chase_cfg=chase_cfg if acct_order_type == "limit-chase" else None,
             )
         except Exception as e:
             r = {"broker": broker, "status": "error", "reason": str(e)}

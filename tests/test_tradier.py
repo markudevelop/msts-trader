@@ -247,3 +247,38 @@ def test_cancel_order_ok_and_error(monkeypatch):
     b2 = _broker(monkeypatch, {("DELETE", "/v1/accounts/VA123/orders/9"): boom})
     r = b2.cancel_order("9")
     assert r["status"] == "error" and "404" in r["reason"]
+
+
+# ---- limit chase --------------------------------------------------------
+def test_place_limit_submits_limit_day(monkeypatch):
+    captured = {}
+
+    def post(params):
+        captured["params"] = params
+        return {"order": {"id": 42, "status": "ok"}}
+
+    b = _broker(monkeypatch, {("POST", "/v1/accounts/VA123/orders"): post})
+    res = b.place_limit(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("3")), Decimal("499.49"))
+    assert res["order_id"] == "42"
+    assert captured["params"]["type"] == "limit"
+    assert captured["params"]["duration"] == "day"
+    assert captured["params"]["price"] == "499.49"
+
+
+def test_place_limit_whole_shares_skips_dust(monkeypatch):
+    b = _broker(monkeypatch, {})
+    res = b.place_limit(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("0.4")), Decimal("100"))
+    assert res["status"] == "skipped"
+
+
+def test_order_status_normalizes(monkeypatch):
+    from msts_trader.chase import FILLED, PARTIAL, WORKING
+
+    def make(order):
+        b = _broker(monkeypatch, {("GET", "/v1/accounts/VA123/orders/9"): {"order": order}})
+        return b.order_status("9")
+
+    r = make({"status": "filled", "exec_quantity": "3", "avg_fill_price": "499.5"})
+    assert r["status"] == FILLED and r["filled_qty"] == 3.0 and r["filled_avg_price"] == 499.5
+    assert make({"status": "partially_filled", "exec_quantity": "1"})["status"] == PARTIAL
+    assert make({"status": "open", "exec_quantity": "0"})["status"] == WORKING

@@ -17,7 +17,12 @@ try:
     from alpaca.trading.client import TradingClient
     from alpaca.trading.enums import OrderSide, TimeInForce
     from alpaca.trading.enums import QueryOrderStatus
-    from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, StopOrderRequest
+    from alpaca.trading.requests import (
+        GetOrdersRequest,
+        LimitOrderRequest,
+        MarketOrderRequest,
+        StopOrderRequest,
+    )
     _ALPACA_OK = True
 except ImportError:
     _ALPACA_OK = False
@@ -28,6 +33,7 @@ class Alpaca:
     supports_fractional = True
     supports_moc = True  # TimeInForce.CLS — whole shares only
     supports_stops = True  # GTC SELL STOP via StopOrderRequest (whole shares)
+    supports_limit_chase = True  # LIMIT DAY via LimitOrderRequest
 
     def __init__(self, api_key: str, secret_key: str, paper: bool = False):
         if not _ALPACA_OK:
@@ -122,6 +128,65 @@ class Alpaca:
             "order_id": str(oid) if (oid := getattr(resp, "id", None)) is not None else None,
             "dry_run": False,
         }
+
+    # ---- limit chase ------------------------------------------------------
+    def place_limit(self, order: Order, limit_price: Decimal, dry_run: bool = False) -> dict:
+        """LIMIT DAY order for the chase engine. Alpaca accepts fractional
+        limit quantities with DAY TIF; if it rejects one, the engine's
+        place-failed path falls back to a market order."""
+        qty = round(float(order.quantity), 4)
+        if qty <= 0:
+            return {"status": "skipped", "reason": "qty<=0", "ticker": order.ticker}
+        px = round(float(limit_price), 2)
+        if dry_run:
+            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value,
+                    "quantity": qty, "limit_price": px, "dry_run": True}
+        side = OrderSide.BUY if order.side == Side.BUY else OrderSide.SELL
+        req = LimitOrderRequest(symbol=order.ticker, qty=qty, side=side,
+                                time_in_force=TimeInForce.DAY, limit_price=px)
+        try:
+            resp = self._client.submit_order(req)
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "ticker": order.ticker}
+        return {
+            "status": str(getattr(resp, "status", "submitted")),
+            "ticker": order.ticker,
+            "side": order.side.value,
+            "quantity": qty,
+            "order_id": str(oid) if (oid := getattr(resp, "id", None)) is not None else None,
+            "limit_price": px,
+            "dry_run": False,
+        }
+
+    def order_status(self, order_id: str) -> dict:
+        from ..chase import CANCELLED, FILLED, PARTIAL, REJECTED, UNKNOWN, WORKING
+
+        try:
+            o = self._client.get_order_by_id(order_id)
+        except Exception as e:
+            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None,
+                    "reason": str(e)}
+        st = getattr(o, "status", None)
+        # alpaca-py returns an OrderStatus enum (str() -> "OrderStatus.FILLED");
+        # prefer .value ("filled") so the match below works either way.
+        raw = (st.value if hasattr(st, "value") else str(st or "")).lower()
+        if raw == "filled":
+            status = FILLED
+        elif raw == "partially_filled":
+            status = PARTIAL
+        elif raw == "rejected":
+            status = REJECTED
+        elif raw in ("canceled", "cancelled", "expired", "done_for_day", "stopped"):
+            status = CANCELLED
+        elif raw in ("new", "accepted", "pending_new", "accepted_for_bidding",
+                     "pending_replace", "replaced", "calculated"):
+            status = WORKING
+        else:
+            status = UNKNOWN
+        filled = float(getattr(o, "filled_qty", 0) or 0)
+        avg = getattr(o, "filled_avg_price", None)
+        return {"status": status, "filled_qty": filled,
+                "filled_avg_price": float(avg) if avg else None}
 
     # ---- protective stops -------------------------------------------------
     def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal,

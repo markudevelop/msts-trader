@@ -57,7 +57,7 @@ def _ensure_event_loop() -> None:
 
 _ensure_event_loop()
 try:
-    from ib_insync import IB, MarketOrder, Stock, StopOrder  # type: ignore
+    from ib_insync import IB, LimitOrder, MarketOrder, Stock, StopOrder  # type: ignore
     from ib_insync import Order as IbOrder  # type: ignore
     _IB_OK = True
 except ImportError:
@@ -69,6 +69,7 @@ class IBKR:
     supports_fractional = True  # IBKR supports US-stock fractional via OutsideRTH=False MKT orders on eligible symbols
     supports_moc = True  # orderType MOC — whole shares only
     supports_stops = True  # GTC sell stop via ib_insync StopOrder
+    supports_limit_chase = True  # LIMIT DAY via ib_insync LimitOrder
 
     def __init__(
         self,
@@ -290,6 +291,77 @@ class IBKR:
             result["reason"] = reason
         return result
 
+    # ---- limit chase ------------------------------------------------------
+    def place_limit(self, order: Order, limit_price: Decimal, dry_run: bool = False) -> dict:
+        """LIMIT DAY order for the chase engine. IBKR supports fractional
+        limits on eligible US stocks; if the account lacks that permission the
+        order is rejected and the engine market-fallbacks."""
+        qty = float(round(float(order.quantity), 4))
+        if qty <= 0:
+            return {"status": "skipped", "reason": "qty<=0", "ticker": order.ticker}
+        px = round(float(limit_price), 2)
+        if dry_run:
+            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value,
+                    "quantity": qty, "limit_price": px, "dry_run": True}
+        ct = Stock(order.ticker, "SMART", "USD")
+        self._ib.qualifyContracts(ct)
+        action = "BUY" if order.side == Side.BUY else "SELL"
+        lo = LimitOrder(action, qty, px, account=self.account_id, tif="DAY")
+        try:
+            trade = self._ib.placeOrder(ct, lo)
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "ticker": order.ticker}
+        for _ in range(20):
+            self._ib.sleep(0.1)
+            if trade.orderStatus.status in {"Filled", "Submitted", "PreSubmitted",
+                                            "ApiCancelled", "Cancelled", "Inactive"}:
+                break
+        status = str(trade.orderStatus.status or "submitted")
+        result = {
+            "status": status,
+            "ticker": order.ticker,
+            "side": order.side.value,
+            "quantity": qty,
+            "order_id": str(getattr(trade.order, "permId", "") or getattr(trade.order, "orderId", "")) or None,
+            "limit_price": px,
+            "dry_run": False,
+        }
+        reason = _reject_reason(trade)
+        if reason and status in {"Cancelled", "ApiCancelled", "Inactive"}:
+            result["status"] = "error"
+            result["reason"] = reason
+        return result
+
+    def order_status(self, order_id) -> dict:
+        from ..chase import CANCELLED, FILLED, PARTIAL, REJECTED, UNKNOWN, WORKING
+
+        oid = str(order_id)
+        trade = None
+        for t in self._ib.trades():
+            o = t.order
+            if oid in (str(getattr(o, "permId", "") or ""), str(getattr(o, "orderId", "") or "")):
+                trade = t
+                break
+        if trade is None:
+            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None}
+        os_ = trade.orderStatus
+        raw = str(getattr(os_, "status", "") or "")
+        filled = _f(getattr(os_, "filled", 0)) or 0.0
+        remaining = _f(getattr(os_, "remaining", 0)) or 0.0
+        avg = _f(getattr(os_, "avgFillPrice", None))
+        if raw == "Filled":
+            status = FILLED
+        elif raw in ("Cancelled", "ApiCancelled"):
+            status = CANCELLED
+        elif raw in ("Inactive", "Rejected"):
+            status = REJECTED
+        elif raw in ("Submitted", "PreSubmitted", "PendingSubmit", "ApiPending", "PendingCancel"):
+            status = PARTIAL if (filled > 0 and remaining > 0) else WORKING
+        else:
+            status = UNKNOWN
+        return {"status": status, "filled_qty": filled,
+                "filled_avg_price": avg if avg and avg > 0 else None}
+
     # ---- protective stops -------------------------------------------------
     def place_stop(self, ticker: str, quantity, stop_price, dry_run: bool = False) -> dict:
         qty = float(int(quantity))  # whole shares for stops
@@ -323,9 +395,15 @@ class IBKR:
         return out
 
     def cancel_order(self, order_id) -> dict:
+        # Match permId OR orderId: place_market/place_limit report permId as the
+        # order_id (it's the stable cross-session id), but stops report orderId,
+        # and permId is 0 until IBKR acknowledges — so the chase/cancel id can be
+        # either. Matching both avoids "order not found" leaving a resting order.
+        oid = str(order_id)
         for t in self._ib.openTrades():
-            if str(t.order.orderId) == str(order_id):
-                self._ib.cancelOrder(t.order)
+            o = t.order
+            if oid in (str(getattr(o, "permId", "") or ""), str(getattr(o, "orderId", "") or "")):
+                self._ib.cancelOrder(o)
                 self._ib.sleep(0.5)
                 return {"status": "CANCELLED", "order_id": order_id}
         return {"status": "error", "reason": "order not found", "order_id": order_id}

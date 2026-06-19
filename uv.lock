@@ -1256,7 +1256,7 @@ wheels = [
 
 [[package]]
 name = "msts-trader"
-version = "0.13.0"
+version = "0.18.0"
 source = { editable = "." }
 dependencies = [
     { name = "alpaca-py" },

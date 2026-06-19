@@ -37,7 +37,9 @@ from .base import Balances, BrokerError, first_present
 try:
     from schwab.auth import client_from_token_file, easy_client  # type: ignore
     from schwab.orders.equities import (  # type: ignore
+        equity_buy_limit,
         equity_buy_market,
+        equity_sell_limit,
         equity_sell_market,
     )
     _SCHWAB_OK = True
@@ -52,6 +54,7 @@ class Schwab:
     supports_fractional = False  # Schwab Trader API places whole-share equity orders
     supports_moc = True  # orderType MARKET_ON_CLOSE
     supports_stops = True  # GTC sell stop via schwab-py order spec
+    supports_limit_chase = True  # LIMIT DAY via equity_buy_limit/equity_sell_limit
 
     # No trailing slash — schwab-py's recommended registration value. Schwab
     # rejects the OAuth redirect when this doesn't EXACTLY match the URL
@@ -173,6 +176,77 @@ class Schwab:
             "order_id": order_id,
             "dry_run": False,
         }
+
+    # ---- limit chase ------------------------------------------------------
+    def place_limit(self, order: Order, limit_price: Decimal, dry_run: bool = False) -> dict:
+        """LIMIT DAY order for the chase engine. Schwab equities are
+        whole-share — dust is skipped and the engine market-fallbacks it."""
+        qty = int(order.quantity)
+        if qty <= 0:
+            return {"status": "skipped", "reason": "qty rounds to 0 (Schwab whole shares)",
+                    "ticker": order.ticker}
+        px = round(float(limit_price), 2)
+        if dry_run:
+            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value,
+                    "quantity": qty, "limit_price": px, "dry_run": True}
+        spec = (
+            equity_buy_limit(order.ticker, qty, px)
+            if order.side == Side.BUY
+            else equity_sell_limit(order.ticker, qty, px)
+        )
+        try:
+            resp = self._client.place_order(self._account_hash, spec.build())
+            resp.raise_for_status()
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "ticker": order.ticker}
+        location = resp.headers.get("Location") or ""
+        order_id = location.rsplit("/", 1)[-1] if location else None
+        return {
+            "status": "submitted",
+            "ticker": order.ticker,
+            "side": order.side.value,
+            "quantity": qty,
+            "order_id": order_id,
+            "limit_price": px,
+            "dry_run": False,
+        }
+
+    def order_status(self, order_id) -> dict:
+        from ..chase import CANCELLED, FILLED, PARTIAL, REJECTED, UNKNOWN, WORKING
+
+        try:
+            resp = self._client.get_order(order_id, self._account_hash)
+            resp.raise_for_status()
+            o = resp.json()
+        except Exception as e:
+            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None,
+                    "reason": str(e)}
+        raw = str(o.get("status", "")).upper()
+        filled = float(o.get("filledQuantity") or 0)
+        # Weighted average from the execution legs (Schwab omits a top-level avg).
+        tot_q = 0.0
+        tot_c = 0.0
+        for act in o.get("orderActivityCollection", []) or []:
+            for leg in act.get("executionLegs", []) or []:
+                q = float(leg.get("quantity") or 0)
+                p = float(leg.get("price") or 0)
+                tot_q += q
+                tot_c += q * p
+        avg = (tot_c / tot_q) if tot_q > 0 else None
+        if raw == "FILLED":
+            status = FILLED
+        elif raw == "REJECTED":
+            status = REJECTED
+        elif raw in ("CANCELED", "CANCELLED", "EXPIRED", "REPLACED"):
+            status = CANCELLED
+        elif filled > 0:
+            status = PARTIAL
+        elif raw in ("WORKING", "QUEUED", "ACCEPTED", "PENDING_ACTIVATION", "NEW",
+                     "AWAITING_MANUAL_REVIEW", "PENDING_ACKNOWLEDGEMENT"):
+            status = WORKING
+        else:
+            status = UNKNOWN
+        return {"status": status, "filled_qty": filled, "filled_avg_price": avg}
 
     # ---- protective stops -------------------------------------------------
     def place_stop(self, ticker: str, quantity, stop_price, dry_run: bool = False) -> dict:

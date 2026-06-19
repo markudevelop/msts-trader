@@ -31,6 +31,7 @@ class Tradier:
     supports_fractional = False
     supports_moc = False  # Tradier's API has no closing-auction order type
     supports_stops = True  # GTC sell stop via type=stop
+    supports_limit_chase = True  # LIMIT DAY via type=limit (whole shares)
 
     def __init__(self, access_token: str, account_id: str | None = None, sandbox: bool = False, timeout: float = 20.0):
         if not access_token:
@@ -185,6 +186,69 @@ class Tradier:
             "order_id": str(o.get("id")) if o.get("id") is not None else None,
             "dry_run": False,
         }
+
+    # ---- limit chase ------------------------------------------------------
+    def place_limit(self, order: Order, limit_price: Decimal, dry_run: bool = False) -> dict:
+        """LIMIT DAY order for the chase engine. Tradier equities are
+        whole-share — a size that rounds to 0 is skipped (the engine then
+        market-fallbacks the dust)."""
+        qty = int(order.quantity)
+        if qty <= 0:
+            return {"status": "skipped", "reason": "qty rounds to 0 (Tradier whole shares)",
+                    "ticker": order.ticker}
+        side = "buy" if order.side == Side.BUY else "sell"
+        params = {
+            "class": "equity", "symbol": order.ticker, "side": side,
+            "quantity": qty, "type": "limit", "duration": "day",
+            "price": f"{float(limit_price):.2f}",
+        }
+        if dry_run:
+            params["preview"] = "true"
+            resp = self._request("POST", f"/v1/accounts/{self.account_id}/orders", params)
+            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value,
+                    "quantity": qty, "limit_price": float(limit_price), "dry_run": True,
+                    "preview": resp.get("order") or {}}
+        resp = self._request("POST", f"/v1/accounts/{self.account_id}/orders", params)
+        o = resp.get("order") or {}
+        status = o.get("status") or "submitted"
+        if str(status).lower() in ("rejected", "error"):
+            return {"status": "error", "reason": json.dumps(o)[:300], "ticker": order.ticker}
+        return {
+            "status": str(status),
+            "ticker": order.ticker,
+            "side": order.side.value,
+            "quantity": qty,
+            "order_id": str(o.get("id")) if o.get("id") is not None else None,
+            "limit_price": float(limit_price),
+            "dry_run": False,
+        }
+
+    def order_status(self, order_id) -> dict:
+        from ..chase import CANCELLED, FILLED, PARTIAL, REJECTED, UNKNOWN, WORKING
+
+        try:
+            resp = self._request("GET", f"/v1/accounts/{self.account_id}/orders/{order_id}", None)
+        except Exception as e:
+            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None,
+                    "reason": str(e)}
+        o = resp.get("order") or {}
+        raw = str(o.get("status", "")).lower()
+        if raw == "filled":
+            status = FILLED
+        elif raw == "partially_filled":
+            status = PARTIAL
+        elif raw == "rejected":
+            status = REJECTED
+        elif raw in ("canceled", "cancelled", "expired"):
+            status = CANCELLED
+        elif raw in ("open", "pending"):
+            status = WORKING
+        else:
+            status = UNKNOWN
+        filled = float(o.get("exec_quantity") or 0)
+        avg = o.get("avg_fill_price")
+        return {"status": status, "filled_qty": filled,
+                "filled_avg_price": float(avg) if avg and float(avg) > 0 else None}
 
     # ---- protective stops -------------------------------------------------
     def place_stop(self, ticker: str, quantity, stop_price, dry_run: bool = False) -> dict:

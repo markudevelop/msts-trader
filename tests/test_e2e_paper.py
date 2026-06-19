@@ -80,6 +80,32 @@ def test_full_paper_rebalance_executes_and_fills(tmp_path):
     assert "within drift" in r2.output.lower() or "nothing to do" in r2.output.lower() or "duplicate" in r2.output.lower()
 
 
+def test_full_paper_rebalance_limit_chase_executes_and_fills(tmp_path):
+    """The next-best test: drive the full CLI entrypoint with
+    --order-type limit-chase so the rebalance routes through chase_fill (not
+    place_market) end-to-end, and confirm the positions actually fill."""
+    runner = CliRunner()
+    assert runner.invoke(main, ["login", "--broker", "paper"], input="50000\n").exit_code == 0
+    _seed_quotes()
+
+    csv = tmp_path / "t.csv"
+    csv.write_text("ticker,weight\nSPY,0.6\nSHV,0.4\n")
+
+    r = runner.invoke(main, [
+        "--broker", "paper", "rebalance", "--csv-file", str(csv), "--yes",
+        "--order-type", "limit-chase", "--chase-interval", "0.01", "--chase-poll", "0.01",
+    ])
+    assert r.exit_code == 0, r.output
+    assert "Done." in r.output
+    assert "CHASE" in r.output  # routed through the chase engine, not plain market
+
+    out = runner.invoke(main, ["--broker", "paper", "status", "--json"])
+    payload = _json.loads(out.output.strip().splitlines()[-1])
+    held = {p["ticker"]: Decimal(p["quantity"]) for p in payload["positions"]}
+    assert held.get("SPY") == Decimal("60")         # 0.6*50000/500, filled at the mid
+    assert held.get("SHV") == Decimal("181.81")      # 0.4*50000/110, rounded down
+
+
 def test_full_paper_rebalance_json_execute(tmp_path):
     runner = CliRunner()
     runner.invoke(main, ["login", "--broker", "paper"], input="50000\n")

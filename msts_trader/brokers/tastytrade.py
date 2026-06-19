@@ -28,6 +28,7 @@ class Tastytrade:
     supports_fractional = True  # MARKET orders only
     supports_moc = False  # tastytrade's API has no closing-auction order type
     supports_stops = True  # GTC SELL STOP via OrderType.STOP + stop_trigger
+    supports_limit_chase = True  # LIMIT DAY via the chase engine (whole shares)
 
     def __init__(self, provider_secret: str, refresh_token: str, account_id: str | None = None, is_test: bool = False):
         if not provider_secret or not refresh_token:
@@ -193,6 +194,90 @@ class Tastytrade:
             "order_id": order_id,
             "dry_run": dry_run,
         }
+
+    # ---- limit chase ------------------------------------------------------
+    def place_limit(self, order: Order, limit_price: Decimal, dry_run: bool = False) -> dict:
+        """LIMIT DAY order for the chase engine. Tastytrade LIMIT orders need
+        WHOLE shares (fractional rejects with "must be a positive number"), and
+        the price is signed: BUY is a debit (negative), SELL a credit."""
+        positions = self.positions()
+        cur = positions.get(order.ticker)
+        if order.side == Side.BUY:
+            action = OrderAction.BUY_TO_CLOSE if cur and cur.quantity < 0 else OrderAction.BUY_TO_OPEN
+        else:
+            action = OrderAction.SELL_TO_CLOSE if cur and cur.quantity > 0 else OrderAction.SELL_TO_OPEN
+
+        qty = Decimal(int(Decimal(str(order.quantity))))
+        if qty <= 0:
+            return {"status": "skipped", "reason": "limit qty rounds to <1 share",
+                    "ticker": order.ticker}
+        px = Decimal(str(limit_price)).quantize(Decimal("0.01"))
+        signed = -abs(px) if order.side == Side.BUY else abs(px)
+        leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=order.ticker,
+                  action=action, quantity=qty)
+        new_order = NewOrder(time_in_force=OrderTimeInForce.DAY, order_type=OrderType.LIMIT,
+                             legs=[leg], price=signed)
+        try:
+            resp = self._acct.place_order(self._sess, new_order, dry_run=dry_run)
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "ticker": order.ticker}
+        order_obj = getattr(resp, "order", None)
+        order_id = getattr(order_obj, "id", None) or getattr(resp, "id", None)
+        status = getattr(order_obj, "status", None) or getattr(resp, "status", None) or "submitted"
+        return {
+            "status": str(status),
+            "ticker": order.ticker,
+            "side": order.side.value,
+            "quantity": float(qty),
+            "order_id": order_id,
+            "limit_price": float(px),
+            "dry_run": dry_run,
+        }
+
+    def order_status(self, order_id) -> dict:
+        """Normalized {status, filled_qty, filled_avg_price}. Aggregates fills
+        from each leg (tastytrade>=11 hides top-level fill totals), and treats a
+        fully-drained order as FILLED even if the /orders view still lags."""
+        from ..chase import CANCELLED, FILLED, PARTIAL, REJECTED, UNKNOWN, WORKING
+
+        try:
+            o = self._acct.get_order(self._sess, int(order_id))
+        except Exception as e:
+            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None,
+                    "reason": str(e)}
+        legs = getattr(o, "legs", None) or []
+        total_filled = 0.0
+        total_cost = 0.0
+        for leg in legs:
+            for fill in getattr(leg, "fills", None) or []:
+                try:
+                    q = float(fill.quantity or 0)
+                    p = float(fill.fill_price or 0)
+                except Exception:
+                    continue
+                total_filled += q
+                total_cost += q * p
+        avg = (total_cost / total_filled) if total_filled > 0 else None
+
+        raw = str(getattr(o, "status", "")).lower()
+        if "fill" in raw and "partial" not in raw:
+            status = FILLED
+        elif "partial" in raw:
+            status = PARTIAL
+        elif "reject" in raw:
+            status = REJECTED
+        elif any(k in raw for k in ("cancel", "expired")):
+            status = CANCELLED
+        elif any(k in raw for k in ("live", "received", "routed", "contingent", "in_flight")):
+            status = WORKING
+        else:
+            status = UNKNOWN
+        # /orders/live is eventually consistent: if every leg has drained, the
+        # fill happened even when the top-level status still reads LIVE.
+        if legs and total_filled > 0 and all(
+                float(getattr(leg, "remaining_quantity", 0) or 0) == 0 for leg in legs):
+            status = FILLED
+        return {"status": status, "filled_qty": total_filled, "filled_avg_price": avg}
 
     # ---- protective stops -------------------------------------------------
     def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal,

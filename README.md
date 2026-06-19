@@ -282,6 +282,7 @@ msts-trader rebalance --yes                           # skip the confirm prompt
 msts-trader rebalance --threshold 0.02                # tighter rebalance (default 4%)
 msts-trader rebalance --csv-file targets.csv          # read from a file
 msts-trader rebalance --moc                           # market-on-close orders (see below)
+msts-trader rebalance --order-type limit-chase        # work each order as a limit pegged to the mid (see below)
 msts-trader rebalance --min-weight 0.01               # ignore CSV rows under 1% weight
 msts-trader rebalance --allocation 50000              # weights apply to $50k, not full NAV
 msts-trader --broker paper rebalance --csv-file ...   # test against paper
@@ -294,6 +295,21 @@ msts-trader --broker paper rebalance --csv-file ...   # test against paper
   the CLI refuses rather than silently downgrading). MOC orders are
   whole-share only, and exchanges stop accepting them around **15:50 ET**,
   so submit before then. Also available as `moc = true` in the config file.
+- **`--order-type limit-chase`:** instead of one market order per leg, each
+  order is worked as a **LIMIT pegged to the live mid** — re-quote and reprice
+  every few seconds (`--chase-interval`, default 5s; polled every
+  `--chase-poll`, default 1s) up to `--chase-retries` times (default 5), then
+  **fall back to a market order** for whatever hasn't filled (disable with
+  `--no-chase-fallback`). `--chase-aggression 0.001` nudges the limit 0.1% past
+  the mid toward the fill side to improve the hit rate (default `0` = pure mid).
+  The goal is execution quality — pay near the mid instead of crossing the whole
+  spread. Safety: the prior limit is **cancelled before each reprice** (and the
+  chase aborts rather than risk two live orders if a cancel fails), partial
+  fills only re-submit the remainder, and no resting order is ever left behind.
+  **RTH only** (the market fallback assumes the regular session), supported on
+  **all brokers**; any that can't chase warn once and use market orders. Also
+  available as `order_type = "limit-chase"` in the config file (and in a `multi`
+  config, including per-`[[account]]` override).
 - **`--whole-shares`:** round every order *down* to whole shares (buys never
   exceed target, sells never exceed the held quantity). Use it for an IBKR
   account — or any broker/account — without fractional-trading permission on
@@ -356,6 +372,12 @@ telegram_token = "123456:ABC-DEF..."   # optional, instead of MSTS_TELEGRAM_TOKE
 telegram_chat_id = "987654321"          # optional, instead of MSTS_TELEGRAM_CHAT_ID
 margin_aware = true   # default; set false to disable buying-power-fit scaling
 moc = false           # set true to always use market-on-close orders
+order_type = "market" # or "limit-chase": peg a limit to the mid, reprice, then market-fallback (RTH only)
+chase_retries = 5     # limit-chase: reprice attempts before the market fallback
+chase_interval = 5    # limit-chase: seconds to wait for a fill before repricing
+chase_poll = 1        # limit-chase: status-poll cadence within each rung (seconds)
+chase_aggression = 0  # limit-chase: fraction past the mid toward the fill side (0 = pure mid)
+chase_fallback = true # limit-chase: market order for any unfilled remainder
 whole_shares = false  # set true to round every order to whole shares (IBKR/no-fractional accounts)
 min_weight = 0.01     # ignore CSV rows with weight under 1%
 allocation = 50000    # weights apply to $50k instead of full NAV

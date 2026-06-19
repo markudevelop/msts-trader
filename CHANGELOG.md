@@ -10,6 +10,27 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-06-19
+
+### Added
+- **Limit-chase execution (`--order-type limit-chase`).** Each rebalance order can be worked as a
+  LIMIT pegged to the live mid: re-quote, reprice toward the fill side, poll, and repeat up to a
+  retry cap, then fall back to a market order so the rebalance still completes. Broker-agnostic
+  engine in `msts_trader/chase.py`; tune with `--chase-retries` / `--chase-interval` /
+  `--chase-poll` / `--chase-aggression` / `--no-chase-fallback` (or the matching config keys).
+  Carries the safety properties of the original msts-live chase: cancel-before-reprice,
+  abort-on-cancel-failure (no double fills), partial-fill aware, never leaves a resting order.
+  Also aborts loudly if `place_limit` returns no `order_id` (an unmanageable live order), and
+  shouts a warning if the quote disappears mid-chase (it would otherwise cross the spread it was
+  meant to avoid). `--dry-run` shows the single initial limit at the current mid rather than a
+  fake multi-rung simulation. RTH-only. New broker-protocol capability `supports_limit_chase` +
+  `place_limit` / `order_status` methods, **implemented on all brokers** — paper, tastytrade,
+  Alpaca, Tradier, IBKR, Schwab, and Hyperliquid (Hyperliquid is EXPERIMENTAL/unverified, like the
+  rest of that adapter). Available on both `rebalance` (`--order-type` + `--chase-*` flags) and
+  `multi` (via `order_type` / `chase_*` config keys, with per-`[[account]]` `order_type` override).
+  Shares that fill via the chase are stop-protected even if the order doesn't complete cleanly
+  (partial chase fill + failed market fallback no longer leaves the filled shares unguarded).
+
 ## [0.17.1] — 2026-06-18
 
 ### Fixed

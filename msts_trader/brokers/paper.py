@@ -24,6 +24,7 @@ class Paper:
     supports_fractional = True
     supports_moc = True  # simulated: fills at the booked price, tagged moc
     supports_stops = True  # simulated GTC stops, persisted in paper state
+    supports_limit_chase = True  # simulated marketable-limit fills, persisted
 
     def __init__(self, starting_cash: str | float | Decimal | None = None):
         if not STATE_PATH.exists():
@@ -137,6 +138,98 @@ class Paper:
             "dry_run": False,
         }
 
+    # ---- limit chase (simulated) -----------------------------------------
+    def place_limit(self, order: Order, limit_price: Decimal, dry_run: bool = False) -> dict:
+        """Book a resting limit order. It fills immediately if marketable
+        against the current mid (BUY limit >= mid / SELL limit <= mid), else it
+        rests until a later quote (set via set_quote) makes it marketable —
+        which is what `order_status` re-evaluates on each poll."""
+        tkr = order.ticker.upper()
+        qty = Decimal(str(round(float(order.quantity), 4)))
+        if qty <= 0:
+            return {"status": "skipped", "reason": "qty<=0", "ticker": tkr}
+        px = Decimal(str(limit_price))
+        if dry_run:
+            return {"status": "dry-run", "ticker": tkr, "side": order.side.value,
+                    "quantity": float(qty), "limit_price": float(px), "dry_run": True}
+
+        s = self._load()
+        lim = dict(s.get("limit_orders", {}))
+        oid = f"paper-lim-{tkr}-{len(lim) + 1}-{int(px * 100)}"
+        lim[oid] = {"ticker": tkr, "side": order.side.value, "quantity": str(qty),
+                    "limit_price": str(px), "filled": "0"}
+        s["limit_orders"] = lim
+        self._save(s)
+        self._try_fill_limit(oid)
+        return {"status": "submitted", "ticker": tkr, "side": order.side.value,
+                "quantity": float(qty), "order_id": oid, "limit_price": float(px),
+                "dry_run": False}
+
+    def _try_fill_limit(self, order_id: str) -> None:
+        """Fill a resting limit (at the prevailing mid) if it's marketable and
+        the account can afford it. No-op otherwise — the order keeps resting."""
+        s = self._load()
+        lim = dict(s.get("limit_orders", {}))
+        rec = lim.get(order_id)
+        if not rec or Decimal(rec.get("filled", "0")) > 0:
+            return
+        tkr = rec["ticker"]
+        side = rec["side"]
+        qty = Decimal(rec["quantity"])
+        lp = Decimal(rec["limit_price"])
+        mid = Decimal(s.get("last_prices", {}).get(tkr, "0"))
+        if mid <= 0:
+            return
+        marketable = (lp >= mid) if side == Side.BUY.value else (lp <= mid)
+        if not marketable:
+            return
+        fill_px = mid  # marketable limit gets the prevailing price (price improvement)
+        cash = Decimal(s["cash"])
+        positions = dict(s.get("positions", {}))
+        cur = Decimal(positions.get(tkr, "0"))
+        notional = qty * fill_px
+        if side == Side.BUY.value:
+            if notional > cash + Decimal("1"):
+                return  # can't afford — leave resting
+            cash -= notional
+            new_qty = cur + qty
+        else:
+            if cur < qty:
+                return  # can't cover — leave resting
+            cash += notional
+            new_qty = cur - qty
+        if new_qty == 0:
+            positions.pop(tkr, None)
+        else:
+            positions[tkr] = str(new_qty)
+        rec["filled"] = str(qty)
+        rec["fill_price"] = str(fill_px)
+        lim[order_id] = rec
+        s["cash"] = str(cash)
+        s["positions"] = positions
+        last_prices = dict(s.get("last_prices", {}))
+        last_prices[tkr] = str(fill_px)
+        s["last_prices"] = last_prices
+        s["limit_orders"] = lim
+        self._save(s)
+
+    def order_status(self, order_id: str) -> dict:
+        from ..chase import FILLED, PARTIAL, UNKNOWN, WORKING
+
+        self._try_fill_limit(order_id)  # re-evaluate against the current mid
+        s = self._load()
+        rec = s.get("limit_orders", {}).get(order_id)
+        if not rec:
+            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None}
+        filled = Decimal(rec.get("filled", "0"))
+        qty = Decimal(rec["quantity"])
+        avg = float(rec["fill_price"]) if rec.get("fill_price") else None
+        if qty > 0 and filled >= qty:
+            return {"status": FILLED, "filled_qty": float(filled), "filled_avg_price": avg}
+        if filled > 0:
+            return {"status": PARTIAL, "filled_qty": float(filled), "filled_avg_price": avg}
+        return {"status": WORKING, "filled_qty": 0.0, "filled_avg_price": None}
+
     # ---- protective stops (simulated) ------------------------------------
     def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal,
                    dry_run: bool = False) -> dict:
@@ -164,6 +257,12 @@ class Paper:
 
     def cancel_order(self, order_id: str) -> dict:
         s = self._load()
+        lim = dict(s.get("limit_orders", {}))
+        if order_id in lim:
+            lim.pop(order_id)
+            s["limit_orders"] = lim
+            self._save(s)
+            return {"status": "CANCELLED", "order_id": order_id}
         stops = dict(s.get("stop_orders", {}))
         for tkr, lst in list(stops.items()):
             kept = [o for o in lst if o["order_id"] != order_id]
