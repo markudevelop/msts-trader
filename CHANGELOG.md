@@ -10,6 +10,32 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-06-19
+
+### Added
+- **`rebalance --rebalance-scope whole-book|per-ticker`** (or `rebalance_scope`
+  in the config / per `[[account]]`): choose how the drift threshold is applied.
+  - **`whole-book` (NEW DEFAULT):** the threshold is a *trigger* — if **any** line
+    breaches it, the **entire book** is snapped to target. Mirrors msts-live's
+    all-or-nothing dead zone. On a full-period backtest of the PNL Unified book
+    (2015–2026) this delivered higher gross **and** net CAGR (+~9pp net) than
+    per-ticker, at ~1.3× the turnover.
+  - **`per-ticker`:** trade **only** the breaching lines, leave the rest at their
+    drifted value (the prior behavior). Lower turnover, better Sharpe/drawdown.
+  - Orthogonal to `--threshold-mode` (which only sets the drift *denominator*).
+
+### Changed
+- **BREAKING (default behavior):** the rebalance now defaults to `whole-book`
+  scope. Existing books that relied on the old per-line partial behavior should
+  set `rebalance_scope = "per-ticker"` (config) or pass `--rebalance-scope
+  per-ticker`. A pleasant side effect of the new default: small sleeves below the
+  drift gate are no longer frozen on a fresh account — once any line breaches,
+  the whole book (including sub-threshold sleeves above the $1 dust floor) is
+  established in one pass.
+- The post-trade verify / self-heal path honors the same `rebalance_scope`, and
+  the `multi` command now threads both `rebalance_scope` and `threshold_mode`
+  (top-level or per `[[account]]`).
+
 ## [0.22.1] — 2026-06-19
 
 ### Docs

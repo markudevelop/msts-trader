@@ -67,6 +67,66 @@ def test_position_mode_respects_threshold_on_small_drift():
     assert p.orders == []
 
 
+# -------------------------------------------------------- rebalance scope ----
+# SPY breaches (10% of NAV off), AGG is within drift (1% off). The scope decides
+# whether AGG (within) is snapped to target alongside SPY or left alone.
+_SCOPE_POS = {
+    "SPY": Position("SPY", Decimal("400"), Decimal("100")),  # $40k, target $50k -> +10% NAV
+    "AGG": Position("AGG", Decimal("490"), Decimal("100")),  # $49k, target $50k -> +1% NAV
+}
+_SCOPE_TGTS = [Target("SPY", Decimal("0.5")), Target("AGG", Decimal("0.5"))]
+_SCOPE_QUOTES = {"SPY": Decimal("100"), "AGG": Decimal("100")}
+
+
+def test_whole_book_snaps_all_when_one_breaches():
+    # default scope: SPY breaches -> the WHOLE book snaps, so AGG (within) trades too
+    p = _preview(_SCOPE_TGTS, positions=_SCOPE_POS, quotes=_SCOPE_QUOTES)
+    by = {o.ticker: o for o in p.orders}
+    assert set(by) == {"SPY", "AGG"}
+    assert by["SPY"].side == Side.BUY and by["SPY"].quantity == Decimal("100")
+    assert by["AGG"].side == Side.BUY and by["AGG"].quantity == Decimal("10")
+
+
+def test_per_ticker_trades_only_breaching():
+    # per-ticker: only SPY trades; AGG stays within drift
+    p = _preview(_SCOPE_TGTS, positions=_SCOPE_POS, quotes=_SCOPE_QUOTES,
+                 rebalance_scope="per-ticker")
+    assert [o.ticker for o in p.orders] == ["SPY"]
+    agg = next(r for r in p.rows if r.ticker == "AGG")
+    assert agg.order is None and "within drift" in agg.note
+
+
+def test_whole_book_frozen_when_nothing_breaches():
+    # both lines within drift (1% off) -> whole book frozen, no orders
+    pos = {
+        "SPY": Position("SPY", Decimal("490"), Decimal("100")),
+        "AGG": Position("AGG", Decimal("490"), Decimal("100")),
+    }
+    p = _preview(_SCOPE_TGTS, positions=pos, quotes=_SCOPE_QUOTES)
+    assert p.orders == []
+    assert all("within drift (book frozen)" in r.note for r in p.rows)
+
+
+def test_exit_triggers_whole_book_snap():
+    # In-target SPY is within drift, but a stray held name (not in targets) makes
+    # the book live -> whole-book snaps SPY too AND exits the stray.
+    pos = {
+        "SPY": Position("SPY", Decimal("490"), Decimal("100")),   # within drift (1% off)
+        "AGG": Position("AGG", Decimal("490"), Decimal("100")),   # within drift (1% off)
+        "TLT": Position("TLT", Decimal("100"), Decimal("100")),   # $10k, not in targets
+    }
+    whole = _preview(_SCOPE_TGTS, positions=pos,
+                     quotes={**_SCOPE_QUOTES, "TLT": Decimal("100")})
+    by = {o.ticker: o.side for o in whole.orders}
+    assert by.get("TLT") == Side.SELL          # stray exited
+    assert by.get("SPY") == Side.BUY            # within-drift line snapped too
+    # per-ticker: SPY stays put, only the stray exits
+    per = _preview(_SCOPE_TGTS, positions=pos,
+                   quotes={**_SCOPE_QUOTES, "TLT": Decimal("100")},
+                   rebalance_scope="per-ticker")
+    assert [o.ticker for o in per.orders] == ["TLT"]
+
+
 # ------------------------------------------------------------- stop carry ----
 
 def test_weight_zero_exits_small_position_like_missing_row():

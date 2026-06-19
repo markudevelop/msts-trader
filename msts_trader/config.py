@@ -40,6 +40,7 @@ _KNOWN = {
     "min_weight",   # ignore CSV rows with 0 < weight < this
     "stop_pct",     # default protective stop (fraction below entry) for rows lacking a per-row one
     "threshold_mode",  # drift denominator: "nav" (default) | "position"
+    "rebalance_scope",  # execution: "whole-book" (default) | "per-ticker"
     "allocation",   # dollar base the weights apply to (default: full NAV)
     "account",  # array of [[account]] tables for the `multi` command
 }

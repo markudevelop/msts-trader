@@ -431,8 +431,12 @@ count, and a sample SPY quote — so permission/connectivity problems
 - Parses your CSV into `{ticker: target_weight}`.
 - Pulls live NAV, cash, buying power, and current positions from your broker.
 - Quotes every relevant symbol via the broker's market-data API.
-- Computes the dollar delta per ticker, skips anything within the drift
-  threshold (default 4% of NAV).
+- Computes the dollar delta per ticker against the drift threshold (default
+  4% of NAV). **Execution scope (`--rebalance-scope`, default `whole-book`):**
+  the threshold is a *trigger* — if any line breaches it, the whole book is
+  snapped to target (more turnover, higher CAGR on momentum books). Pass
+  `--rebalance-scope per-ticker` to trade only the breaching lines and leave
+  the rest (lower turnover, better Sharpe/drawdown).
 - Sells tickers no longer in your targets.
 - Sizes buys at the current quote, rounded to 2 decimals where the
   broker supports fractional MARKET orders.

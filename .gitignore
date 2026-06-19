@@ -12,3 +12,6 @@ dist/
 # coverage
 .coverage
 htmlcov/
+
+# outcome-fusion session workspace
+.ai/
