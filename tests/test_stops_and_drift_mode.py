@@ -334,3 +334,33 @@ def test_existing_correct_stop_not_churned(tmp_path, monkeypatch):
     stops = b.open_stops()
     assert len(stops["WGMI"]) == 1
     assert stops["WGMI"][0]["order_id"] == oid, "correct stop was needlessly cancelled/replaced"
+
+
+def test_no_stop_pct_anywhere_places_no_stops(tmp_path, monkeypatch):
+    """Opt-in stops: a BUY whose target has no stop_pct (and no --stop-pct) must leave the
+    account with ZERO stops. Held-forever positions stay unstopped."""
+    from msts_trader.__main__ import _reconcile_stops
+    from msts_trader.models import Order, Preview, Side, Target
+    b = _mk_cli_env(tmp_path, monkeypatch)
+    b.set_quote("AAA", Decimal("50"))
+    buy = Order("AAA", Side.BUY, Decimal("100"), Decimal("50"))  # no stop_pct
+    res = b.place_market(buy)
+    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0),
+                      rows=[], orders=[buy])
+    _reconcile_stops(b, preview, [res], targets=[Target("AAA", Decimal("0.5"))])  # target: no stop_pct
+    assert b.open_stops() == {}, "stop placed despite no stop_pct anywhere"
+
+
+def test_held_stop_survives_when_feed_has_no_stop_pct(tmp_path, monkeypatch):
+    """A pre-existing stop on a still-held position is NOT stripped by a no-stop_pct rebalance
+    (only orphan stops with no position are cancelled)."""
+    from msts_trader.__main__ import _reconcile_stops
+    from msts_trader.models import Order, Preview, Side, Target
+    b = _mk_cli_env(tmp_path, monkeypatch)
+    b.set_quote("AAA", Decimal("50"))
+    b.place_market(Order("AAA", Side.BUY, Decimal("100"), Decimal("50")))
+    b.place_stop("AAA", Decimal("100"), Decimal("49.25"))  # pre-existing stop
+    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[])
+    _reconcile_stops(b, preview, [], targets=[Target("AAA", Decimal("0.5"))])  # no stop_pct in feed
+    assert "AAA" in b.open_stops() and len(b.open_stops()["AAA"]) == 1, \
+        "held position's existing stop was wrongly stripped"

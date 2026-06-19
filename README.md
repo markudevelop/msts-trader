@@ -322,7 +322,19 @@ msts-trader --broker paper rebalance --csv-file ...   # test against paper
   = 1.5%) applied to every bought/held target that has no per-row `stop_pct`. An explicit
   `stop_pct` column value always wins; exits (weight 0) get none. Use it when your weights feed
   carries only ticker+weight but you still want every position stopped. Also `stop_pct` in the
-  config file (and per-`[[account]]` in a `multi` config).
+  config file (and per-`[[account]]` in a `multi` config). **Stops are opt-in:** with no per-row
+  `stop_pct` and no `--stop-pct`, **no stops are placed** — and a rebalance never strips an
+  existing stop off a still-held position (only orphan stops with no position are cancelled).
+- **Post-trade verification (on by default):** after fills + stop reconciliation, the account is
+  re-fetched and the rebalance diff is run again; any leg that would *still* trade is one that
+  didn't converge (partial fill, failed close, rejected, not-yet-settled). Reported on the
+  console and as a follow-up notification (`✅ converged` / `🔴 NOT converged — N legs, X% of
+  NAV`), and added to `--json` as a `verify` object. Broker-agnostic. `--no-verify` to skip.
+- **Self-heal (on by default):** when verification finds the book off target, the residual legs
+  are **re-executed once and re-verified**, so a single `rebalance` converges the account instead
+  of just reporting the miss. Bounded by `--heal-passes` (default 1), **market-open only**, and
+  each pass runs through the normal executor (re-bought legs get their protective stops). A leg
+  that can't fill stops after the cap and is reported 🔴. `--no-self-heal` for report-only.
 - **`--min-weight`:** rows with `0 < weight < min-weight` are ignored
   entirely — no buy, and an existing position in that ticker is *not*
   exit-swept either. An explicit weight of `0` still means "sell it all".
@@ -346,6 +358,9 @@ msts-trader rebalance --quiet                # minimal output for cron logs
 msts-trader rebalance --notify-url <webhook> # Discord/Slack/generic ping on execute
 msts-trader rebalance --force                # run even if same targets already done today
 msts-trader rebalance --config my.toml       # load defaults from a config file
+msts-trader rebalance --no-verify            # skip the post-trade convergence check (on by default)
+msts-trader rebalance --no-self-heal         # verify only, don't re-execute residual legs (self-heal on by default)
+msts-trader rebalance --heal-passes 2        # max self-heal re-execution passes (default 1)
 ```
 
 - **Idempotency:** identical targets won't trade twice in the same UTC day

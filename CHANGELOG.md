@@ -10,6 +10,22 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.22.1] — 2026-06-19
+
+### Docs
+- **README now documents post-trade verify, self-heal, and their flags** (`--no-verify`,
+  `--no-self-heal`, `--heal-passes`).
+- **Clarified that protective stops are OPT-IN.** The 0.20.0 `--stop-pct` note read as if stops are
+  always applied; they are not. With no per-row `stop_pct` **and** no `--stop-pct`, **no stops are
+  placed**, and a rebalance never strips an existing stop off a still-held position (only orphan
+  stops with no position are cancelled). `--stop-pct` is a blanket default you opt into for feeds
+  that omit stops but want every leg protected; a mixed book (e.g. some held-forever positions)
+  should rely on per-row `stop_pct` instead.
+
+### Tests
+- Added opt-in coverage: no `stop_pct` anywhere → zero stops placed; a held position's existing
+  stop survives a no-`stop_pct` rebalance.
+
 ## [0.22.0] — 2026-06-19
 
 ### Added
