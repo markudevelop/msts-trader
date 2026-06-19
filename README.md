@@ -343,9 +343,17 @@ msts-trader --broker paper rebalance --csv-file ...   # test against paper
   instead of the whole account — e.g. run a $50k strategy sleeve inside
   a $200k account. Positions in tickers *not* in the CSV are still
   exited (the sweep is account-wide), so keep sleeve and non-sleeve
-  tickers disjoint or rebalance with a CSV that lists everything you
-  hold. Capped at NAV; use leveraged weights (sum > 1.0) for gross
-  exposure above the allocation.
+  tickers disjoint, use `--no-sweep`, or rebalance with a CSV that lists
+  everything you hold. Capped at NAV; use leveraged weights (sum > 1.0)
+  for gross exposure above the allocation.
+- **`--no-sweep`:** touch **only** the tickers in the CSV and leave every
+  other held position untouched — the safe way to run a sleeve inside a
+  **mixed account**. The default (`--sweep`) treats the CSV as the complete
+  book and liquidates anything held but unlisted. Under `--no-sweep`, a
+  held-but-unlisted position shows in the preview as `kept — not in targets`
+  with no order; to actually **close** a rotated-out name, list it with
+  weight `0`. (When sourcing from a published feed, have the publisher emit
+  `weight=0` rows for exited tickers so closes stay explicit.)
 
 ### Safety, automation & output flags
 

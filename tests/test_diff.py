@@ -547,6 +547,44 @@ def test_whole_shares_rounds_exit_down():
     assert gld.side == Side.SELL and gld.quantity == Decimal("5")  # 5.6 -> 5
 
 
+# ----------------------------------------------------------------- sweep ----
+# SPY is exactly on target (no trade); GLD is held but NOT in the CSV.
+_SWEEP_TGTS = [Target("SPY", Decimal("1.0"))]
+_SWEEP_POS = {
+    "SPY": Position("SPY", Decimal("100"), Decimal("500")),  # $50k == target, no trade
+    "GLD": Position("GLD", Decimal("10"), Decimal("200")),   # $2k, not in targets
+}
+_SWEEP_Q = {"SPY": Decimal("500"), "GLD": Decimal("200")}
+
+
+def _sweep_preview(**kw):
+    return build_preview(targets=_SWEEP_TGTS, positions=_SWEEP_POS, nav=Decimal("50000"),
+                         cash=Decimal("0"), buying_power=Decimal("0"), quotes=_SWEEP_Q, **kw)
+
+
+def test_default_sweeps_unlisted_position():
+    p = _sweep_preview()  # sweep defaults True
+    gld = next(o for o in p.orders if o.ticker == "GLD")
+    assert gld.side == Side.SELL and gld.quantity == Decimal("10")
+
+
+def test_no_sweep_leaves_unlisted_position_untouched():
+    p = _sweep_preview(sweep=False)
+    assert p.orders == []                                     # nothing traded
+    gld_row = next(r for r in p.rows if r.ticker == "GLD")
+    assert gld_row.order is None                              # surfaced, but no order
+    assert "kept" in gld_row.note and "not in targets" in gld_row.note
+
+
+def test_no_sweep_still_exits_explicit_weight_zero():
+    # Under --no-sweep, a rotated-out name is closed by listing it with weight 0.
+    targets = [Target("SPY", Decimal("1.0")), Target("GLD", Decimal("0"))]
+    p = build_preview(targets=targets, positions=_SWEEP_POS, nav=Decimal("50000"),
+                      cash=Decimal("0"), buying_power=Decimal("0"), quotes=_SWEEP_Q, sweep=False)
+    gld = next(o for o in p.orders if o.ticker == "GLD")
+    assert gld.side == Side.SELL and gld.quantity == Decimal("10")
+
+
 def test_whole_shares_buy_rounding_to_zero_is_skipped():
     # Delta clears the 4% drift threshold ($2500 = 5% of NAV) but the high
     # share price means it buys < 1 whole share -> dropped cleanly with a

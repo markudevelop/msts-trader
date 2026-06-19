@@ -41,6 +41,7 @@ _KNOWN = {
     "stop_pct",     # default protective stop (fraction below entry) for rows lacking a per-row one
     "threshold_mode",  # drift denominator: "nav" (default) | "position"
     "rebalance_scope",  # execution: "whole-book" (default) | "per-ticker"
+    "sweep",        # liquidate held tickers not in the CSV (default true); false = only touch listed tickers
     "allocation",   # dollar base the weights apply to (default: full NAV)
     "account",  # array of [[account]] tables for the `multi` command
 }
