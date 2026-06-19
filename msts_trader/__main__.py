@@ -25,11 +25,12 @@ from . import __version__, config, fill_log, keychain, notifications, retry, run
 from .brokers import SUPPORTED, BrokerError, make
 from .creds_file import CredsFileError, broker_kwargs_from_env, load_into_env
 from .csv_parser import CSVParseError, parse_csv
-from .diff import apply_margin_aware, build_preview
+from .diff import DRIFT_THRESHOLD, apply_margin_aware, build_preview
 from .login_errors import explain_login_error
 from .market_hours import market_status
 from .models import Side
 from .prompts import ask_secret, ask_text, ask_yes_no, env_value
+from .verify import check_convergence
 
 def _harden_console_encoding() -> None:
     """Keep legacy Windows code pages from killing the CLI.
@@ -706,6 +707,7 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 @click.option("--chase-aggression", type=float, default=None, help="limit-chase: fraction past the mid toward the fill side, e.g. 0.001 = 0.1%% (default 0 = pure mid).")
 @click.option("--chase-fallback/--no-chase-fallback", default=None, help="limit-chase: send a market order for any unfilled remainder when the chase exhausts (default on).")
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
+@click.option("--no-verify", is_flag=True, default=False, help="Skip the post-trade verification (by default, after fills the account is re-fetched and checked against target; any leg still off-target is reported/alerted).")
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON instead of tables.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output (for cron logs).")
 @click.pass_context
@@ -736,6 +738,7 @@ def rebalance(
     chase_aggression: float | None,
     chase_fallback: bool | None,
     force: bool,
+    no_verify: bool,
     json_out: bool,
     quiet: bool,
 ) -> None:
@@ -896,7 +899,15 @@ def rebalance(
             notifications.format_summary(b.name, b.account_id, sent, failed, preview.orders),
             notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat,
         )
-        print(json.dumps({"executed": True, "sent": sent, "failed": failed, "results": results}, default=str))
+        vres = None if no_verify else _post_trade_verify(
+            b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
+            allocation=allocation, whole_shares=whole_shares,
+            notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
+        out = {"executed": True, "sent": sent, "failed": failed, "results": results}
+        if vres is not None:
+            out["verify"] = {"converged": vres.ok, "residual_legs": len(vres.residual),
+                             "residual_dollars": float(vres.residual_dollars)}
+        print(json.dumps(out, default=str))
         return
 
     _render_preview(preview, b.name, b.account_id, ms)
@@ -930,6 +941,13 @@ def rebalance(
     # Notify (best-effort, never raises).
     summary = notifications.format_summary(b.name, b.account_id, sent, failed, preview.orders)
     _do_notify(summary, notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
+
+    # Post-trade verification: re-fetch and confirm the account converged to target.
+    if not no_verify:
+        _post_trade_verify(
+            b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
+            allocation=allocation, whole_shares=whole_shares,
+            notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
 
 
 def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
@@ -1106,6 +1124,44 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
 
     _reconcile_stops(broker, preview, results, targets=targets)
     return sent, failed, results
+
+
+def _post_trade_verify(b, targets, *, threshold=None, threshold_mode="nav", min_weight=None,
+                       allocation=None, whole_shares=False, settle_seconds=2.0,
+                       notify_url=None, tg_token=None, tg_chat=None):
+    """After fills, re-fetch broker state and confirm the account CONVERGED to target.
+
+    Reuses the exact rebalance diff (build_preview) against fresh positions: any residual order
+    is a leg that didn't reach target (partial fill / failed close / not-yet-settled). Broker-
+    agnostic (Broker Protocol only) and best-effort — never raises, never trades.
+    """
+    try:
+        import time as _t
+        if settle_seconds:
+            _t.sleep(settle_seconds)  # give fills a moment to reflect in positions()
+        bal = retry.with_retry(b.balances)
+        pos = retry.with_retry(b.positions)
+        universe = sorted({tg.ticker for tg in targets} | set(pos.keys()))
+        quotes = retry.with_retry(lambda: b.quote(universe))
+        for tk, p in pos.items():
+            quotes.setdefault(tk, p.price)
+        post = build_preview(
+            targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
+            buying_power=bal.buying_power, quotes=quotes,
+            drift_threshold=Decimal(str(threshold)) if threshold is not None else DRIFT_THRESHOLD,
+            min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
+            allocation=Decimal(str(allocation)) if allocation is not None else None,
+            drift_mode=threshold_mode or "nav",
+            whole_shares=whole_shares,
+        )
+        res = check_convergence(post)
+        say(("[green]" if res.ok else "[red]") + "post-trade verify: " + escape(res.summary()) + "[/]")
+        _do_notify(f"post-trade verify · {b.name} ({b.account_id}) · {res.summary()}",
+                   notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
+        return res
+    except Exception as e:
+        say(f"[yellow]post-trade verify skipped: {e}[/yellow]")
+        return None
 
 
 def _reconcile_stops(broker, preview, results, targets=None):
