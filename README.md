@@ -318,6 +318,11 @@ msts-trader --broker paper rebalance --csv-file ...   # test against paper
   preview, so what you see is exactly what's sent (and margin-aware scaling
   re-rounds to whole shares too). Also available as `whole_shares = true` in
   the config file.
+- **`--stop-pct`:** a *default* protective stop (fraction below entry, e.g. `--stop-pct 0.015`
+  = 1.5%) applied to every bought/held target that has no per-row `stop_pct`. An explicit
+  `stop_pct` column value always wins; exits (weight 0) get none. Use it when your weights feed
+  carries only ticker+weight but you still want every position stopped. Also `stop_pct` in the
+  config file (and per-`[[account]]` in a `multi` config).
 - **`--min-weight`:** rows with `0 < weight < min-weight` are ignored
   entirely — no buy, and an existing position in that ticker is *not*
   exit-swept either. An explicit weight of `0` still means "sell it all".
@@ -380,6 +385,7 @@ chase_aggression = 0  # limit-chase: fraction past the mid toward the fill side 
 chase_fallback = true # limit-chase: market order for any unfilled remainder
 whole_shares = false  # set true to round every order to whole shares (IBKR/no-fractional accounts)
 min_weight = 0.01     # ignore CSV rows with weight under 1%
+stop_pct = 0.015      # default protective stop for rows with no per-row stop_pct (per-row wins)
 allocation = 50000    # weights apply to $50k instead of full NAV
 quiet = false
 ```

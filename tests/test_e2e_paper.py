@@ -137,6 +137,26 @@ def test_mixed_rebalance_stops_and_no_stops(tmp_path):
     assert stops["AAA"][0]["stop_price"] == Decimal("98.00")  # 100 * (1 - 0.02)
 
 
+def test_default_stop_pct_places_stops_when_csv_omits_them(tmp_path):
+    """A weights CSV with NO stop_pct column + --stop-pct 0.02 must still arm a
+    protective stop on the bought name (the hydra raw-cache case)."""
+    runner = CliRunner()
+    assert runner.invoke(main, ["login", "--broker", "paper"], input="100000\n").exit_code == 0
+    from msts_trader.brokers.paper import Paper
+    p = Paper(starting_cash="100000")
+    p.set_quote("AAA", Decimal("100"))
+
+    csv = tmp_path / "t.csv"
+    csv.write_text("ticker,weight\nAAA,1.0\n")   # NB: no stop_pct column at all
+    r = runner.invoke(main, ["--broker", "paper", "rebalance", "--csv-file", str(csv),
+                             "--yes", "--stop-pct", "0.02"])
+    assert r.exit_code == 0, r.output
+
+    stops = Paper().open_stops()
+    assert "AAA" in stops, "default --stop-pct did not arm a stop"
+    assert stops["AAA"][0]["stop_price"] == Decimal("98.00")   # 100 * (1 - 0.02)
+
+
 def test_full_paper_rebalance_json_execute(tmp_path):
     runner = CliRunner()
     runner.invoke(main, ["login", "--broker", "paper"], input="50000\n")

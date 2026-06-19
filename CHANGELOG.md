@@ -10,6 +10,16 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-06-19
+
+### Added
+- **`--stop-pct` — a default protective stop for feeds that omit per-row stops.** Applies a
+  uniform stop (fraction below entry, e.g. `--stop-pct 0.015`) to every bought/held target that
+  has no per-row `stop_pct`; an explicit per-row `stop_pct` always wins, and exits (weight 0)
+  are left alone. This makes a weights source that carries only `{ticker: weight}` (e.g. the
+  msts-live raw live-weights cache) fully protected without changing the producer. Available on
+  `rebalance` (flag) and `multi` (config `stop_pct`, with per-`[[account]]` override).
+
 ## [0.19.0] — 2026-06-19
 
 ### Fixed

@@ -241,6 +241,23 @@ def test_missing_stop_backfilled_for_held_untraded_name(tmp_path, monkeypatch):
     assert stops["WGMI"][0]["stop_price"] == Decimal("49.00")  # 50 * (1 - 0.02)
 
 
+def test_apply_default_stop_backfills_blanks_only():
+    """--stop-pct fills targets that lack a per-row stop; explicit per-row wins;
+    exits (weight 0) are left alone."""
+    from msts_trader.__main__ import _apply_default_stop
+    from msts_trader.models import Target
+
+    ts = [
+        Target("AAA", Decimal("0.5")),                                  # no stop -> default
+        Target("BBB", Decimal("0.3"), stop_pct=Decimal("0.01")),       # explicit -> kept
+        Target("CCC", Decimal("0")),                                    # exit -> untouched
+    ]
+    out = {t.ticker: t.stop_pct for t in _apply_default_stop(ts, Decimal("0.02"))}
+    assert out == {"AAA": Decimal("0.02"), "BBB": Decimal("0.01"), "CCC": None}
+    # no default -> unchanged
+    assert _apply_default_stop(ts, None) == ts
+
+
 def test_stop_anchors_on_order_status_fill_price(tmp_path, monkeypatch):
     """A broker whose place_market returns no fill price (async ack) still gets
     its stop anchored on the REAL entry, pulled from order_status — not the

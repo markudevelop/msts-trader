@@ -683,6 +683,7 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirm prompt (auto-execute). Required for unattended runs.")
 @click.option("--threshold", default=None, type=float, help="Drift threshold (fraction of NAV). Default 0.04.")
 @click.option("--min-weight", type=float, default=None, help="Ignore CSV rows with 0 < weight < this (e.g. 0.01): no buy, no sell, existing position left untouched.")
+@click.option("--stop-pct", "default_stop", type=float, default=None, help="Default protective stop as a fraction below entry (e.g. 0.015 = 1.5%%), applied to every bought/held target with no per-row stop_pct. Use when the weights feed omits stops (e.g. the hydra raw cache). Per-row stop_pct always wins.")
 @click.option("--threshold-mode", type=click.Choice(["nav", "position"]), default=None,
               help="Drift denominator: 'nav' (default, delta vs whole book) or 'position' "
                    "(delta vs the line itself — for scaled/composite books whose small "
@@ -715,6 +716,7 @@ def rebalance(
     yes: bool,
     threshold: float | None,
     min_weight: float | None,
+    default_stop: float | None,
     threshold_mode: str | None,
     allocation: float | None,
     csv_file: str | None,
@@ -746,6 +748,9 @@ def rebalance(
     cfg = _load_config_or_exit(config_path)
     threshold = float(config.pick(threshold, cfg, "threshold", 0.04))
     min_weight = config.pick(min_weight, cfg, "min_weight")
+    default_stop = config.pick(default_stop, cfg, "stop_pct")
+    if default_stop is not None and not (0 < float(default_stop) < 0.5):
+        _fail(f"--stop-pct {default_stop} outside (0, 0.5) — it is a FRACTION below entry (0.015 = 1.5%), not a price.")
     threshold_mode = config.pick(threshold_mode, cfg, "threshold_mode", "nav")
     allocation = config.pick(allocation, cfg, "allocation")
     csv_file = config.pick(csv_file, cfg, "csv_file")
@@ -814,6 +819,9 @@ def rebalance(
         targets = parse_csv(csv_text)
     except CSVParseError as e:
         _fail(f"CSV parse error: {e}")
+
+    if default_stop is not None:
+        targets = _apply_default_stop(targets, Decimal(str(default_stop)))
 
     say(f"[green]✓ loaded {len(targets)} targets.[/green]")
 
@@ -968,6 +976,21 @@ def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
         c.print(f"[yellow]⚠ {escape(w)}[/yellow]")
     for b in preview.blockers:
         c.print(f"[red]✗ {escape(b)}[/red]")
+
+
+def _apply_default_stop(targets, default_stop):
+    """Backfill a uniform protective stop on targets that carry no per-row one.
+
+    A per-row `stop_pct` from the CSV always wins; this only fills the blanks, so
+    a weights feed that omits stops (e.g. the raw msts-live live-weights cache,
+    which is a {ticker: weight} dict with no stop column) still gets protection
+    via `--stop-pct` / config `stop_pct`. Exits (weight 0) are left alone — there
+    is nothing to protect once the position is closed."""
+    if not default_stop:
+        return targets
+    from dataclasses import replace
+    return [replace(t, stop_pct=default_stop) if (t.stop_pct is None and t.weight > 0) else t
+            for t in targets]
 
 
 def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, targets=None):
@@ -1347,6 +1370,10 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
     except CSVParseError as e:
         _fail(f"CSV parse error: {e}")
 
+    default_stop = cfg.get("stop_pct")
+    if default_stop is not None and not (0 < float(default_stop) < 0.5):
+        _fail(f"stop_pct {default_stop} in config outside (0, 0.5) — it is a FRACTION below entry, not a price.")
+
     if not dry_run and not yes:
         _fail("refusing to execute across accounts without --yes (use --dry-run to preview).")
 
@@ -1371,11 +1398,13 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
 
         say(f"\n[bold cyan]━━ {label} ({broker}) ━━[/bold cyan]")
         try:
-            # per-account `allocation` (dollar sizing base) and `order_type` win
-            # over the top-level ones.
+            # per-account `allocation`, `order_type`, `stop_pct` win over top-level.
             acct_order_type = str(acct.get("order_type", order_type))
+            acct_stop = acct.get("stop_pct", default_stop)
+            acct_targets = (_apply_default_stop(targets, Decimal(str(acct_stop)))
+                            if acct_stop is not None else targets)
             r = _rebalance_one(
-                b, targets, threshold=threshold, max_notional=max_notional, dry_run=dry_run,
+                b, acct_targets, threshold=threshold, max_notional=max_notional, dry_run=dry_run,
                 force=force, margin_aware=margin_aware, min_weight=min_weight,
                 allocation=acct.get("allocation", allocation_default),
                 whole_shares=acct.get("whole_shares", whole_shares),

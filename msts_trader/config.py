@@ -38,6 +38,7 @@ _KNOWN = {
     "whole_shares",  # round every order down to whole shares (no fractional)
     "telegram_token", "telegram_chat_id",  # Telegram bot creds (else MSTS_TELEGRAM_* env)
     "min_weight",   # ignore CSV rows with 0 < weight < this
+    "stop_pct",     # default protective stop (fraction below entry) for rows lacking a per-row one
     "threshold_mode",  # drift denominator: "nav" (default) | "position"
     "allocation",   # dollar base the weights apply to (default: full NAV)
     "account",  # array of [[account]] tables for the `multi` command
