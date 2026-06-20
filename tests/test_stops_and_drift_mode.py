@@ -300,6 +300,56 @@ def test_orphan_stop_cancelled_when_no_position(tmp_path, monkeypatch):
     assert b.open_stops() == {}, "orphan stop with no position must be cancelled"
 
 
+def test_is_clean_send_excludes_resting():
+    from msts_trader.__main__ import _is_clean_send
+    assert _is_clean_send("submitted") is True
+    assert _is_clean_send("FILLED") is True
+    assert _is_clean_send("ok") is True
+    # error / skipped / resting are NOT clean completions
+    assert _is_clean_send("error") is False
+    assert _is_clean_send("skipped") is False
+    assert _is_clean_send("resting") is False   # placed but unfilled (HL thin book)
+    assert _is_clean_send("RESTING") is False
+
+
+def test_backfill_stop_anchors_on_live_quote_not_cost():
+    """A backfilled protective stop must anchor on the LIVE quote, not the
+    position's price (which Tradier reports as average COST)."""
+    from msts_trader.__main__ import _reconcile_stops
+    from msts_trader.models import Preview, Target
+
+    class _CostBasisBroker:
+        name = "fake"
+        supports_stops = True
+
+        def __init__(self):
+            self.placed = []
+
+        def open_stops(self):
+            return {}
+
+        def positions(self):
+            return {"WGMI": Position("WGMI", Decimal("100"), Decimal("50"))}  # price = avg COST 50
+
+        def quote(self, tickers):
+            return {"WGMI": Decimal("60")}  # live market 60 (≠ cost)
+
+        def place_stop(self, tkr, qty, stop_price, dry_run=False):
+            self.placed.append((tkr, qty, Decimal(str(stop_price))))
+            return {"status": "submitted", "ticker": tkr}
+
+        def cancel_order(self, oid):
+            return {"status": "CANCELLED"}
+
+    b = _CostBasisBroker()
+    preview = Preview(nav=Decimal("100000"), buying_power=Decimal("0"), cash=Decimal("0"),
+                      rows=[], orders=[])
+    _reconcile_stops(b, preview, [], targets=[Target("WGMI", Decimal("0.5"), stop_pct=Decimal("0.02"))])
+    assert len(b.placed) == 1
+    _, _, stop_price = b.placed[0]
+    assert stop_price == Decimal("60") * (Decimal("1") - Decimal("0.02"))  # 58.80 (quote), NOT 49.00 (cost)
+
+
 def test_missing_stop_backfilled_for_held_untraded_name(tmp_path, monkeypatch):
     """A held position the target wants protected, with no open stop and no trade
     this run, gets a stop backfilled from the target book."""

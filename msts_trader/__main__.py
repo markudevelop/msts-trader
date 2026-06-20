@@ -1040,6 +1040,16 @@ def _apply_default_stop(targets, default_stop):
             for t in targets]
 
 
+def _is_clean_send(status) -> bool:
+    """A market order is a CLEAN completion only if it didn't error/skip AND isn't
+    merely RESTING — a resting order was placed but is UNFILLED (e.g. a Hyperliquid
+    market order whose remainder rests on a thin book). A resting leg has not
+    reached target, so it must not mark the run done; the post-trade verify /
+    self-heal chases the unfilled remainder and idempotency stays open for a re-run.
+    """
+    return str(status).lower() not in ("error", "skipped", "resting")
+
+
 def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, targets=None):
     total = len(preview.orders)
     sent = 0
@@ -1093,9 +1103,12 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
         except Exception as e:
             result = {"status": "error", "reason": str(e), "ticker": o.ticker}
         status = result.get("status", "?")
-        if status in ("error", "skipped"):
+        if not _is_clean_send(status):
             failed += 1
-            say(f"[red]{status.upper()}[/red] {escape(str(result.get('reason', '')))}")
+            if str(status).lower() == "resting":
+                say(f"[yellow]RESTING (unfilled)[/yellow]  id={result.get('order_id', '?')} — verify will chase it")
+            else:
+                say(f"[red]{status.upper()}[/red] {escape(str(result.get('reason', '')))}")
         else:
             sent += 1
             say(f"[green]{status.upper()}[/green]  id={result.get('order_id', '?')}")
@@ -1346,7 +1359,22 @@ def _reconcile_stops(broker, preview, results, targets=None):
         existing_ok = len(existing) == 1 and existing[0].get("quantity") == qty
         if fill_px is None and existing_ok:
             continue  # correct stop already resting and no fresh entry -> don't churn it
-        px = fill_px if fill_px is not None else (held.price if held.price > 0 else None)
+        # Anchor: a fresh fill price wins; otherwise the LIVE quote — NOT
+        # position.price, which some adapters (Tradier) report as average COST,
+        # not market, putting a backfilled stop at the wrong distance. Fall back
+        # to position.price only if the quote is unavailable.
+        if fill_px is not None:
+            px = fill_px
+        else:
+            px = None
+            try:
+                q = broker.quote([tkr]).get(tkr)
+                if q and Decimal(str(q)) > 0:
+                    px = Decimal(str(q))
+            except Exception:
+                pass
+            if px is None and held.price > 0:
+                px = held.price
         if px is None or px <= 0:
             continue  # no usable anchor -> leave for the next run
         if existing:

@@ -10,6 +10,22 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.24.2] — 2026-06-20
+
+### Fixed
+- **Backfilled protective stops now anchor on the live quote, not the position's
+  price.** Some adapters (Tradier) report a position's price as **average cost**,
+  not market; a stop re-placed for a held-but-untraded name was therefore set at
+  `cost × (1 − stop_pct)` — the wrong distance (too loose on a name that ran up,
+  possibly above market on one underwater). The backfill now prefers a fresh quote
+  and only falls back to the position price if no quote is available. Fresh-fill
+  anchoring (a name bought this run) is unchanged.
+- **A Hyperliquid market order that only RESTS (unfilled remainder on a thin book)
+  is no longer counted as a clean fill.** It's now treated as not-done, so the run
+  isn't marked complete (idempotency stays open for a re-run) and the post-trade
+  verify / self-heal chases the unfilled remainder. Other adapters are unaffected
+  (they never return a `resting` status).
+
 ## [0.24.1] — 2026-06-20
 
 ### Fixed
