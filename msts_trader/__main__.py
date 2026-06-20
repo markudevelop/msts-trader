@@ -891,8 +891,13 @@ def rebalance(
     if cap_msg:
         preview.blockers.append(cap_msg)
 
-    # Idempotency: same targets already done today?
-    fp = runstate.fingerprint(b.name, b.account_id, targets)
+    # Idempotency: same plan already done today? Params are part of the plan, so
+    # a different --allocation/--rebalance-scope/--sweep/--threshold/etc re-runs.
+    fp = runstate.fingerprint(b.name, b.account_id, targets, {
+        "allocation": allocation, "scope": rebalance_scope, "sweep": sweep,
+        "threshold": threshold, "threshold_mode": threshold_mode,
+        "whole_shares": whole_shares, "min_weight": min_weight,
+    })
     duplicate = runstate.already_done(fp) and not force
 
     # In JSON mode the single payload carries everything (orders, warnings,
@@ -1387,7 +1392,11 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
     if cap:
         preview.blockers.append(cap)
 
-    fp = runstate.fingerprint(b.name, b.account_id, targets)
+    fp = runstate.fingerprint(b.name, b.account_id, targets, {
+        "allocation": allocation, "scope": rebalance_scope, "sweep": sweep,
+        "threshold": threshold, "threshold_mode": threshold_mode,
+        "whole_shares": whole_shares, "min_weight": min_weight,
+    })
     duplicate = runstate.already_done(fp) and not force
 
     result = {

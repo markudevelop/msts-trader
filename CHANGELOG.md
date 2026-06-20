@@ -10,6 +10,23 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.24.1] — 2026-06-20
+
+### Fixed
+- **Idempotency fingerprint now includes the execution params** (allocation,
+  rebalance-scope, sweep, threshold, threshold-mode, whole-shares, min-weight),
+  not just broker/account/targets. Before, a deliberate second same-day run that
+  changed *how* the book is executed (e.g. `--rebalance-scope per-ticker`,
+  `--no-sweep`, a different `--allocation`) hashed identically to the first and
+  was **silently skipped** as a duplicate. Such a run is a different plan and now
+  executes. Same-plan re-runs still dedupe; `--force` still overrides.
+
+### Audit
+- Production-readiness sweep of the execution path found **no** critical
+  sign/rounding/double-execution bugs; the core sizing math is sound. Remaining
+  findings (margin-aware ↔ post-trade-verify interaction; broker-adapter stop
+  round-trip specifics) are documented for follow-up.
+
 ## [0.24.0] — 2026-06-19
 
 ### Added
