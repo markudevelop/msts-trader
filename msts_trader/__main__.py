@@ -943,6 +943,12 @@ def rebalance(
         _fail("blockers present — refusing to execute.")
     if not preview.orders:
         say("[green]Nothing to do — portfolio within drift on every ticker.[/green]")
+        # No trades, but still reconcile protective stops: a held-but-not-traded
+        # name whose stop was missed/filled/rejected must be backfilled (sized from
+        # broker.positions(), so never a naked stop). Without this, stops are only
+        # touched on days the book trades — the held-within-drift coverage gap.
+        if getattr(b, "supports_stops", False):
+            _reconcile_stops(b, preview, [], targets=targets)
         return
     if dry_run:
         say("[yellow]--dry-run set, exiting without sending orders.[/yellow]")
@@ -953,6 +959,11 @@ def rebalance(
         return
     if duplicate:
         say("[yellow]Identical targets already executed today — skipping (use --force to override).[/yellow]")
+        # Same as the within-drift path: reconcile stops even when we skip the
+        # trade, so a stop that was filled/cancelled since this morning's run is
+        # backfilled on held positions (idempotent — correct stops aren't churned).
+        if getattr(b, "supports_stops", False):
+            _reconcile_stops(b, preview, [], targets=targets)
         return
     if not yes:
         if not sys.stdin.isatty():
