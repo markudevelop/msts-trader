@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,17 +47,43 @@ def already_done(fp: str) -> bool:
 
 
 def record(fp: str) -> None:
-    data = {"date": _today(), "fingerprints": []}
-    if STATE_PATH.exists():
-        try:
-            existing = json.loads(STATE_PATH.read_text())
-            if existing.get("date") == _today():
-                data = existing
-        except Exception:
-            pass
-    fps = set(data.get("fingerprints") or [])
-    fps.add(fp)
-    data["fingerprints"] = sorted(fps)
-    data["date"] = _today()
+    # Lock the read-modify-write so two concurrent runs can't lost-update or
+    # corrupt runstate.json (concurrent EXECUTION is prevented upstream by the
+    # orchestrator's exec lock; this protects the file itself). Cross-platform
+    # O_EXCL lockfile with a bounded wait; best-effort if it can't be acquired.
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(data, indent=2))
+    lock = STATE_PATH.with_suffix(".json.lock")
+    have_lock = False
+    for _ in range(50):  # ~5s
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            have_lock = True
+            break
+        except FileExistsError:
+            _time.sleep(0.1)
+    try:
+        data = {"date": _today(), "fingerprints": []}
+        if STATE_PATH.exists():
+            try:
+                existing = json.loads(STATE_PATH.read_text())
+                if existing.get("date") == _today():
+                    data = existing
+            except Exception:
+                pass
+        fps = set(data.get("fingerprints") or [])
+        fps.add(fp)
+        data["fingerprints"] = sorted(fps)
+        data["date"] = _today()
+        # Atomic write: a crash mid-write must not truncate runstate.json to garbage
+        # (which already_done() would then read as "nothing done" -> a real
+        # same-day duplicate would no longer be suppressed).
+        tmp = STATE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2))
+        os.replace(tmp, STATE_PATH)
+    finally:
+        if have_lock:
+            try:
+                os.unlink(str(lock))
+            except OSError:
+                pass
