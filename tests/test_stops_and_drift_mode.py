@@ -232,6 +232,25 @@ def test_addon_buy_protects_whole_position(tmp_path, monkeypatch):
     assert stops["WGMI"][0]["quantity"] == Decimal("150"), "add-on left old shares uncovered"
 
 
+def test_reconcile_backfills_stop_on_held_within_drift_no_orders(tmp_path, monkeypatch):
+    """Production audit 2026-06-20: a held name with NO trade this run (book within
+    drift -> preview.orders empty) and a missing stop must still get one, sized from
+    positions + targets. This is the path the CLI now runs on the no-trade/duplicate
+    early-returns (previously stops were only touched on days the book traded)."""
+    from msts_trader.__main__ import _reconcile_stops
+    from msts_trader.models import Order, Preview, Side, Target
+    b = _mk_cli_env(tmp_path, monkeypatch)
+    b.set_quote("WGMI", Decimal("50"))
+    b.place_market(Order("WGMI", Side.BUY, Decimal("100"), Decimal("50")))  # held, NO stop placed
+    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0),
+                      rows=[], orders=[])                                    # within drift: no orders
+    targets = [Target("WGMI", Decimal("0.05"), stop_pct=Decimal("0.015"))]   # target wants protection
+    _reconcile_stops(b, preview, [], targets=targets)                        # results empty, no trade
+    stops = b.open_stops()
+    assert "WGMI" in stops, "held-but-not-traded name left unprotected on a no-trade day"
+    assert stops["WGMI"][0]["quantity"] == Decimal("100")
+
+
 def test_full_exit_cancels_without_replacing(tmp_path, monkeypatch):
     from msts_trader.__main__ import _reconcile_stops
     from msts_trader.models import Order, Preview, Side
