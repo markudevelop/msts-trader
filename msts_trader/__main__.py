@@ -30,7 +30,7 @@ from .login_errors import explain_login_error
 from .market_hours import market_status
 from .models import Side
 from .prompts import ask_secret, ask_text, ask_yes_no, env_value
-from .verify import check_convergence
+from .verify import check_convergence, converged_within_buying_power
 
 def _harden_console_encoding() -> None:
     """Keep legacy Windows code pages from killing the CLI.
@@ -891,8 +891,13 @@ def rebalance(
     if cap_msg:
         preview.blockers.append(cap_msg)
 
-    # Idempotency: same targets already done today?
-    fp = runstate.fingerprint(b.name, b.account_id, targets)
+    # Idempotency: same plan already done today? Params are part of the plan, so
+    # a different --allocation/--rebalance-scope/--sweep/--threshold/etc re-runs.
+    fp = runstate.fingerprint(b.name, b.account_id, targets, {
+        "allocation": allocation, "scope": rebalance_scope, "sweep": sweep,
+        "threshold": threshold, "threshold_mode": threshold_mode,
+        "whole_shares": whole_shares, "min_weight": min_weight,
+    })
     duplicate = runstate.already_done(fp) and not force
 
     # In JSON mode the single payload carries everything (orders, warnings,
@@ -922,6 +927,7 @@ def rebalance(
         vres = None if no_verify else _post_trade_verify(
             b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
             allocation=allocation, whole_shares=whole_shares, rebalance_scope=rebalance_scope, sweep=sweep,
+            margin_aware=margin_aware,
             self_heal=not no_self_heal, heal_passes=heal_passes, order_type=order_type, chase_cfg=chase_cfg,
             notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
         out = {"executed": True, "sent": sent, "failed": failed, "results": results}
@@ -968,6 +974,7 @@ def rebalance(
         _post_trade_verify(
             b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
             allocation=allocation, whole_shares=whole_shares, rebalance_scope=rebalance_scope, sweep=sweep,
+            margin_aware=margin_aware,
             self_heal=not no_self_heal, heal_passes=heal_passes, order_type=order_type, chase_cfg=chase_cfg,
             notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
 
@@ -1149,7 +1156,7 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
 
 
 def _verify_once(b, targets, *, threshold, threshold_mode, min_weight, allocation, whole_shares,
-                 rebalance_scope="whole-book", sweep=True):
+                 rebalance_scope="whole-book", sweep=True, margin_aware=False):
     """Re-fetch broker state and rebuild the diff. Returns (VerifyResult, post_fill_preview)."""
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
@@ -1168,12 +1175,16 @@ def _verify_once(b, targets, *, threshold, threshold_mode, min_weight, allocatio
         sweep=sweep,
         whole_shares=whole_shares,
     )
+    # When margin-aware is on, a residual buy the account can't fund is "as
+    # deployed as possible", not a non-convergence — don't let self-heal chase it.
+    if margin_aware:
+        return converged_within_buying_power(post), post
     return check_convergence(post), post
 
 
 def _post_trade_verify(b, targets, *, threshold=None, threshold_mode="nav", min_weight=None,
                        allocation=None, whole_shares=False, rebalance_scope="whole-book", sweep=True,
-                       settle_seconds=2.0,
+                       margin_aware=False, settle_seconds=2.0,
                        self_heal=False, heal_passes=1, order_type="market", chase_cfg=None,
                        notify_url=None, tg_token=None, tg_chat=None):
     """After fills, re-fetch broker state and confirm the account CONVERGED to target.
@@ -1197,7 +1208,7 @@ def _post_trade_verify(b, targets, *, threshold=None, threshold_mode="nav", min_
             res, post = _verify_once(
                 b, targets, threshold=threshold, threshold_mode=threshold_mode,
                 min_weight=min_weight, allocation=allocation, whole_shares=whole_shares,
-                rebalance_scope=rebalance_scope, sweep=sweep)
+                rebalance_scope=rebalance_scope, sweep=sweep, margin_aware=margin_aware)
             if res.ok or not self_heal or attempt >= heal_passes or not post.orders:
                 break
             if market_status().status != "open":
@@ -1387,7 +1398,11 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
     if cap:
         preview.blockers.append(cap)
 
-    fp = runstate.fingerprint(b.name, b.account_id, targets)
+    fp = runstate.fingerprint(b.name, b.account_id, targets, {
+        "allocation": allocation, "scope": rebalance_scope, "sweep": sweep,
+        "threshold": threshold, "threshold_mode": threshold_mode,
+        "whole_shares": whole_shares, "min_weight": min_weight,
+    })
     duplicate = runstate.already_done(fp) and not force
 
     result = {

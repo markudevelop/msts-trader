@@ -2,7 +2,7 @@
 from decimal import Decimal
 
 from msts_trader.models import Order, Preview, RebalanceRow, Side
-from msts_trader.verify import check_convergence
+from msts_trader.verify import check_convergence, converged_within_buying_power
 
 
 def _preview(rows):
@@ -57,3 +57,46 @@ def test_residual_dollars_sums_abs():
     res = check_convergence(_preview(rows))
     assert res.residual_dollars == Decimal("8000")
     assert res.ok is False
+
+
+# ----------------------------- buying-power-aware convergence (margin-aware) ----
+
+def _preview_bp(rows, buying_power):
+    return Preview(nav=Decimal("100000"), buying_power=Decimal(str(buying_power)),
+                   cash=Decimal("0"), rows=rows, orders=[r.order for r in rows if r.order])
+
+
+def test_unaffordable_residual_buy_is_converged():
+    # Fully invested: a residual BUY the account can't fund is "as deployed as
+    # possible", not a non-convergence — and must NOT remain for self-heal.
+    rows = [_row("SPY", note="within drift"),
+            _row("IWM", order=_order("IWM", Side.BUY, 8000))]
+    p = _preview_bp(rows, 0)
+    res = converged_within_buying_power(p)
+    assert res.ok is True
+    iwm = next(r for r in rows if r.ticker == "IWM")
+    assert iwm.order is None and "buying-power limited" in iwm.note
+    assert p.orders == []                       # removed so self-heal won't retry it
+
+
+def test_affordable_residual_buy_still_not_converged():
+    # Buying power covers the residual buy -> we genuinely could deploy it.
+    rows = [_row("IWM", order=_order("IWM", Side.BUY, 8000))]
+    res = converged_within_buying_power(_preview_bp(rows, 100000))
+    assert res.ok is False and res.residual[0].ticker == "IWM"
+
+
+def test_sell_proceeds_fund_the_buy():
+    # A residual sell's proceeds count toward available buying power.
+    rows = [_row("XLP", order=_order("XLP", Side.SELL, 10000)),
+            _row("IWM", order=_order("IWM", Side.BUY, 8000))]
+    res = converged_within_buying_power(_preview_bp(rows, 0))
+    assert res.ok is False                      # 10k proceeds fund the 8k buy
+    assert any(r.ticker == "IWM" and r.order is not None for r in rows)
+
+
+def test_failed_sell_never_excused_by_buying_power():
+    # A failed close (residual SELL) is a real problem regardless of buying power.
+    rows = [_row("XLP", order=_order("XLP", Side.SELL, 28000))]
+    res = converged_within_buying_power(_preview_bp(rows, 0))
+    assert res.ok is False and res.residual[0].order.side == Side.SELL

@@ -10,6 +10,30 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.24.1] — 2026-06-20
+
+### Fixed
+- **Idempotency fingerprint now includes the execution params** (allocation,
+  rebalance-scope, sweep, threshold, threshold-mode, whole-shares, min-weight),
+  not just broker/account/targets. Before, a deliberate second same-day run that
+  changed *how* the book is executed (e.g. `--rebalance-scope per-ticker`,
+  `--no-sweep`, a different `--allocation`) hashed identically to the first and
+  was **silently skipped** as a duplicate. Such a run is a different plan and now
+  executes. Same-plan re-runs still dedupe; `--force` still overrides.
+- **Post-trade verify is now buying-power-aware under `--margin-aware`.** A fully
+  invested / margin-limited book no longer reports "🔴 NOT converged" for a
+  residual buy it cannot fund, and **self-heal no longer re-submits unaffordable
+  buys** every pass. A residual buy that can't be funded from buying power (+ any
+  residual sell proceeds) is treated as converged (the book is as-deployed-as
+  -possible) and removed so self-heal skips it; an *affordable* residual buy still
+  flags non-convergence, and a failed close (residual SELL) is never excused.
+
+### Audit
+- Production-readiness sweep of the execution path found **no** critical
+  sign/rounding/double-execution bugs; the core sizing math is sound. Remaining
+  open items (broker-adapter stop round-trip specifics for Schwab/Tradier/
+  Hyperliquid) need live-API confirmation and are tracked separately.
+
 ## [0.24.0] — 2026-06-19
 
 ### Added
