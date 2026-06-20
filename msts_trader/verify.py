@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from .models import Preview, RebalanceRow
+from .models import Preview, RebalanceRow, Side
 
 
 @dataclass
@@ -61,3 +61,40 @@ def check_convergence(post_fill_preview: Preview) -> VerifyResult:
         residual=residual,
         nav=post_fill_preview.nav,
     )
+
+
+def converged_within_buying_power(post_fill_preview: Preview) -> VerifyResult:
+    """Like `check_convergence`, but a residual BUY that current buying power cannot
+    fund is treated as CONVERGED — the book is as-deployed-as-possible, not a failure.
+
+    Without this, a fully-invested / margin-limited book reads "not converged"
+    forever: the post-trade diff wants the full target, but margin-aware had scaled
+    the buys down at execution, so the gap never closes and self-heal re-submits
+    unaffordable buys every pass.
+
+    Rule (a yes/no convergence check, not execution sizing): fund the largest
+    residual buys first from available buying power (broker BP + residual sell
+    proceeds). A buy that can't be funded from what remains is at its max
+    deployable size → EXCUSE it (drop its order, mark the row converged). A buy
+    that still fits means more *could* be deployed → it stays a real residual.
+    SELL residuals (a failed close still held) are NEVER excused. Mutates the
+    preview: excused orders are removed from both `rows` and `orders`, so self-heal
+    won't re-submit a buy the account cannot afford.
+    """
+    sell_proceeds = sum((row.order.notional for row in post_fill_preview.rows
+                         if row.order is not None and row.order.side == Side.SELL), Decimal(0))
+    available = post_fill_preview.buying_power + sell_proceeds
+    buy_rows = [row for row in post_fill_preview.rows
+                if row.order is not None and row.order.side == Side.BUY]
+    excused: list = []
+    for row in sorted(buy_rows, key=lambda r: -r.order.notional):
+        if row.order.notional <= available:
+            available -= row.order.notional   # affordable → genuine residual, keep it
+        else:
+            excused.append(row.order)
+            row.order = None
+            row.note = "within drift (buying-power limited)"
+    if excused:
+        ex_ids = {id(o) for o in excused}
+        post_fill_preview.orders = [o for o in post_fill_preview.orders if id(o) not in ex_ids]
+    return check_convergence(post_fill_preview)
