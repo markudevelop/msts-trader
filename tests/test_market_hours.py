@@ -46,6 +46,28 @@ def test_afterhours():
     assert ms.status == "afterhours"
 
 
+def test_half_day_early_close_minutes_to_close():
+    # 2025-12-24 is an early close (13:00 ET). At 12:55 the market closes in 5 min
+    # (not ~65) so the MOC cutoff fires; previously it used 16:00 and would submit
+    # an order into a closing/closed auction.
+    ms = market_status(_et(2025, 12, 24, 12, 55))
+    assert ms.status == "open"
+    assert ms.minutes_to_close == 5
+
+
+def test_half_day_afterhours_after_1pm():
+    # After the 13:00 half-day close it must be afterhours, not "open with hours left".
+    ms = market_status(_et(2025, 12, 24, 13, 30))
+    assert ms.status == "afterhours"
+
+
+def test_full_day_still_uses_4pm_close():
+    # A normal day's close is unchanged at 16:00.
+    ms = market_status(_et(2026, 6, 5, 15, 55))
+    assert ms.status == "open"
+    assert ms.minutes_to_close == 5
+
+
 def test_closed_overnight():
     ms = market_status(_et(2026, 6, 5, 2, 0))
     assert ms.status == "closed"

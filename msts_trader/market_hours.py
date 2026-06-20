@@ -10,8 +10,7 @@ from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 
-# NYSE/NASDAQ full closures. Half-days (early close 13:00 ET) are not enumerated
-# here — minutes-to-close uses 16:00 always, the worst case for "is it safe to send a market order".
+# NYSE/NASDAQ full closures.
 HOLIDAYS: set[date] = {
     # 2025
     date(2025, 1, 1), date(2025, 1, 20), date(2025, 2, 17), date(2025, 4, 18),
@@ -29,6 +28,23 @@ HOLIDAYS: set[date] = {
 
 RTH_OPEN = time(9, 30)
 RTH_CLOSE = time(16, 0)
+EARLY_CLOSE = time(13, 0)
+
+# NYSE/NASDAQ early closes (1:00 PM ET): July 3 (when a weekday before the 4th),
+# the Friday after Thanksgiving, and Christmas Eve (when a weekday). On these days
+# market_status uses 13:00 as the close, so the MOC cutoff fires correctly instead
+# of submitting a market/MOC order into an already-closed/closing auction.
+EARLY_CLOSES: set[date] = {
+    date(2025, 7, 3), date(2025, 11, 28), date(2025, 12, 24),
+    date(2026, 11, 27), date(2026, 12, 24),
+    date(2027, 11, 26),
+}
+
+
+def close_time_for(d: date) -> time:
+    """The RTH close for a given date — 13:00 on enumerated early-close half-days,
+    else 16:00."""
+    return EARLY_CLOSE if d in EARLY_CLOSES else RTH_CLOSE
 
 
 @dataclass
@@ -57,13 +73,14 @@ def market_status(now: datetime | None = None) -> MarketStatus:
         return MarketStatus("closed", None, _next_open(now))
 
     t = now.timetz().replace(tzinfo=None)
+    rth_close = close_time_for(today)   # 13:00 on half-days, else 16:00
     if time(4, 0) <= t < RTH_OPEN:
         return MarketStatus("premarket", None, None)
-    if RTH_OPEN <= t < RTH_CLOSE:
-        close_dt = datetime.combine(today, RTH_CLOSE, tzinfo=ET)
+    if RTH_OPEN <= t < rth_close:
+        close_dt = datetime.combine(today, rth_close, tzinfo=ET)
         mins = int((close_dt - now).total_seconds() // 60)
         return MarketStatus("open", mins, None)
-    if RTH_CLOSE <= t < time(20, 0):
+    if rth_close <= t < time(20, 0):
         return MarketStatus("afterhours", None, None)
     return MarketStatus("closed", None, _next_open(now))
 
