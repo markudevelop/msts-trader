@@ -10,6 +10,7 @@ threshold, threshold mode, whole-shares, min-weight) — a deliberate second run
 with materially different sizing/scope produces a DIFFERENT plan, so it must NOT
 be suppressed as a duplicate.
 """
+
 from __future__ import annotations
 
 import hashlib

@@ -18,6 +18,7 @@ The IBKR API does not expose USD market value per position directly;
 we derive it from `position.avgCost * position.position` and
 overwrite with a fresh quote where available.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +28,7 @@ from typing import Iterable
 
 from ..models import Order, Position, Side
 from .base import Balances, BrokerError, first_present
+
 
 def _ensure_event_loop() -> None:
     """Make sure the thread has a usable asyncio event loop for ib_insync.
@@ -59,6 +61,7 @@ _ensure_event_loop()
 try:
     from ib_insync import IB, LimitOrder, MarketOrder, Stock, StopOrder  # type: ignore
     from ib_insync import Order as IbOrder  # type: ignore
+
     _IB_OK = True
 except ImportError:
     _IB_OK = False
@@ -183,10 +186,7 @@ class IBKR:
                 t = by_symbol.get(sym)
                 px = None
                 if t is not None:
-                    px = (
-                        _f(t.last) or _f(t.close) or _f(t.marketPrice())
-                        or _midpoint(t.bid, t.ask)
-                    )
+                    px = _f(t.last) or _f(t.close) or _f(t.marketPrice()) or _midpoint(t.bid, t.ask)
                 if px is not None and px > 0:
                     out[sym] = Decimal(str(px))
                 else:
@@ -244,7 +244,14 @@ class IBKR:
             # Real broker-side validation via what-if: returns margin and
             # commission impact without ever transmitting the order.
             whatif = self._build_order(action, qty, order.moc)
-            base = {"status": "dry-run", "ticker": order.ticker, "side": order.side.value, "quantity": qty, "moc": order.moc, "dry_run": True}
+            base = {
+                "status": "dry-run",
+                "ticker": order.ticker,
+                "side": order.side.value,
+                "quantity": qty,
+                "moc": order.moc,
+                "dry_run": True,
+            }
             try:
                 state = self._ib.whatIfOrder(ct, whatif)
                 base.update(
@@ -301,8 +308,14 @@ class IBKR:
             return {"status": "skipped", "reason": "qty<=0", "ticker": order.ticker}
         px = round(float(limit_price), 2)
         if dry_run:
-            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value,
-                    "quantity": qty, "limit_price": px, "dry_run": True}
+            return {
+                "status": "dry-run",
+                "ticker": order.ticker,
+                "side": order.side.value,
+                "quantity": qty,
+                "limit_price": px,
+                "dry_run": True,
+            }
         ct = Stock(order.ticker, "SMART", "USD")
         self._ib.qualifyContracts(ct)
         action = "BUY" if order.side == Side.BUY else "SELL"
@@ -313,8 +326,14 @@ class IBKR:
             return {"status": "error", "reason": str(e), "ticker": order.ticker}
         for _ in range(20):
             self._ib.sleep(0.1)
-            if trade.orderStatus.status in {"Filled", "Submitted", "PreSubmitted",
-                                            "ApiCancelled", "Cancelled", "Inactive"}:
+            if trade.orderStatus.status in {
+                "Filled",
+                "Submitted",
+                "PreSubmitted",
+                "ApiCancelled",
+                "Cancelled",
+                "Inactive",
+            }:
                 break
         status = str(trade.orderStatus.status or "submitted")
         result = {
@@ -359,8 +378,7 @@ class IBKR:
             status = PARTIAL if (filled > 0 and remaining > 0) else WORKING
         else:
             status = UNKNOWN
-        return {"status": status, "filled_qty": filled,
-                "filled_avg_price": avg if avg and avg > 0 else None}
+        return {"status": status, "filled_qty": filled, "filled_avg_price": avg if avg and avg > 0 else None}
 
     # ---- protective stops -------------------------------------------------
     def place_stop(self, ticker: str, quantity, stop_price, dry_run: bool = False) -> dict:
@@ -374,9 +392,14 @@ class IBKR:
         o = StopOrder("SELL", qty, float(stop_price), account=self.account_id, tif="GTC")
         trade = self._ib.placeOrder(ct, o)
         self._ib.sleep(1.0)
-        return {"status": str(trade.orderStatus.status or "submitted"), "ticker": ticker,
-                "order_id": str(trade.order.orderId), "quantity": qty,
-                "stop_price": float(stop_price), "dry_run": False}
+        return {
+            "status": str(trade.orderStatus.status or "submitted"),
+            "ticker": ticker,
+            "order_id": str(trade.order.orderId),
+            "quantity": qty,
+            "stop_price": float(stop_price),
+            "dry_run": False,
+        }
 
     def open_stops(self) -> dict:
         out: dict = {}
@@ -387,11 +410,13 @@ class IBKR:
             sym = getattr(t.contract, "symbol", None)
             if not sym:
                 continue
-            out.setdefault(sym, []).append({
-                "order_id": str(o.orderId),
-                "quantity": Decimal(str(o.totalQuantity)),
-                "stop_price": Decimal(str(getattr(o, "auxPrice", 0) or 0)),
-            })
+            out.setdefault(sym, []).append(
+                {
+                    "order_id": str(o.orderId),
+                    "quantity": Decimal(str(o.totalQuantity)),
+                    "stop_price": Decimal(str(getattr(o, "auxPrice", 0) or 0)),
+                }
+            )
         return out
 
     def cancel_order(self, order_id) -> dict:

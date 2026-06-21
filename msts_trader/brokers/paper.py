@@ -4,6 +4,7 @@ State is persisted to `~/.msts-trader/paper_state.json` so the simulated
 NAV and positions evolve across sessions. Useful for dry-running the
 flow without connecting any real brokerage.
 """
+
 from __future__ import annotations
 
 import json
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError
+from .base import Balances
 
 STATE_PATH = Path(os.path.expanduser("~/.msts-trader/paper_state.json"))
 STARTING_CASH = Decimal("100000")
@@ -29,11 +30,15 @@ class Paper:
     def __init__(self, starting_cash: str | float | Decimal | None = None):
         if not STATE_PATH.exists():
             STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            STATE_PATH.write_text(json.dumps({
-                "cash": str(Decimal(str(starting_cash)) if starting_cash else STARTING_CASH),
-                "positions": {},
-                "last_prices": {},
-            }))
+            STATE_PATH.write_text(
+                json.dumps(
+                    {
+                        "cash": str(Decimal(str(starting_cash)) if starting_cash else STARTING_CASH),
+                        "positions": {},
+                        "last_prices": {},
+                    }
+                )
+            )
         self.account_id = "PAPER"
 
     def _load(self) -> dict:
@@ -96,7 +101,13 @@ class Paper:
         if px <= 0:
             return {"status": "error", "reason": "no price for paper fill", "ticker": tkr}
         if dry_run:
-            return {"status": "dry-run", "ticker": tkr, "side": order.side.value, "quantity": float(qty), "dry_run": True}
+            return {
+                "status": "dry-run",
+                "ticker": tkr,
+                "side": order.side.value,
+                "quantity": float(qty),
+                "dry_run": True,
+            }
 
         s = self._load()
         cash = Decimal(s["cash"])
@@ -150,20 +161,37 @@ class Paper:
             return {"status": "skipped", "reason": "qty<=0", "ticker": tkr}
         px = Decimal(str(limit_price))
         if dry_run:
-            return {"status": "dry-run", "ticker": tkr, "side": order.side.value,
-                    "quantity": float(qty), "limit_price": float(px), "dry_run": True}
+            return {
+                "status": "dry-run",
+                "ticker": tkr,
+                "side": order.side.value,
+                "quantity": float(qty),
+                "limit_price": float(px),
+                "dry_run": True,
+            }
 
         s = self._load()
         lim = dict(s.get("limit_orders", {}))
         oid = f"paper-lim-{tkr}-{len(lim) + 1}-{int(px * 100)}"
-        lim[oid] = {"ticker": tkr, "side": order.side.value, "quantity": str(qty),
-                    "limit_price": str(px), "filled": "0"}
+        lim[oid] = {
+            "ticker": tkr,
+            "side": order.side.value,
+            "quantity": str(qty),
+            "limit_price": str(px),
+            "filled": "0",
+        }
         s["limit_orders"] = lim
         self._save(s)
         self._try_fill_limit(oid)
-        return {"status": "submitted", "ticker": tkr, "side": order.side.value,
-                "quantity": float(qty), "order_id": oid, "limit_price": float(px),
-                "dry_run": False}
+        return {
+            "status": "submitted",
+            "ticker": tkr,
+            "side": order.side.value,
+            "quantity": float(qty),
+            "order_id": oid,
+            "limit_price": float(px),
+            "dry_run": False,
+        }
 
     def _try_fill_limit(self, order_id: str) -> None:
         """Fill a resting limit (at the prevailing mid) if it's marketable and
@@ -231,8 +259,7 @@ class Paper:
         return {"status": WORKING, "filled_qty": 0.0, "filled_avg_price": None}
 
     # ---- protective stops (simulated) ------------------------------------
-    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal,
-                   dry_run: bool = False) -> dict:
+    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal, dry_run: bool = False) -> dict:
         tkr = ticker.upper()
         if dry_run:
             return {"status": "dry-run", "ticker": tkr, "stop_price": float(stop_price), "dry_run": True}
@@ -244,15 +271,23 @@ class Paper:
         stops[tkr] = per
         s["stop_orders"] = stops
         self._save(s)
-        return {"status": "ACCEPTED", "ticker": tkr, "order_id": oid,
-                "stop_price": float(stop_price), "quantity": float(quantity), "dry_run": False}
+        return {
+            "status": "ACCEPTED",
+            "ticker": tkr,
+            "order_id": oid,
+            "stop_price": float(stop_price),
+            "quantity": float(quantity),
+            "dry_run": False,
+        }
 
     def open_stops(self) -> dict[str, list[dict]]:
         s = self._load()
         out: dict[str, list[dict]] = {}
         for tkr, lst in s.get("stop_orders", {}).items():
-            out[tkr] = [{"order_id": o["order_id"], "quantity": Decimal(o["quantity"]),
-                         "stop_price": Decimal(o["stop_price"])} for o in lst]
+            out[tkr] = [
+                {"order_id": o["order_id"], "quantity": Decimal(o["quantity"]), "stop_price": Decimal(o["stop_price"])}
+                for o in lst
+            ]
         return out
 
     def cancel_order(self, order_id: str) -> dict:
@@ -277,11 +312,14 @@ class Paper:
         return {"status": "error", "reason": "order not found", "order_id": order_id}
 
     def reset(self, starting_cash: Decimal | None = None) -> None:
-        STATE_PATH.write_text(json.dumps({
-            "cash": str(starting_cash or STARTING_CASH),
-            "positions": {},
-            "last_prices": {},
-        }))
-        if not starting_cash:
-            return
-        raise BrokerError("paper reset done")  # signal CLI to print confirmation
+        """Reset the paper book to the given (or default) starting cash and clear positions/stops."""
+        STATE_PATH.write_text(
+            json.dumps(
+                {
+                    "cash": str(starting_cash or STARTING_CASH),
+                    "positions": {},
+                    "last_prices": {},
+                    # stops are not persisted separately here; any stop state is cleared with positions
+                }
+            )
+        )

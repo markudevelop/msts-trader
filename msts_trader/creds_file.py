@@ -13,6 +13,7 @@ so the existing env-var-aware login path picks them up unchanged.
 Lowercase kwarg aliases are also accepted and mapped to the canonical
 ENV names, so a file like {"provider_secret": "..."} works too.
 """
+
 from __future__ import annotations
 
 import json

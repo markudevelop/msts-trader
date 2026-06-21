@@ -17,6 +17,7 @@ Auth (env or creds-file):
   HL_ACCOUNT_ADDRESS  main account address (optional; defaults to the key's)
   HL_TESTNET          "1" to use the testnet endpoint
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -30,6 +31,7 @@ try:
     from hyperliquid.exchange import Exchange  # type: ignore
     from hyperliquid.info import Info  # type: ignore
     from hyperliquid.utils import constants  # type: ignore
+
     _HL_OK = True
 except ImportError:
     _HL_OK = False
@@ -53,7 +55,7 @@ class Hyperliquid:
 
     def __init__(self, private_key: str, account_address: str | None = None, testnet: bool = False):
         if not _HL_OK:
-            raise BrokerError("hyperliquid deps not installed. Run: pip install \"msts-trader[hyperliquid]\"")
+            raise BrokerError('hyperliquid deps not installed. Run: pip install "msts-trader[hyperliquid]"')
         if not private_key:
             raise BrokerError("private_key required")
         try:
@@ -141,7 +143,14 @@ class Hyperliquid:
                 return {"status": "error", "reason": first["error"], "ticker": coin}
         except Exception:
             pass
-        return {"status": status, "ticker": coin, "side": order.side.value, "quantity": sz, "order_id": order_id, "dry_run": False}
+        return {
+            "status": status,
+            "ticker": coin,
+            "side": order.side.value,
+            "quantity": sz,
+            "order_id": order_id,
+            "dry_run": False,
+        }
 
     # ---- limit chase (EXPERIMENTAL) --------------------------------------
     @staticmethod
@@ -165,8 +174,14 @@ class Hyperliquid:
         px = self._round_px(float(limit_price))
         is_buy = order.side == Side.BUY
         if dry_run:
-            return {"status": "dry-run", "ticker": coin, "side": order.side.value,
-                    "quantity": sz, "limit_price": px, "dry_run": True}
+            return {
+                "status": "dry-run",
+                "ticker": coin,
+                "side": order.side.value,
+                "quantity": sz,
+                "limit_price": px,
+                "dry_run": True,
+            }
         try:
             resp = self._exchange.order(coin, is_buy, sz, px, {"limit": {"tif": "Gtc"}})
         except Exception as e:
@@ -187,8 +202,15 @@ class Hyperliquid:
             pass
         if order_id:
             self._oid_coin[order_id] = coin
-        return {"status": status, "ticker": coin, "side": order.side.value,
-                "quantity": sz, "order_id": order_id, "limit_price": px, "dry_run": False}
+        return {
+            "status": status,
+            "ticker": coin,
+            "side": order.side.value,
+            "quantity": sz,
+            "order_id": order_id,
+            "limit_price": px,
+            "dry_run": False,
+        }
 
     def order_status(self, order_id) -> dict:
         from ..chase import CANCELLED, FILLED, PARTIAL, REJECTED, UNKNOWN, WORKING

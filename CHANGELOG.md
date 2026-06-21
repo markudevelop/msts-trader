@@ -10,6 +10,18 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.24.3] — 2026-06-21
+
+### Fixed
+- **Schwab adapter**: login no longer reaches into private `_account_hash`. The class now exposes a stable public `account_hash` attribute (used for token-file reuse). Login flow + test mocks updated.
+- **Paper broker**: removed dead `raise BrokerError` signalling code in `reset()` (never reached by the CLI and would incorrectly raise on some explicit-starting-cash calls). `reset()` now cleanly succeeds.
+- **Paper login UX**: when running `msts-trader login --broker paper` against an *existing* book, the entered starting cash is now clearly noted as applying only to brand-new state files (with hint to use `paper-reset`).
+
+### Improved
+- **Market hours**: holiday + early-close calendars extended through 2028 using official NYSE dates. New Year 2028 (falls on Saturday) correctly has no observed trading holiday. Comment + README updated.
+- **Development**: added `ruff format` example + `[tool.ruff.format]` config. Main source package (`msts_trader/`) is now consistently formatted.
+- Ruff format run on the library source (24 files) as part of release hygiene.
+
 ## [0.24.2] — 2026-06-20
 
 ### Fixed

@@ -18,6 +18,7 @@ Safety properties carried over from the original:
 - partial-fill aware: only the unfilled remainder is ever re-submitted.
 - never leaves a resting order behind.
 """
+
 from __future__ import annotations
 
 import time
@@ -41,11 +42,12 @@ _PLACE_FAILED = ("error", "skipped", "rejected")
 @dataclass(frozen=True)
 class ChaseConfig:
     """Tunables for the mid-tracking limit chase."""
-    retries: int = 5                       # reprice attempts before fallback
-    reprice_interval: float = 5.0          # seconds to wait for a fill per rung
-    poll_interval: float = 1.0             # status-poll cadence within a rung
-    aggression: Decimal = Decimal("0")     # fraction past mid toward the fill side
-    fallback_to_market: bool = True        # market order for the unfilled remainder
+
+    retries: int = 5  # reprice attempts before fallback
+    reprice_interval: float = 5.0  # seconds to wait for a fill per rung
+    poll_interval: float = 1.0  # status-poll cadence within a rung
+    aggression: Decimal = Decimal("0")  # fraction past mid toward the fill side
+    fallback_to_market: bool = True  # market order for the unfilled remainder
 
 
 def limit_from_mid(side: Side, mid: Decimal, aggression: Decimal) -> Decimal:
@@ -71,8 +73,7 @@ def _mid(broker, order: Order):
     return mid if mid > 0 else None
 
 
-def chase_fill(broker, order: Order, cfg: ChaseConfig, *,
-               dry_run: bool = False, log=None, sleep=time.sleep) -> dict:
+def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False, log=None, sleep=time.sleep) -> dict:
     """Work `order` as a limit chase on `broker`. Returns a place_market-style
     result dict (status/ticker/order_id/...). `sleep` is injectable for tests."""
     say = log if callable(log) else (lambda *a, **k: None)
@@ -89,14 +90,27 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *,
         mid = _mid(broker, order)
         if mid is None:
             say(f"[yellow]  ⚠ chase {order.ticker}: no quote — would place a MARKET order[/yellow]")
-            return {"status": "dry-run", "ticker": order.ticker, "side": side.value,
-                    "quantity": float(qty_total), "dry_run": True,
-                    "reason": "chase: no quote; would fall back to market"}
+            return {
+                "status": "dry-run",
+                "ticker": order.ticker,
+                "side": side.value,
+                "quantity": float(qty_total),
+                "dry_run": True,
+                "reason": "chase: no quote; would fall back to market",
+            }
         limit = limit_from_mid(side, mid, cfg.aggression)
-        say(f"  [chase DRY] {order.ticker}: would place initial LIMIT {side.value} "
-            f"{qty_total} @ {limit} (mid {mid}), then chase up to {cfg.retries} rungs")
-        return {"status": "dry-run", "ticker": order.ticker, "side": side.value,
-                "quantity": float(qty_total), "limit_price": float(limit), "dry_run": True}
+        say(
+            f"  [chase DRY] {order.ticker}: would place initial LIMIT {side.value} "
+            f"{qty_total} @ {limit} (mid {mid}), then chase up to {cfg.retries} rungs"
+        )
+        return {
+            "status": "dry-run",
+            "ticker": order.ticker,
+            "side": side.value,
+            "quantity": float(qty_total),
+            "limit_price": float(limit),
+            "dry_run": True,
+        }
 
     filled_qty = Decimal(0)
     total_cost = Decimal(0)
@@ -138,8 +152,9 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *,
             "status": "error",
             "ticker": order.ticker,
             "side": side.value,
-            "reason": (f"chase: cancel FAILED for {oid} ({order.ticker}); aborting "
-                       f"before reprice to avoid a double-fill"),
+            "reason": (
+                f"chase: cancel FAILED for {oid} ({order.ticker}); aborting before reprice to avoid a double-fill"
+            ),
             "filled_quantity": float(filled_qty),
         }
 
@@ -152,8 +167,10 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *,
         if mid is None:
             # The user picked limit-chase specifically to control the spread —
             # losing the quote and crossing with a market order is worth shouting about.
-            say(f"[yellow]  ⚠ chase {order.ticker}: no quote on attempt {attempt} — "
-                f"falling back to a MARKET order (spread NOT controlled)[/yellow]")
+            say(
+                f"[yellow]  ⚠ chase {order.ticker}: no quote on attempt {attempt} — "
+                f"falling back to a MARKET order (spread NOT controlled)[/yellow]"
+            )
             break
         limit = limit_from_mid(side, mid, cfg.aggression)
 
@@ -167,24 +184,35 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *,
         try:
             placed = broker.place_limit(rem_order, limit, dry_run=False)
         except Exception as e:
-            return {"status": "error", "ticker": order.ticker, "side": side.value,
-                    "reason": f"chase: place_limit failed: {e}",
-                    "filled_quantity": float(filled_qty)}
+            return {
+                "status": "error",
+                "ticker": order.ticker,
+                "side": side.value,
+                "reason": f"chase: place_limit failed: {e}",
+                "filled_quantity": float(filled_qty),
+            }
         if placed.get("status") in _PLACE_FAILED:
-            say(f"  chase {order.ticker}: place_limit {placed.get('status')} "
-                f"({placed.get('reason', '')}) — falling through to market")
+            say(
+                f"  chase {order.ticker}: place_limit {placed.get('status')} "
+                f"({placed.get('reason', '')}) — falling through to market"
+            )
             last_oid = None
             break
         last_oid = placed.get("order_id")
         if not last_oid:
             # Placed but unidentifiable: we can neither poll nor cancel it, so a
             # market fallback could double the position. Abort loudly instead.
-            return {"status": "error", "ticker": order.ticker, "side": side.value,
-                    "reason": ("chase: place_limit returned no order_id — order may be "
-                               "live but unmanageable; aborting (check the broker manually)"),
-                    "filled_quantity": float(filled_qty)}
-        say(f"  chase {order.ticker} {attempt}/{cfg.retries} {side.value} {rem} @ {limit}"
-            f"  id={last_oid}")
+            return {
+                "status": "error",
+                "ticker": order.ticker,
+                "side": side.value,
+                "reason": (
+                    "chase: place_limit returned no order_id — order may be "
+                    "live but unmanageable; aborting (check the broker manually)"
+                ),
+                "filled_quantity": float(filled_qty),
+            }
+        say(f"  chase {order.ticker} {attempt}/{cfg.retries} {side.value} {rem} @ {limit}  id={last_oid}")
 
         # poll this rung for a fill (rung_filled is cumulative for THIS order)
         rung_filled = Decimal(0)
@@ -234,8 +262,14 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *,
     avg_fill = float(total_cost / filled_qty) if filled_qty > 0 and total_cost > 0 else None
 
     if _remaining() <= 0:  # fully filled by the chase
-        out = {"status": "FILLED", "ticker": order.ticker, "side": side.value,
-               "quantity": float(filled_qty), "order_id": filled_oid, "chase": True}
+        out = {
+            "status": "FILLED",
+            "ticker": order.ticker,
+            "side": side.value,
+            "quantity": float(filled_qty),
+            "order_id": filled_oid,
+            "chase": True,
+        }
         if avg_fill is not None:
             out["fill_price"] = avg_fill
         return out
@@ -246,8 +280,7 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *,
         try:
             fb = broker.place_market(replace(order, quantity=rem), dry_run=False)
         except Exception as e:
-            fb = {"status": "error", "ticker": order.ticker,
-                  "reason": f"chase market fallback failed: {e}"}
+            fb = {"status": "error", "ticker": order.ticker, "reason": f"chase market fallback failed: {e}"}
         fb["chase_fell_back"] = True
         if filled_qty > 0:
             fb["chase_limit_filled"] = float(filled_qty)
@@ -261,11 +294,21 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *,
 
     # no fallback: report what (if anything) the chase filled
     if filled_qty > 0:
-        out = {"status": "PARTIAL", "ticker": order.ticker, "side": side.value,
-               "quantity": float(filled_qty), "order_id": filled_oid, "chase": True,
-               "reason": f"chase filled {filled_qty}/{qty_total}, fallback disabled"}
+        out = {
+            "status": "PARTIAL",
+            "ticker": order.ticker,
+            "side": side.value,
+            "quantity": float(filled_qty),
+            "order_id": filled_oid,
+            "chase": True,
+            "reason": f"chase filled {filled_qty}/{qty_total}, fallback disabled",
+        }
         if avg_fill is not None:
             out["fill_price"] = avg_fill
         return out
-    return {"status": "error", "ticker": order.ticker, "side": side.value,
-            "reason": f"chase: unfilled after {cfg.retries} rungs (fallback disabled)"}
+    return {
+        "status": "error",
+        "ticker": order.ticker,
+        "side": side.value,
+        "reason": f"chase: unfilled after {cfg.retries} rungs (fallback disabled)",
+    }

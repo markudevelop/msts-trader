@@ -31,7 +31,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[all,dev]"
       - name: ruff
-        run: ruff check msts_trader tests
+        run: |
+          ruff check msts_trader tests
+          ruff format --check msts_trader
+
       - name: pytest
         run: pytest -v
       - name: cli renders

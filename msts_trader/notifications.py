@@ -10,6 +10,7 @@ JSON webhooks, and Telegram bots. Configured via env / config file:
 Notification failures NEVER raise — a down webhook must not break trading.
 Uses only the stdlib (urllib), no extra dependency.
 """
+
 from __future__ import annotations
 
 import json
@@ -85,9 +86,7 @@ def notify(
     return sent, failed
 
 
-def format_summary(
-    broker: str, account_id: str, sent: int, failed: int, orders: list, *, dry_run: bool = False
-) -> str:
+def format_summary(broker: str, account_id: str, sent: int, failed: int, orders: list, *, dry_run: bool = False) -> str:
     """Build a concise human-readable summary line for a rebalance.
 
     With `dry_run=True` the header announces a preview and that nothing was

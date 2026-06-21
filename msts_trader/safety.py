@@ -1,4 +1,5 @@
 """Pre-trade safety checks: order-value cap and stale-CSV guard."""
+
 from __future__ import annotations
 
 import re
@@ -24,10 +25,7 @@ def check_max_notional(orders: list[Order], max_notional: Decimal | None) -> str
         return None
     gross = gross_buy_notional(orders)
     if gross > max_notional:
-        return (
-            f"Gross buys ${gross:,.0f} exceed the --max-notional safety cap "
-            f"${max_notional:,.0f}. Refusing to trade."
-        )
+        return f"Gross buys ${gross:,.0f} exceed the --max-notional safety cap ${max_notional:,.0f}. Refusing to trade."
     return None
 
 

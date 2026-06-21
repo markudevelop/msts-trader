@@ -4,6 +4,7 @@ Stores `creds:<broker>` JSON blobs plus a `default_broker` pointer.
 Adding a new broker = add login flow in __main__.py; this module
 already supports arbitrary keys.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,7 +26,9 @@ def save(broker: str, payload: dict) -> None:
 def load(broker: str) -> dict:
     raw = keyring.get_password(SERVICE, f"creds:{broker}")
     if not raw:
-        raise CredsMissingError(f"no stored creds for broker {broker!r} — run `msts-trader login --broker {broker}` first")
+        raise CredsMissingError(
+            f"no stored creds for broker {broker!r} — run `msts-trader login --broker {broker}` first"
+        )
     return json.loads(raw)
 
 
@@ -58,6 +61,7 @@ def list_brokers() -> list[str]:
     the known supported names.
     """
     from .brokers import SUPPORTED
+
     out: list[str] = []
     for name in SUPPORTED:
         try:

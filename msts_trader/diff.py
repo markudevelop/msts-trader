@@ -9,6 +9,7 @@ Logic mirrors msts-live's live runner for parity:
   - whole-NAV sizing (no margin-aware uniform scale in v1 — surfaces a warning instead)
   - dollar-based shares: qty = round(delta_$ / price, 2)
 """
+
 from __future__ import annotations
 
 from decimal import ROUND_DOWN, Decimal
@@ -16,9 +17,9 @@ from decimal import ROUND_DOWN, Decimal
 from .models import Order, Position, Preview, RebalanceRow, Side, Target
 
 DRIFT_THRESHOLD = Decimal("0.04")  # 4%
-MIN_ORDER_DOLLARS = Decimal("1")   # ignore sub-$1 dust
-MAX_SANE_GROSS = Decimal("5.0")    # >500% gross => almost certainly percentages, not weights
-BP_SAFETY = Decimal("0.97")        # leave a 3% buying-power cushion for margin-aware sizing
+MIN_ORDER_DOLLARS = Decimal("1")  # ignore sub-$1 dust
+MAX_SANE_GROSS = Decimal("5.0")  # >500% gross => almost certainly percentages, not weights
+BP_SAFETY = Decimal("0.97")  # leave a 3% buying-power cushion for margin-aware sizing
 
 
 def build_preview(
@@ -50,7 +51,9 @@ def build_preview(
 
     if nav <= 0:
         blockers.append("Account NAV is zero or negative — cannot size orders.")
-        return Preview(nav=nav, buying_power=buying_power, cash=cash, rows=[], orders=[], warnings=warnings, blockers=blockers)
+        return Preview(
+            nav=nav, buying_power=buying_power, cash=cash, rows=[], orders=[], warnings=warnings, blockers=blockers
+        )
 
     # Sizing base: weights apply to `allocation` dollars when given (sub-
     # portfolio sizing — e.g. run a $50k book inside a $200k account),
@@ -170,9 +173,13 @@ def build_preview(
         if target_w == 0 and cur_pos is not None and cur_pos.quantity > 0:
             qty = cur_pos.quantity.quantize(qexp, rounding=ROUND_DOWN)
             if qty > 0:
-                order = Order(ticker=tkr, side=Side.SELL, quantity=qty,
-                              estimated_price=(px if (px := quotes.get(tkr)) and px > 0 else cur_pos.price),
-                              notional=cur_dollars)
+                order = Order(
+                    ticker=tkr,
+                    side=Side.SELL,
+                    quantity=qty,
+                    estimated_price=(px if (px := quotes.get(tkr)) and px > 0 else cur_pos.price),
+                    notional=cur_dollars,
+                )
                 row.order = order
                 row.note = "exit (weight 0)"
                 orders.append(order)
@@ -262,7 +269,9 @@ def build_preview(
         # Whole-share exits round DOWN — never try to sell more than is held
         # (a fractional residual on a whole-share-only account stays put; the
         # broker couldn't sell it anyway).
-        qty = pos.quantity.quantize(qexp, rounding=ROUND_DOWN) if whole_shares else pos.quantity.quantize(Decimal("0.01"))
+        qty = (
+            pos.quantity.quantize(qexp, rounding=ROUND_DOWN) if whole_shares else pos.quantity.quantize(Decimal("0.01"))
+        )
         if qty > 0:
             order = Order(
                 ticker=tkr,
@@ -291,7 +300,9 @@ def build_preview(
     orders.sort(key=lambda o: (0 if o.side == Side.SELL else 1, -abs(o.notional)))
 
     rows.sort(key=lambda r: (r.order is None, -abs(r.delta_dollars)))
-    return Preview(nav=nav, buying_power=buying_power, cash=cash, rows=rows, orders=orders, warnings=warnings, blockers=blockers)
+    return Preview(
+        nav=nav, buying_power=buying_power, cash=cash, rows=rows, orders=orders, warnings=warnings, blockers=blockers
+    )
 
 
 def apply_margin_aware(

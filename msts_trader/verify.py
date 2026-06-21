@@ -12,6 +12,7 @@ Preview it is handed, so it works for every adapter (tastytrade, alpaca, ibkr, s
 `check_convergence` is pure (takes a Preview) and unit-tested; the broker round-trip lives in the
 caller.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -22,9 +23,9 @@ from .models import Preview, RebalanceRow, Side
 
 @dataclass
 class VerifyResult:
-    ok: bool                       # True iff no leg still needs trading
-    converged: int                 # legs at/within-drift of target
-    residual: list[RebalanceRow]   # legs still off target (the diff would still trade them)
+    ok: bool  # True iff no leg still needs trading
+    converged: int  # legs at/within-drift of target
+    residual: list[RebalanceRow]  # legs still off target (the diff would still trade them)
     nav: Decimal
 
     @property
@@ -36,11 +37,8 @@ class VerifyResult:
             return f"✅ converged — {self.converged} leg(s) match target (within drift)"
         worst = sorted(self.residual, key=lambda r: -abs(r.delta_dollars))[:6]
         pct = (self.residual_dollars / self.nav) if self.nav else Decimal(0)
-        legs = ", ".join(
-            f"{r.ticker} {_reason(r)} Δ${r.delta_dollars:,.0f}" for r in worst
-        )
-        return (f"🔴 NOT converged — {len(self.residual)} leg(s) off target "
-                f"({pct:.1%} of NAV): {legs}")
+        legs = ", ".join(f"{r.ticker} {_reason(r)} Δ${r.delta_dollars:,.0f}" for r in worst)
+        return f"🔴 NOT converged — {len(self.residual)} leg(s) off target ({pct:.1%} of NAV): {legs}"
 
 
 def _reason(r: RebalanceRow) -> str:
@@ -81,15 +79,16 @@ def converged_within_buying_power(post_fill_preview: Preview) -> VerifyResult:
     preview: excused orders are removed from both `rows` and `orders`, so self-heal
     won't re-submit a buy the account cannot afford.
     """
-    sell_proceeds = sum((row.order.notional for row in post_fill_preview.rows
-                         if row.order is not None and row.order.side == Side.SELL), Decimal(0))
+    sell_proceeds = sum(
+        (row.order.notional for row in post_fill_preview.rows if row.order is not None and row.order.side == Side.SELL),
+        Decimal(0),
+    )
     available = post_fill_preview.buying_power + sell_proceeds
-    buy_rows = [row for row in post_fill_preview.rows
-                if row.order is not None and row.order.side == Side.BUY]
+    buy_rows = [row for row in post_fill_preview.rows if row.order is not None and row.order.side == Side.BUY]
     excused: list = []
     for row in sorted(buy_rows, key=lambda r: -r.order.notional):
         if row.order.notional <= available:
-            available -= row.order.notional   # affordable → genuine residual, keep it
+            available -= row.order.notional  # affordable → genuine residual, keep it
         else:
             excused.append(row.order)
             row.order = None

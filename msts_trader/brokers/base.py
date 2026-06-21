@@ -83,8 +83,7 @@ class Broker(Protocol):
         ...
 
     # ---- Optional protective-stop API (supports_stops = True) ------------
-    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal,
-                   dry_run: bool = False) -> dict:
+    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal, dry_run: bool = False) -> dict:
         """Submit a GTC SELL STOP for an existing long. Same return contract
         as place_market."""
         raise NotImplementedError
@@ -102,8 +101,7 @@ class Broker(Protocol):
         raise NotImplementedError
 
     # ---- Optional limit-chase API (supports_limit_chase = True) ----------
-    def place_limit(self, order: Order, limit_price: Decimal,
-                    dry_run: bool = False) -> dict:
+    def place_limit(self, order: Order, limit_price: Decimal, dry_run: bool = False) -> dict:
         """Submit a LIMIT DAY order at `limit_price`. Same return contract as
         place_market, with one extra REQUIREMENT for the chase engine: on a
         successful (non-dry-run) submit the result MUST carry a usable

@@ -24,6 +24,7 @@ The token JSON itself is written to
 `~/.msts-trader/schwab_token.json` because schwab-py expects a file.
 That file is gitignore-equivalent (~/.msts-trader is per-user).
 """
+
 from __future__ import annotations
 
 import os
@@ -42,6 +43,7 @@ try:
         equity_sell_limit,
         equity_sell_market,
     )
+
     _SCHWAB_OK = True
 except ImportError:
     _SCHWAB_OK = False
@@ -62,7 +64,9 @@ class Schwab:
     # must mirror what the setup instructions tell users to register.
     DEFAULT_CALLBACK_URL = "https://127.0.0.1:8182"
 
-    def __init__(self, app_key: str, app_secret: str, callback_url: str = DEFAULT_CALLBACK_URL, account_hash: str | None = None):
+    def __init__(
+        self, app_key: str, app_secret: str, callback_url: str = DEFAULT_CALLBACK_URL, account_hash: str | None = None
+    ):
         if not _SCHWAB_OK:
             raise BrokerError("schwab-py not installed. Run: pip install schwab-py")
         TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -82,6 +86,7 @@ class Schwab:
                 enforce_enums=False,
             )
         self._account_hash = account_hash or self._discover_account_hash()
+        self.account_hash = self._account_hash  # stable public attr for login / creds reuse
         self.account_id = self._account_hash[:8] + "…"  # display-safe truncation
 
     def _discover_account_hash(self) -> str:
@@ -145,15 +150,22 @@ class Schwab:
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
         qty = int(order.quantity)  # Schwab equity orders are whole shares
         if qty <= 0:
-            return {"status": "skipped", "reason": "qty rounds to 0 (Schwab requires whole shares)", "ticker": order.ticker}
+            return {
+                "status": "skipped",
+                "reason": "qty rounds to 0 (Schwab requires whole shares)",
+                "ticker": order.ticker,
+            }
         if dry_run:
-            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value, "quantity": qty, "moc": order.moc, "dry_run": True}
+            return {
+                "status": "dry-run",
+                "ticker": order.ticker,
+                "side": order.side.value,
+                "quantity": qty,
+                "moc": order.moc,
+                "dry_run": True,
+            }
 
-        spec = (
-            equity_buy_market(order.ticker, qty)
-            if order.side == Side.BUY
-            else equity_sell_market(order.ticker, qty)
-        )
+        spec = equity_buy_market(order.ticker, qty) if order.side == Side.BUY else equity_sell_market(order.ticker, qty)
         if order.moc:
             from schwab.orders.common import OrderType as SchwabOrderType  # type: ignore
 
@@ -183,12 +195,17 @@ class Schwab:
         whole-share — dust is skipped and the engine market-fallbacks it."""
         qty = int(order.quantity)
         if qty <= 0:
-            return {"status": "skipped", "reason": "qty rounds to 0 (Schwab whole shares)",
-                    "ticker": order.ticker}
+            return {"status": "skipped", "reason": "qty rounds to 0 (Schwab whole shares)", "ticker": order.ticker}
         px = round(float(limit_price), 2)
         if dry_run:
-            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value,
-                    "quantity": qty, "limit_price": px, "dry_run": True}
+            return {
+                "status": "dry-run",
+                "ticker": order.ticker,
+                "side": order.side.value,
+                "quantity": qty,
+                "limit_price": px,
+                "dry_run": True,
+            }
         spec = (
             equity_buy_limit(order.ticker, qty, px)
             if order.side == Side.BUY
@@ -219,8 +236,7 @@ class Schwab:
             resp.raise_for_status()
             o = resp.json()
         except Exception as e:
-            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None,
-                    "reason": str(e)}
+            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None, "reason": str(e)}
         raw = str(o.get("status", "")).upper()
         filled = float(o.get("filledQuantity") or 0)
         # Weighted average from the execution legs (Schwab omits a top-level avg).
@@ -241,8 +257,15 @@ class Schwab:
             status = CANCELLED
         elif filled > 0:
             status = PARTIAL
-        elif raw in ("WORKING", "QUEUED", "ACCEPTED", "PENDING_ACTIVATION", "NEW",
-                     "AWAITING_MANUAL_REVIEW", "PENDING_ACKNOWLEDGEMENT"):
+        elif raw in (
+            "WORKING",
+            "QUEUED",
+            "ACCEPTED",
+            "PENDING_ACTIVATION",
+            "NEW",
+            "AWAITING_MANUAL_REVIEW",
+            "PENDING_ACKNOWLEDGEMENT",
+        ):
             status = WORKING
         else:
             status = UNKNOWN
@@ -256,16 +279,25 @@ class Schwab:
         if dry_run:
             return {"status": "dry-run", "ticker": ticker, "stop_price": float(stop_price), "dry_run": True}
         from schwab.orders.common import Duration, OrderType as SOT  # type: ignore
-        spec = (equity_sell_market(ticker, qty)
-                .set_order_type(SOT.STOP)
-                .set_stop_price(f"{float(stop_price):.2f}")
-                .set_duration(Duration.GOOD_TILL_CANCEL))
+
+        spec = (
+            equity_sell_market(ticker, qty)
+            .set_order_type(SOT.STOP)
+            .set_stop_price(f"{float(stop_price):.2f}")
+            .set_duration(Duration.GOOD_TILL_CANCEL)
+        )
         try:
             resp = self._client.place_order(self._account_hash, spec.build())
             resp.raise_for_status()
             oid = (resp.headers.get("Location") or "").rstrip("/").split("/")[-1]
-            return {"status": "submitted", "ticker": ticker, "order_id": oid,
-                    "quantity": qty, "stop_price": float(stop_price), "dry_run": False}
+            return {
+                "status": "submitted",
+                "ticker": ticker,
+                "order_id": oid,
+                "quantity": qty,
+                "stop_price": float(stop_price),
+                "dry_run": False,
+            }
         except Exception as e:
             return {"status": "error", "reason": str(e), "ticker": ticker}
 
@@ -273,8 +305,8 @@ class Schwab:
         out: dict = {}
         try:
             from schwab.client import Client  # type: ignore
-            resp = self._client.get_orders_for_account(
-                self._account_hash, status=Client.Order.Status.WORKING)
+
+            resp = self._client.get_orders_for_account(self._account_hash, status=Client.Order.Status.WORKING)
             resp.raise_for_status()
             orders = resp.json()
         except Exception:
@@ -286,11 +318,13 @@ class Schwab:
                 sym = (leg.get("instrument") or {}).get("symbol")
                 if not sym:
                     continue
-                out.setdefault(sym, []).append({
-                    "order_id": str(o.get("orderId")),
-                    "quantity": Decimal(str(leg.get("quantity", 0))),
-                    "stop_price": Decimal(str(o.get("stopPrice", 0) or 0)),
-                })
+                out.setdefault(sym, []).append(
+                    {
+                        "order_id": str(o.get("orderId")),
+                        "quantity": Decimal(str(leg.get("quantity", 0))),
+                        "stop_price": Decimal(str(o.get("stopPrice", 0) or 0)),
+                    }
+                )
         return out
 
     def cancel_order(self, order_id) -> dict:

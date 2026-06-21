@@ -71,7 +71,8 @@ def parse_csv(text: str) -> list[Target]:
             if not (Decimal("0") < stop_pct < Decimal("0.5")):
                 raise CSVParseError(
                     f"line {i}: stop_pct {stop_pct} for {tkr} outside (0, 0.5) — "
-                    f"it is a FRACTION below entry (0.015 = 1.5%), not a price.")
+                    f"it is a FRACTION below entry (0.015 = 1.5%), not a price."
+                )
         seen.add(tkr)
         targets.append(Target(ticker=tkr, weight=w, stop_pct=stop_pct))
 

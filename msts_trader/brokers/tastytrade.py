@@ -4,6 +4,7 @@ Built on the public `tastytrade` Python SDK (https://pypi.org/project/tastytrade
 The rebalance flow refuses to send outside RTH instead of routing
 extended-hours limit chases.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -126,8 +127,12 @@ class Tastytrade:
             qty = Decimal(str(round(float(o.quantity), 2)))
             if qty <= 0:
                 continue
-            leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=o.ticker, action=OrderAction.BUY_TO_OPEN, quantity=qty)
-            new_order = NewOrder(time_in_force=OrderTimeInForce.DAY, order_type=OrderType.MARKET, legs=[leg], price=None)
+            leg = Leg(
+                instrument_type=InstrumentType.EQUITY, symbol=o.ticker, action=OrderAction.BUY_TO_OPEN, quantity=qty
+            )
+            new_order = NewOrder(
+                time_in_force=OrderTimeInForce.DAY, order_type=OrderType.MARKET, legs=[leg], price=None
+            )
             try:
                 resp = self._acct.place_order(self._sess, new_order, dry_run=True)
             except Exception:
@@ -178,7 +183,9 @@ class Tastytrade:
                     return {"status": "skipped", "reason": "fractional rejected, whole=0", "ticker": order.ticker}
                 qty = Decimal(whole)  # report the quantity actually submitted, not the rejected fractional one
                 leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=order.ticker, action=action, quantity=qty)
-                new_order = NewOrder(time_in_force=OrderTimeInForce.DAY, order_type=OrderType.MARKET, legs=[leg], price=None)
+                new_order = NewOrder(
+                    time_in_force=OrderTimeInForce.DAY, order_type=OrderType.MARKET, legs=[leg], price=None
+                )
                 resp = self._acct.place_order(self._sess, new_order, dry_run=dry_run)
             else:
                 return {"status": "error", "reason": str(e), "ticker": order.ticker}
@@ -209,14 +216,11 @@ class Tastytrade:
 
         qty = Decimal(int(Decimal(str(order.quantity))))
         if qty <= 0:
-            return {"status": "skipped", "reason": "limit qty rounds to <1 share",
-                    "ticker": order.ticker}
+            return {"status": "skipped", "reason": "limit qty rounds to <1 share", "ticker": order.ticker}
         px = Decimal(str(limit_price)).quantize(Decimal("0.01"))
         signed = -abs(px) if order.side == Side.BUY else abs(px)
-        leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=order.ticker,
-                  action=action, quantity=qty)
-        new_order = NewOrder(time_in_force=OrderTimeInForce.DAY, order_type=OrderType.LIMIT,
-                             legs=[leg], price=signed)
+        leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=order.ticker, action=action, quantity=qty)
+        new_order = NewOrder(time_in_force=OrderTimeInForce.DAY, order_type=OrderType.LIMIT, legs=[leg], price=signed)
         try:
             resp = self._acct.place_order(self._sess, new_order, dry_run=dry_run)
         except Exception as e:
@@ -243,8 +247,7 @@ class Tastytrade:
         try:
             o = self._acct.get_order(self._sess, int(order_id))
         except Exception as e:
-            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None,
-                    "reason": str(e)}
+            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None, "reason": str(e)}
         legs = getattr(o, "legs", None) or []
         total_filled = 0.0
         total_cost = 0.0
@@ -274,26 +277,26 @@ class Tastytrade:
             status = UNKNOWN
         # /orders/live is eventually consistent: if every leg has drained, the
         # fill happened even when the top-level status still reads LIVE.
-        if legs and total_filled > 0 and all(
-                float(getattr(leg, "remaining_quantity", 0) or 0) == 0 for leg in legs):
+        if legs and total_filled > 0 and all(float(getattr(leg, "remaining_quantity", 0) or 0) == 0 for leg in legs):
             status = FILLED
         return {"status": status, "filled_qty": total_filled, "filled_avg_price": avg}
 
     # ---- protective stops -------------------------------------------------
-    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal,
-                   dry_run: bool = False) -> dict:
+    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal, dry_run: bool = False) -> dict:
         """GTC SELL STOP for an existing long. Stop orders must be whole-share
         on tastytrade — fractional quantity is rounded DOWN (the residual
         fraction stays unprotected rather than over-selling)."""
         qty = Decimal(int(quantity))
         if qty <= 0:
-            return {"status": "skipped", "reason": "whole-share qty rounds to 0",
-                    "ticker": ticker}
-        leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=ticker,
-                  action=OrderAction.SELL_TO_CLOSE, quantity=qty)
-        new_order = NewOrder(time_in_force=OrderTimeInForce.GTC,
-                             order_type=OrderType.STOP, legs=[leg],
-                             stop_trigger=stop_price, price=None)
+            return {"status": "skipped", "reason": "whole-share qty rounds to 0", "ticker": ticker}
+        leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=ticker, action=OrderAction.SELL_TO_CLOSE, quantity=qty)
+        new_order = NewOrder(
+            time_in_force=OrderTimeInForce.GTC,
+            order_type=OrderType.STOP,
+            legs=[leg],
+            stop_trigger=stop_price,
+            price=None,
+        )
         try:
             resp = self._acct.place_order(self._sess, new_order, dry_run=dry_run)
         except Exception as e:
@@ -322,11 +325,13 @@ class Tastytrade:
             tkr = getattr(legs[0], "symbol", None)
             if not tkr:
                 continue
-            out.setdefault(tkr, []).append({
-                "order_id": getattr(o, "id", None),
-                "quantity": Decimal(str(getattr(legs[0], "quantity", 0) or 0)),
-                "stop_price": Decimal(str(getattr(o, "stop_trigger", 0) or 0)),
-            })
+            out.setdefault(tkr, []).append(
+                {
+                    "order_id": getattr(o, "id", None),
+                    "quantity": Decimal(str(getattr(legs[0], "quantity", 0) or 0)),
+                    "stop_price": Decimal(str(getattr(o, "stop_trigger", 0) or 0)),
+                }
+            )
         return out
 
     def fills(self) -> dict:

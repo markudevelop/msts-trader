@@ -13,6 +13,7 @@ type or paste anything. This module wraps the prompt layer so that:
 Detection cribbed from common workarounds for the known Python +
 VS Code getpass issue.
 """
+
 from __future__ import annotations
 
 import os
@@ -113,8 +114,7 @@ def ask_secret(prompt: str, *, env_var: Optional[str] = None) -> str:
             # Announce env-sourced values so a stale exported secret (e.g. a
             # revoked refresh token) can't silently masquerade as fresh input.
             sys.stderr.write(
-                f"\n[notice] using {env_var} from the environment "
-                f"(skipping prompt). unset it to be prompted instead.\n"
+                f"\n[notice] using {env_var} from the environment (skipping prompt). unset it to be prompted instead.\n"
             )
             sys.stderr.flush()
             return val

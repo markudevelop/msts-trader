@@ -8,6 +8,7 @@ Subcommands:
   brokers                    — list supported and currently-configured brokers
   paper-reset                — reset the paper-broker book
 """
+
 from __future__ import annotations
 
 import json
@@ -31,6 +32,7 @@ from .market_hours import market_status
 from .models import Side
 from .prompts import ask_secret, ask_text, ask_yes_no, env_value
 from .verify import check_convergence, converged_within_buying_power
+
 
 def _harden_console_encoding() -> None:
     """Keep legacy Windows code pages from killing the CLI.
@@ -92,9 +94,7 @@ def _do_notify(text, *, notify_url, tg_token, tg_chat) -> None:
     dead webhook (or an n8n test URL that wasn't actively listening) can't fail
     silently — the previous behaviour left users guessing why nothing arrived.
     """
-    sent, failed = notifications.notify(
-        text, notify_url=notify_url, telegram_token=tg_token, telegram_chat_id=tg_chat
-    )
+    sent, failed = notifications.notify(text, notify_url=notify_url, telegram_token=tg_token, telegram_chat_id=tg_chat)
     if sent:
         say(f"[dim]notified: {', '.join(sent)}[/dim]")
     if failed:
@@ -236,7 +236,9 @@ def _apply_margin_aware(broker, preview, buying_power, max_passes: int = 3, whol
             except Exception:
                 real = None
         used_real = used_real or real is not None
-        scale = apply_margin_aware(preview, buying_power=buying_power, real_margin=real, add_warning=False, whole_shares=whole_shares)
+        scale = apply_margin_aware(
+            preview, buying_power=buying_power, real_margin=real, add_warning=False, whole_shares=whole_shares
+        )
         passes += 1
         cumulative *= scale
         # Notional (real is None) is exact in one pass; stop once nothing scales.
@@ -386,12 +388,15 @@ def _login_tastytrade() -> None:
             c.print("[dim]Using certification (sandbox) keys? Add TT_TEST=1 to your creds file / env.[/dim]")
         sys.exit(1)
 
-    keychain.save("tastytrade", {
-        "provider_secret": provider_secret,
-        "refresh_token": refresh_token,
-        "account_id": account_id or b.account_id,
-        "is_test": is_test,
-    })
+    keychain.save(
+        "tastytrade",
+        {
+            "provider_secret": provider_secret,
+            "refresh_token": refresh_token,
+            "account_id": account_id or b.account_id,
+            "is_test": is_test,
+        },
+    )
     keychain.set_default("tastytrade")
     env_label = " (test/cert)" if is_test else ""
     c.print(f"[green]✓ stored.[/green] tastytrade{env_label} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
@@ -428,7 +433,9 @@ def _login_alpaca() -> None:
 
     keychain.save("alpaca", {"api_key": api_key, "secret_key": secret_key, "paper": paper})
     keychain.set_default("alpaca")
-    c.print(f"[green]✓ stored.[/green] alpaca {'(paper)' if paper else '(live)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
+    c.print(
+        f"[green]✓ stored.[/green] alpaca {'(paper)' if paper else '(live)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}"
+    )
 
 
 def _login_tradier() -> None:
@@ -445,9 +452,13 @@ def _login_tradier() -> None:
         )
     )
     access_token = ask_secret("access token", env_var="TRADIER_ACCESS_TOKEN")
-    account_id = (env_value("TRADIER_ACCOUNT_ID") or ask_text("account number (optional)", default="", allow_blank=True)).strip() or None
+    account_id = (
+        env_value("TRADIER_ACCOUNT_ID") or ask_text("account number (optional)", default="", allow_blank=True)
+    ).strip() or None
     raw = env_value("TRADIER_SANDBOX")
-    sandbox = raw.lower() in {"1", "true", "yes", "sandbox"} if raw is not None else ask_yes_no("sandbox?", default=True)
+    sandbox = (
+        raw.lower() in {"1", "true", "yes", "sandbox"} if raw is not None else ask_yes_no("sandbox?", default=True)
+    )
 
     try:
         b = make("tradier", access_token=access_token, account_id=account_id, sandbox=sandbox)
@@ -456,9 +467,13 @@ def _login_tradier() -> None:
         c.print(f"[red]✗ {escape(explain_login_error('tradier', e))}[/red]")
         sys.exit(1)
 
-    keychain.save("tradier", {"access_token": access_token, "account_id": account_id or b.account_id, "sandbox": sandbox})
+    keychain.save(
+        "tradier", {"access_token": access_token, "account_id": account_id or b.account_id, "sandbox": sandbox}
+    )
     keychain.set_default("tradier")
-    c.print(f"[green]✓ stored.[/green] tradier {'(sandbox)' if sandbox else '(production)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
+    c.print(
+        f"[green]✓ stored.[/green] tradier {'(sandbox)' if sandbox else '(production)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}"
+    )
 
 
 def _login_ibkr() -> None:
@@ -477,7 +492,9 @@ def _login_ibkr() -> None:
     host = env_value("IBKR_HOST") or ask_text("host", default="127.0.0.1")
     port = int(env_value("IBKR_PORT") or ask_text("port", default="4002"))
     client_id = int(env_value("IBKR_CLIENT_ID") or ask_text("client id (any free int)", default="17"))
-    account_id = (env_value("IBKR_ACCOUNT_ID") or ask_text("account id (optional)", default="", allow_blank=True)).strip() or None
+    account_id = (
+        env_value("IBKR_ACCOUNT_ID") or ask_text("account id (optional)", default="", allow_blank=True)
+    ).strip() or None
 
     try:
         b = make("ibkr", host=host, port=port, client_id=client_id, account_id=account_id)
@@ -486,7 +503,9 @@ def _login_ibkr() -> None:
         c.print(f"[red]✗ {escape(explain_login_error('ibkr', e))}[/red]")
         sys.exit(1)
 
-    keychain.save("ibkr", {"host": host, "port": port, "client_id": client_id, "account_id": account_id or b.account_id})
+    keychain.save(
+        "ibkr", {"host": host, "port": port, "client_id": client_id, "account_id": account_id or b.account_id}
+    )
     keychain.set_default("ibkr")
     c.print(f"[green]✓ stored.[/green] ibkr account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
 
@@ -521,7 +540,10 @@ def _login_schwab() -> None:
         c.print(f"[red]✗ {escape(explain_login_error('schwab', e))}[/red]")
         sys.exit(1)
 
-    keychain.save("schwab", {"app_key": app_key, "app_secret": app_secret, "callback_url": callback_url, "account_hash": b._account_hash})
+    keychain.save(
+        "schwab",
+        {"app_key": app_key, "app_secret": app_secret, "callback_url": callback_url, "account_hash": b.account_hash},
+    )
     keychain.set_default("schwab")
     c.print(f"[green]✓ stored.[/green] schwab account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
 
@@ -539,7 +561,9 @@ def _login_hyperliquid() -> None:
         )
     )
     private_key = ask_secret("private key", env_var="HL_PRIVATE_KEY")
-    account_address = (env_value("HL_ACCOUNT_ADDRESS") or ask_text("account address (optional)", default="", allow_blank=True)).strip() or None
+    account_address = (
+        env_value("HL_ACCOUNT_ADDRESS") or ask_text("account address (optional)", default="", allow_blank=True)
+    ).strip() or None
     raw = env_value("HL_TESTNET")
     testnet = raw.lower() in {"1", "true", "yes"} if raw is not None else ask_yes_no("use testnet?", default=True)
 
@@ -552,16 +576,26 @@ def _login_hyperliquid() -> None:
 
     keychain.save("hyperliquid", {"private_key": private_key, "account_address": account_address, "testnet": testnet})
     keychain.set_default("hyperliquid")
-    c.print(f"[green]✓ stored.[/green] hyperliquid {'(testnet)' if testnet else '(mainnet)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
+    c.print(
+        f"[green]✓ stored.[/green] hyperliquid {'(testnet)' if testnet else '(mainnet)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}"
+    )
 
 
 def _login_paper() -> None:
     starting = env_value("PAPER_STARTING_CASH") or ask_text("starting cash", default="100000")
     keychain.save("paper", {"starting_cash": starting})
     keychain.set_default("paper")
+    from .brokers.paper import STATE_PATH
+
+    had_state = STATE_PATH.exists()
     b = make("paper", starting_cash=Decimal(starting))
     bal = b.balances()
-    c.print(f"[green]✓ paper book ready.[/green] cash ${bal.cash:,.2f}")
+    if had_state:
+        c.print(
+            f"[green]✓ paper creds stored.[/green] (existing book at {STATE_PATH} — starting cash only seeds new books. Use `paper-reset` to apply ${starting}.)"
+        )
+    else:
+        c.print(f"[green]✓ paper book ready.[/green] cash ${bal.cash:,.2f}")
 
 
 # Login dispatch — every broker in SUPPORTED must have an entry here.
@@ -613,13 +647,19 @@ def brokers() -> None:
 def paper_reset() -> None:
     """Reset the paper broker book to its starting cash."""
     from .brokers.paper import Paper
+
     Paper().reset()
     c.print("[green]✓ paper book reset.[/green]")
 
 
 @main.command()
 @_BROKER_OPT
-@click.option("--creds-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Load credentials from a JSON or KEY=VALUE file (headless).")
+@click.option(
+    "--creds-file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Load credentials from a JSON or KEY=VALUE file (headless).",
+)
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON (NAV, balances, positions).")
 @click.pass_context
 def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, json_out: bool) -> None:
@@ -660,7 +700,10 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
         f"NAV [green]${bal.nav:,.2f}[/green]  ·  "
         f"cash ${bal.cash:,.2f}  ·  BP ${bal.buying_power:,.2f}"
     )
-    c.print(f"Market: [bold]{ms.status}[/bold]" + (f"  ·  closes in {ms.minutes_to_close} min" if ms.minutes_to_close is not None else ""))
+    c.print(
+        f"Market: [bold]{ms.status}[/bold]"
+        + (f"  ·  closes in {ms.minutes_to_close} min" if ms.minutes_to_close is not None else "")
+    )
 
     if not pos:
         c.print("[yellow]No open positions.[/yellow]")
@@ -683,43 +726,147 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 @click.option("--dry-run", is_flag=True, help="Preview only — never sends orders.")
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirm prompt (auto-execute). Required for unattended runs.")
 @click.option("--threshold", default=None, type=float, help="Drift threshold (fraction of NAV). Default 0.04.")
-@click.option("--min-weight", type=float, default=None, help="Ignore CSV rows with 0 < weight < this (e.g. 0.01): no buy, no sell, existing position left untouched.")
-@click.option("--stop-pct", "default_stop", type=float, default=None, help="Default protective stop as a fraction below entry (e.g. 0.015 = 1.5%%), applied to every bought/held target with no per-row stop_pct. Use when the weights feed omits stops (e.g. the hydra raw cache). Per-row stop_pct always wins.")
-@click.option("--threshold-mode", type=click.Choice(["nav", "position"]), default=None,
-              help="Drift denominator: 'nav' (default, delta vs whole book) or 'position' "
-                   "(delta vs the line itself — for scaled/composite books whose small "
-                   "lines could never move 4%% of NAV).")
-@click.option("--rebalance-scope", type=click.Choice(["whole-book", "per-ticker"]), default=None,
-              help="Execution scope. 'whole-book' (default): the threshold is a TRIGGER — if any "
-                   "line breaches it, snap the WHOLE book to target (higher CAGR, more turnover). "
-                   "'per-ticker': trade ONLY the breaching lines, leave the rest (lower turnover, "
-                   "better Sharpe/drawdown).")
-@click.option("--sweep/--no-sweep", default=None,
-              help="Sweep (default): liquidate any held ticker NOT in the CSV — the CSV is the "
-                   "complete book. --no-sweep: touch ONLY the CSV's tickers and leave all other "
-                   "positions untouched (run a sleeve inside a mixed account). Under --no-sweep, "
-                   "close a rotated-out name by listing it with weight 0.")
-@click.option("--allocation", type=float, default=None, help="Dollar amount the weights apply to (run a sub-portfolio inside a bigger account). Default: full NAV.")
-@click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Read the target CSV from a file instead of stdin.")
+@click.option(
+    "--min-weight",
+    type=float,
+    default=None,
+    help="Ignore CSV rows with 0 < weight < this (e.g. 0.01): no buy, no sell, existing position left untouched.",
+)
+@click.option(
+    "--stop-pct",
+    "default_stop",
+    type=float,
+    default=None,
+    help="Default protective stop as a fraction below entry (e.g. 0.015 = 1.5%%), applied to every bought/held target with no per-row stop_pct. Use when the weights feed omits stops (e.g. the hydra raw cache). Per-row stop_pct always wins.",
+)
+@click.option(
+    "--threshold-mode",
+    type=click.Choice(["nav", "position"]),
+    default=None,
+    help="Drift denominator: 'nav' (default, delta vs whole book) or 'position' "
+    "(delta vs the line itself — for scaled/composite books whose small "
+    "lines could never move 4%% of NAV).",
+)
+@click.option(
+    "--rebalance-scope",
+    type=click.Choice(["whole-book", "per-ticker"]),
+    default=None,
+    help="Execution scope. 'whole-book' (default): the threshold is a TRIGGER — if any "
+    "line breaches it, snap the WHOLE book to target (higher CAGR, more turnover). "
+    "'per-ticker': trade ONLY the breaching lines, leave the rest (lower turnover, "
+    "better Sharpe/drawdown).",
+)
+@click.option(
+    "--sweep/--no-sweep",
+    default=None,
+    help="Sweep (default): liquidate any held ticker NOT in the CSV — the CSV is the "
+    "complete book. --no-sweep: touch ONLY the CSV's tickers and leave all other "
+    "positions untouched (run a sleeve inside a mixed account). Under --no-sweep, "
+    "close a rotated-out name by listing it with weight 0.",
+)
+@click.option(
+    "--allocation",
+    type=float,
+    default=None,
+    help="Dollar amount the weights apply to (run a sub-portfolio inside a bigger account). Default: full NAV.",
+)
+@click.option(
+    "--csv-file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Read the target CSV from a file instead of stdin.",
+)
 @click.option("--csv-url", default=None, help="Fetch the target CSV from a URL instead of stdin.")
-@click.option("--creds-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Load credentials from a JSON or KEY=VALUE file (headless).")
-@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False), default=None, help="Config file for defaults (TOML).")
+@click.option(
+    "--creds-file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Load credentials from a JSON or KEY=VALUE file (headless).",
+)
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Config file for defaults (TOML).",
+)
 @click.option("--max-notional", type=float, default=None, help="Refuse if gross buys exceed this dollar amount.")
-@click.option("--max-stale-hours", type=float, default=None, help="Refuse if the CSV's `# asof:` time is older than this.")
+@click.option(
+    "--max-stale-hours", type=float, default=None, help="Refuse if the CSV's `# asof:` time is older than this."
+)
 @click.option("--notify-url", default=None, help="Webhook (Discord/Slack/generic) to ping on execute.")
-@click.option("--margin-aware/--no-margin-aware", default=None, help="Scale buys to fit buying power (weight-preserving). On by default; --no-margin-aware to disable.")
-@click.option("--moc", is_flag=True, default=None, help="Submit market-on-close orders (fill in the closing auction). Alpaca / IBKR / Schwab / paper; whole shares; submit before ~15:50 ET.")
-@click.option("--whole-shares", is_flag=True, default=None, help="Round every order down to whole shares. Use for IBKR/accounts without fractional-API permission (avoids error 10243 'fractional order cannot be placed via API').")
-@click.option("--order-type", type=click.Choice(["market", "limit-chase"]), default=None, help="market (default) or limit-chase: work each order as a LIMIT pegged to the live mid, repricing every few seconds, then fall back to a market order. RTH only; supported brokers fall back to market.")
-@click.option("--chase-retries", type=int, default=None, help="limit-chase: reprice attempts before the market fallback (default 5).")
-@click.option("--chase-interval", type=float, default=None, help="limit-chase: seconds to wait for a fill before repricing (default 5).")
-@click.option("--chase-poll", type=float, default=None, help="limit-chase: status-poll cadence in seconds within each rung (default 1).")
-@click.option("--chase-aggression", type=float, default=None, help="limit-chase: fraction past the mid toward the fill side, e.g. 0.001 = 0.1%% (default 0 = pure mid).")
-@click.option("--chase-fallback/--no-chase-fallback", default=None, help="limit-chase: send a market order for any unfilled remainder when the chase exhausts (default on).")
+@click.option(
+    "--margin-aware/--no-margin-aware",
+    default=None,
+    help="Scale buys to fit buying power (weight-preserving). On by default; --no-margin-aware to disable.",
+)
+@click.option(
+    "--moc",
+    is_flag=True,
+    default=None,
+    help="Submit market-on-close orders (fill in the closing auction). Alpaca / IBKR / Schwab / paper; whole shares; submit before ~15:50 ET.",
+)
+@click.option(
+    "--whole-shares",
+    is_flag=True,
+    default=None,
+    help="Round every order down to whole shares. Use for IBKR/accounts without fractional-API permission (avoids error 10243 'fractional order cannot be placed via API').",
+)
+@click.option(
+    "--order-type",
+    type=click.Choice(["market", "limit-chase"]),
+    default=None,
+    help="market (default) or limit-chase: work each order as a LIMIT pegged to the live mid, repricing every few seconds, then fall back to a market order. RTH only; supported brokers fall back to market.",
+)
+@click.option(
+    "--chase-retries",
+    type=int,
+    default=None,
+    help="limit-chase: reprice attempts before the market fallback (default 5).",
+)
+@click.option(
+    "--chase-interval",
+    type=float,
+    default=None,
+    help="limit-chase: seconds to wait for a fill before repricing (default 5).",
+)
+@click.option(
+    "--chase-poll",
+    type=float,
+    default=None,
+    help="limit-chase: status-poll cadence in seconds within each rung (default 1).",
+)
+@click.option(
+    "--chase-aggression",
+    type=float,
+    default=None,
+    help="limit-chase: fraction past the mid toward the fill side, e.g. 0.001 = 0.1%% (default 0 = pure mid).",
+)
+@click.option(
+    "--chase-fallback/--no-chase-fallback",
+    default=None,
+    help="limit-chase: send a market order for any unfilled remainder when the chase exhausts (default on).",
+)
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
-@click.option("--no-verify", is_flag=True, default=False, help="Skip the post-trade verification (by default, after fills the account is re-fetched and checked against target; any leg still off-target is reported/alerted).")
-@click.option("--no-self-heal", is_flag=True, default=False, help="Disable self-heal. By default, if post-trade verify finds the book off target, the residual legs are re-executed once (market-open only) to converge — set this to report-only.")
-@click.option("--heal-passes", type=int, default=1, show_default=True, help="Max self-heal re-execution passes when the book hasn't converged.")
+@click.option(
+    "--no-verify",
+    is_flag=True,
+    default=False,
+    help="Skip the post-trade verification (by default, after fills the account is re-fetched and checked against target; any leg still off-target is reported/alerted).",
+)
+@click.option(
+    "--no-self-heal",
+    is_flag=True,
+    default=False,
+    help="Disable self-heal. By default, if post-trade verify finds the book off target, the residual legs are re-executed once (market-open only) to converge — set this to report-only.",
+)
+@click.option(
+    "--heal-passes",
+    type=int,
+    default=1,
+    show_default=True,
+    help="Max self-heal re-execution passes when the book hasn't converged.",
+)
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON instead of tables.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output (for cron logs).")
 @click.pass_context
@@ -795,6 +942,7 @@ def rebalance(
         if moc:
             _fail("--moc and --order-type limit-chase are mutually exclusive.")
         from .chase import ChaseConfig
+
         chase_cfg = ChaseConfig(
             retries=int(config.pick(chase_retries, cfg, "chase_retries", 5)),
             reprice_interval=float(config.pick(chase_interval, cfg, "chase_interval", 5.0)),
@@ -860,7 +1008,10 @@ def rebalance(
         # NYSE/Nasdaq stop accepting MOC around 15:50 ET; refuse rather than
         # let every order bounce at the broker.
         if not dry_run and ms.minutes_to_close is not None and ms.minutes_to_close < 12:
-            _fail(f"only {ms.minutes_to_close} min to the close — exchanges stop accepting MOC orders around 15:50 ET.", code=2)
+            _fail(
+                f"only {ms.minutes_to_close} min to the close — exchanges stop accepting MOC orders around 15:50 ET.",
+                code=2,
+            )
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
     universe = sorted({tg.ticker for tg in targets} | set(pos.keys()))
@@ -870,8 +1021,12 @@ def rebalance(
         quotes.setdefault(tk, p.price)
 
     preview = build_preview(
-        targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
-        buying_power=bal.buying_power, quotes=quotes,
+        targets=targets,
+        positions=pos,
+        nav=bal.nav,
+        cash=bal.cash,
+        buying_power=bal.buying_power,
+        quotes=quotes,
         drift_threshold=Decimal(str(threshold)),
         min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
         allocation=Decimal(str(allocation)) if allocation is not None else None,
@@ -893,11 +1048,20 @@ def rebalance(
 
     # Idempotency: same plan already done today? Params are part of the plan, so
     # a different --allocation/--rebalance-scope/--sweep/--threshold/etc re-runs.
-    fp = runstate.fingerprint(b.name, b.account_id, targets, {
-        "allocation": allocation, "scope": rebalance_scope, "sweep": sweep,
-        "threshold": threshold, "threshold_mode": threshold_mode,
-        "whole_shares": whole_shares, "min_weight": min_weight,
-    })
+    fp = runstate.fingerprint(
+        b.name,
+        b.account_id,
+        targets,
+        {
+            "allocation": allocation,
+            "scope": rebalance_scope,
+            "sweep": sweep,
+            "threshold": threshold,
+            "threshold_mode": threshold_mode,
+            "whole_shares": whole_shares,
+            "min_weight": min_weight,
+        },
+    )
     duplicate = runstate.already_done(fp) and not force
 
     # In JSON mode the single payload carries everything (orders, warnings,
@@ -911,7 +1075,9 @@ def rebalance(
             if dry_run and preview.orders:
                 _do_notify(
                     notifications.format_summary(b.name, b.account_id, 0, 0, preview.orders, dry_run=True),
-                    notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat,
+                    notify_url=notify_url,
+                    tg_token=tg_token,
+                    tg_chat=tg_chat,
                 )
             return
         if not yes:
@@ -922,18 +1088,40 @@ def rebalance(
             runstate.record(fp)  # only mark done on clean success, so a partial run can re-complete
         _do_notify(
             notifications.format_summary(b.name, b.account_id, sent, failed, preview.orders),
-            notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat,
+            notify_url=notify_url,
+            tg_token=tg_token,
+            tg_chat=tg_chat,
         )
-        vres = None if no_verify else _post_trade_verify(
-            b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
-            allocation=allocation, whole_shares=whole_shares, rebalance_scope=rebalance_scope, sweep=sweep,
-            margin_aware=margin_aware,
-            self_heal=not no_self_heal, heal_passes=heal_passes, order_type=order_type, chase_cfg=chase_cfg,
-            notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
+        vres = (
+            None
+            if no_verify
+            else _post_trade_verify(
+                b,
+                targets,
+                threshold=threshold,
+                threshold_mode=threshold_mode,
+                min_weight=min_weight,
+                allocation=allocation,
+                whole_shares=whole_shares,
+                rebalance_scope=rebalance_scope,
+                sweep=sweep,
+                margin_aware=margin_aware,
+                self_heal=not no_self_heal,
+                heal_passes=heal_passes,
+                order_type=order_type,
+                chase_cfg=chase_cfg,
+                notify_url=notify_url,
+                tg_token=tg_token,
+                tg_chat=tg_chat,
+            )
+        )
         out = {"executed": True, "sent": sent, "failed": failed, "results": results}
         if vres is not None:
-            out["verify"] = {"converged": vres.ok, "residual_legs": len(vres.residual),
-                             "residual_dollars": float(vres.residual_dollars)}
+            out["verify"] = {
+                "converged": vres.ok,
+                "residual_legs": len(vres.residual),
+                "residual_dollars": float(vres.residual_dollars),
+            }
         print(json.dumps(out, default=str))
         return
 
@@ -954,7 +1142,9 @@ def rebalance(
         say("[yellow]--dry-run set, exiting without sending orders.[/yellow]")
         _do_notify(
             notifications.format_summary(b.name, b.account_id, 0, 0, preview.orders, dry_run=True),
-            notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat,
+            notify_url=notify_url,
+            tg_token=tg_token,
+            tg_chat=tg_chat,
         )
         return
     if duplicate:
@@ -968,7 +1158,9 @@ def rebalance(
     if not yes:
         if not sys.stdin.isatty():
             _fail("refusing to execute without --yes in non-interactive mode.")
-        if not Confirm.ask(f"\nExecute [bold]{len(preview.orders)}[/bold] orders on [bold]{b.name}[/bold]?", default=False):
+        if not Confirm.ask(
+            f"\nExecute [bold]{len(preview.orders)}[/bold] orders on [bold]{b.name}[/bold]?", default=False
+        ):
             say("[red]Cancelled.[/red]")
             sys.exit(0)
 
@@ -983,11 +1175,24 @@ def rebalance(
     # Post-trade verification: re-fetch and confirm the account converged to target.
     if not no_verify:
         _post_trade_verify(
-            b, targets, threshold=threshold, threshold_mode=threshold_mode, min_weight=min_weight,
-            allocation=allocation, whole_shares=whole_shares, rebalance_scope=rebalance_scope, sweep=sweep,
+            b,
+            targets,
+            threshold=threshold,
+            threshold_mode=threshold_mode,
+            min_weight=min_weight,
+            allocation=allocation,
+            whole_shares=whole_shares,
+            rebalance_scope=rebalance_scope,
+            sweep=sweep,
             margin_aware=margin_aware,
-            self_heal=not no_self_heal, heal_passes=heal_passes, order_type=order_type, chase_cfg=chase_cfg,
-            notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
+            self_heal=not no_self_heal,
+            heal_passes=heal_passes,
+            order_type=order_type,
+            chase_cfg=chase_cfg,
+            notify_url=notify_url,
+            tg_token=tg_token,
+            tg_chat=tg_chat,
+        )
 
 
 def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
@@ -1000,7 +1205,9 @@ def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
     )
     gross = sum((row.target_pct for row in preview.rows), Decimal(0))
     if gross > Decimal("1.01"):
-        c.print(f"Gross target exposure: [bold]{gross * 100:.0f}%[/bold] ([bold]{gross:.2f}x[/bold] leverage — uses margin)")
+        c.print(
+            f"Gross target exposure: [bold]{gross * 100:.0f}%[/bold] ([bold]{gross:.2f}x[/bold] leverage — uses margin)"
+        )
     if ms.minutes_to_close is not None:
         marker = "[red]" if ms.minutes_to_close < 5 else "[yellow]" if ms.minutes_to_close < 15 else "[green]"
         c.print(f"Market: open  ·  closes in {marker}{ms.minutes_to_close} min[/]")
@@ -1047,8 +1254,8 @@ def _apply_default_stop(targets, default_stop):
     if not default_stop:
         return targets
     from dataclasses import replace
-    return [replace(t, stop_pct=default_stop) if (t.stop_pct is None and t.weight > 0) else t
-            for t in targets]
+
+    return [replace(t, stop_pct=default_stop) if (t.stop_pct is None and t.weight > 0) else t for t in targets]
 
 
 def _is_clean_send(status) -> bool:
@@ -1072,8 +1279,7 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
     # as unsupported protective stops.
     use_chase = order_type == "limit-chase"
     if use_chase and not getattr(broker, "supports_limit_chase", False):
-        say(f"[yellow]{broker.name} does not support limit-chase orders — "
-            f"using market orders instead.[/yellow]")
+        say(f"[yellow]{broker.name} does not support limit-chase orders — using market orders instead.[/yellow]")
         use_chase = False
     # Pre-cancel resting stops on names we're about to SELL. A broker (e.g. tastytrade) rejects a
     # sell of shares that are reserved by an open stop order
@@ -1089,16 +1295,23 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
                         try:
                             broker.cancel_order(st["order_id"])
                             say(f"[dim]  pre-cancel stop {tkr} (frees shares to sell)[/dim]")
-                            fill_log.append({"event": "stop_precancel", "broker": broker.name,
-                                             "ticker": tkr, "order_id": st["order_id"]})
+                            fill_log.append(
+                                {
+                                    "event": "stop_precancel",
+                                    "broker": broker.name,
+                                    "ticker": tkr,
+                                    "order_id": st["order_id"],
+                                }
+                            )
                         except Exception as e:
                             say(f"[yellow]  pre-cancel stop failed for {tkr}: {e}[/yellow]")
             except Exception as e:
-                say(f"[yellow]  pre-cancel skipped: open_stops failed ({e}) — sells may bounce on resting stops[/yellow]")
+                say(
+                    f"[yellow]  pre-cancel skipped: open_stops failed ({e}) — sells may bounce on resting stops[/yellow]"
+                )
     for i, o in enumerate(preview.orders, 1):
         kind = "CHASE" if use_chase else ("MOC" if o.moc else "MKT")
-        say(f"[{i}/{total}] {o.ticker} {o.side.value} {o.quantity:.2f} @ {kind} ...",
-            end="\n" if use_chase else " ")
+        say(f"[{i}/{total}] {o.ticker} {o.side.value} {o.quantity:.2f} @ {kind} ...", end="\n" if use_chase else " ")
         try:
             # NOT retried: a market order is not idempotent. If submission
             # times out after the broker accepted it, a retry would double
@@ -1108,6 +1321,7 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
             # market fallback, so it is not wrapped in a retry either.)
             if use_chase:
                 from . import chase as _chase
+
                 result = _chase.chase_fill(broker, o, chase_cfg, log=say)
             else:
                 result = broker.place_market(o, dry_run=False)
@@ -1124,7 +1338,9 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
             sent += 1
             say(f"[green]{status.upper()}[/green]  id={result.get('order_id', '?')}")
         results.append(result)
-        fill_log.append({"event": "order", "broker": broker.name, **result, "side": o.side.value, "quantity": float(o.quantity)})
+        fill_log.append(
+            {"event": "order", "broker": broker.name, **result, "side": o.side.value, "quantity": float(o.quantity)}
+        )
 
     # Always show a one-line summary (except in JSON mode) so even --quiet
     # cron runs leave a trace.
@@ -1140,6 +1356,7 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
     need_fills = {o.ticker for o in preview.orders if o.side.value == "BUY" and o.stop_pct}
     if need_fills and getattr(broker, "supports_stops", False):
         import time as _time
+
         for _attempt in range(6):  # ~ up to ~10s
             try:
                 pos_now = broker.positions()
@@ -1179,8 +1396,19 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
     return sent, failed, results
 
 
-def _verify_once(b, targets, *, threshold, threshold_mode, min_weight, allocation, whole_shares,
-                 rebalance_scope="whole-book", sweep=True, margin_aware=False):
+def _verify_once(
+    b,
+    targets,
+    *,
+    threshold,
+    threshold_mode,
+    min_weight,
+    allocation,
+    whole_shares,
+    rebalance_scope="whole-book",
+    sweep=True,
+    margin_aware=False,
+):
     """Re-fetch broker state and rebuild the diff. Returns (VerifyResult, post_fill_preview)."""
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
@@ -1189,8 +1417,12 @@ def _verify_once(b, targets, *, threshold, threshold_mode, min_weight, allocatio
     for tk, p in pos.items():
         quotes.setdefault(tk, p.price)
     post = build_preview(
-        targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
-        buying_power=bal.buying_power, quotes=quotes,
+        targets=targets,
+        positions=pos,
+        nav=bal.nav,
+        cash=bal.cash,
+        buying_power=bal.buying_power,
+        quotes=quotes,
         drift_threshold=Decimal(str(threshold)) if threshold is not None else DRIFT_THRESHOLD,
         min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
         allocation=Decimal(str(allocation)) if allocation is not None else None,
@@ -1206,11 +1438,27 @@ def _verify_once(b, targets, *, threshold, threshold_mode, min_weight, allocatio
     return check_convergence(post), post
 
 
-def _post_trade_verify(b, targets, *, threshold=None, threshold_mode="nav", min_weight=None,
-                       allocation=None, whole_shares=False, rebalance_scope="whole-book", sweep=True,
-                       margin_aware=False, settle_seconds=2.0,
-                       self_heal=False, heal_passes=1, order_type="market", chase_cfg=None,
-                       notify_url=None, tg_token=None, tg_chat=None):
+def _post_trade_verify(
+    b,
+    targets,
+    *,
+    threshold=None,
+    threshold_mode="nav",
+    min_weight=None,
+    allocation=None,
+    whole_shares=False,
+    rebalance_scope="whole-book",
+    sweep=True,
+    margin_aware=False,
+    settle_seconds=2.0,
+    self_heal=False,
+    heal_passes=1,
+    order_type="market",
+    chase_cfg=None,
+    notify_url=None,
+    tg_token=None,
+    tg_chat=None,
+):
     """After fills, re-fetch broker state and confirm the account CONVERGED to target.
 
     Reuses the exact rebalance diff (build_preview) against fresh positions: any residual order
@@ -1226,20 +1474,31 @@ def _post_trade_verify(b, targets, *, threshold=None, threshold_mode="nav", min_
     res = None
     try:
         import time as _t
+
         for attempt in range(heal_passes + 1):
             if settle_seconds:
                 _t.sleep(settle_seconds)  # give fills a moment to reflect in positions()
             res, post = _verify_once(
-                b, targets, threshold=threshold, threshold_mode=threshold_mode,
-                min_weight=min_weight, allocation=allocation, whole_shares=whole_shares,
-                rebalance_scope=rebalance_scope, sweep=sweep, margin_aware=margin_aware)
+                b,
+                targets,
+                threshold=threshold,
+                threshold_mode=threshold_mode,
+                min_weight=min_weight,
+                allocation=allocation,
+                whole_shares=whole_shares,
+                rebalance_scope=rebalance_scope,
+                sweep=sweep,
+                margin_aware=margin_aware,
+            )
             if res.ok or not self_heal or attempt >= heal_passes or not post.orders:
                 break
             if market_status().status != "open":
                 say("[yellow]self-heal skipped — market not open.[/yellow]")
                 break
-            say(f"[yellow]self-heal pass {attempt + 1}/{heal_passes}: re-executing "
-                f"{len(post.orders)} residual leg(s)…[/yellow]")
+            say(
+                f"[yellow]self-heal pass {attempt + 1}/{heal_passes}: re-executing "
+                f"{len(post.orders)} residual leg(s)…[/yellow]"
+            )
             try:
                 _execute(b, post, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
                 healed += 1
@@ -1250,8 +1509,12 @@ def _post_trade_verify(b, targets, *, threshold=None, threshold_mode="nav", min_
             return None
         tag = f" (after {healed} self-heal pass{'es' if healed != 1 else ''})" if healed else ""
         say(("[green]" if res.ok else "[red]") + "post-trade verify: " + escape(res.summary()) + tag + "[/]")
-        _do_notify(f"post-trade verify · {b.name} ({b.account_id}) · {res.summary()}{tag}",
-                   notify_url=notify_url, tg_token=tg_token, tg_chat=tg_chat)
+        _do_notify(
+            f"post-trade verify · {b.name} ({b.account_id}) · {res.summary()}{tag}",
+            notify_url=notify_url,
+            tg_token=tg_token,
+            tg_chat=tg_chat,
+        )
         return res
     except Exception as e:
         say(f"[yellow]post-trade verify skipped: {e}[/yellow]")
@@ -1278,12 +1541,10 @@ def _reconcile_stops(broker, preview, results, targets=None):
 
     Brokers without supports_stops: warn once if the CSV asked for stops.
     """
-    wants_stops = any(o.stop_pct for o in preview.orders) or any(
-        getattr(t, "stop_pct", None) for t in (targets or []))
+    wants_stops = any(o.stop_pct for o in preview.orders) or any(getattr(t, "stop_pct", None) for t in (targets or []))
     if not getattr(broker, "supports_stops", False):
         if wants_stops:
-            say(f"[yellow]{broker.name} does not support stop orders — "
-                f"stop_pct column ignored.[/yellow]")
+            say(f"[yellow]{broker.name} does not support stop orders — stop_pct column ignored.[/yellow]")
         return
     try:
         open_stops = broker.open_stops()
@@ -1309,16 +1570,23 @@ def _reconcile_stops(broker, preview, results, targets=None):
         # The order for this ticker actually did something (clean send or a
         # partial chase fill) — vs. a failed/skipped order we should ignore.
         r = results_by_tkr.get(tkr)
-        return bool(r and (r.get("status") not in ("error", "skipped", "dry-run")
-                           or r.get("chase_limit_filled") or r.get("filled_quantity")))
+        return bool(
+            r
+            and (
+                r.get("status") not in ("error", "skipped", "dry-run")
+                or r.get("chase_limit_filled")
+                or r.get("filled_quantity")
+            )
+        )
 
     def _cancel_all(tkr, why):
         for stop in open_stops.get(tkr, []):
             try:
                 broker.cancel_order(stop["order_id"])
                 say(f"  stop cancelled: {tkr} ({why})")
-                fill_log.append({"event": "stop_cancel", "broker": broker.name,
-                                 "ticker": tkr, "order_id": stop["order_id"]})
+                fill_log.append(
+                    {"event": "stop_cancel", "broker": broker.name, "ticker": tkr, "order_id": stop["order_id"]}
+                )
             except Exception as e:
                 say(f"[yellow]  stop cancel failed for {tkr}: {e}[/yellow]")
 
@@ -1346,8 +1614,9 @@ def _reconcile_stops(broker, preview, results, targets=None):
         remaining = post_positions.get(tkr)
         pct = desired.get(tkr)
         if remaining is not None and remaining.quantity > 0 and pct:
-            px = Decimal(str(results_by_tkr.get(tkr, {}).get("fill_price")
-                             or o.estimated_price or remaining.price or 0))
+            px = Decimal(
+                str(results_by_tkr.get(tkr, {}).get("fill_price") or o.estimated_price or remaining.price or 0)
+            )
             if px > 0:
                 _place(tkr, remaining.quantity, px, pct, "remainder")
 
@@ -1403,7 +1672,24 @@ def _reconcile_stops(broker, preview, results, targets=None):
             _cancel_all(tkr, "no position (orphan)")
 
 
-def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool, force: bool, margin_aware: bool = False, min_weight=None, allocation=None, whole_shares: bool = False, threshold_mode: str = "nav", rebalance_scope: str = "whole-book", sweep: bool = True, order_type: str = "market", chase_cfg=None) -> dict:
+def _rebalance_one(
+    b,
+    targets,
+    *,
+    threshold: float,
+    max_notional,
+    dry_run: bool,
+    force: bool,
+    margin_aware: bool = False,
+    min_weight=None,
+    allocation=None,
+    whole_shares: bool = False,
+    threshold_mode: str = "nav",
+    rebalance_scope: str = "whole-book",
+    sweep: bool = True,
+    order_type: str = "market",
+    chase_cfg=None,
+) -> dict:
     """Run the full rebalance pipeline for one already-built broker.
 
     No interactive prompts, no rich rendering — returns a result dict.
@@ -1421,8 +1707,12 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
         quotes.setdefault(tk, p.price)
 
     preview = build_preview(
-        targets=targets, positions=pos, nav=bal.nav, cash=bal.cash,
-        buying_power=bal.buying_power, quotes=quotes,
+        targets=targets,
+        positions=pos,
+        nav=bal.nav,
+        cash=bal.cash,
+        buying_power=bal.buying_power,
+        quotes=quotes,
         drift_threshold=Decimal(str(threshold)),
         min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
         allocation=Decimal(str(allocation)) if allocation is not None else None,
@@ -1437,17 +1727,32 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
     if cap:
         preview.blockers.append(cap)
 
-    fp = runstate.fingerprint(b.name, b.account_id, targets, {
-        "allocation": allocation, "scope": rebalance_scope, "sweep": sweep,
-        "threshold": threshold, "threshold_mode": threshold_mode,
-        "whole_shares": whole_shares, "min_weight": min_weight,
-    })
+    fp = runstate.fingerprint(
+        b.name,
+        b.account_id,
+        targets,
+        {
+            "allocation": allocation,
+            "scope": rebalance_scope,
+            "sweep": sweep,
+            "threshold": threshold,
+            "threshold_mode": threshold_mode,
+            "whole_shares": whole_shares,
+            "min_weight": min_weight,
+        },
+    )
     duplicate = runstate.already_done(fp) and not force
 
     result = {
-        "broker": b.name, "account": b.account_id, "nav": str(bal.nav),
-        "orders": len(preview.orders), "sent": 0, "failed": 0,
-        "warnings": preview.warnings, "blockers": preview.blockers, "status": "preview",
+        "broker": b.name,
+        "account": b.account_id,
+        "nav": str(bal.nav),
+        "orders": len(preview.orders),
+        "sent": 0,
+        "failed": 0,
+        "warnings": preview.warnings,
+        "blockers": preview.blockers,
+        "status": "preview",
     }
     if preview.has_blockers:
         result["status"] = "blocked"
@@ -1470,12 +1775,27 @@ def _rebalance_one(b, targets, *, threshold: float, max_notional, dry_run: bool,
 
 
 @main.command()
-@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False), required=True, help="Multi-account config (TOML with [[account]] tables).")
-@click.option("--csv-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Target CSV file (overrides config csv_file/url).")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False),
+    required=True,
+    help="Multi-account config (TOML with [[account]] tables).",
+)
+@click.option(
+    "--csv-file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Target CSV file (overrides config csv_file/url).",
+)
 @click.option("--csv-url", default=None, help="Target CSV URL (overrides config).")
 @click.option("--dry-run", is_flag=True, help="Preview every account, send nothing.")
 @click.option("--yes", "-y", is_flag=True, help="Required to actually execute (multi never prompts).")
-@click.option("--margin-aware/--no-margin-aware", default=None, help="Scale buys to fit buying power (on by default; --no-margin-aware to disable).")
+@click.option(
+    "--margin-aware/--no-margin-aware",
+    default=None,
+    help="Scale buys to fit buying power (on by default; --no-margin-aware to disable).",
+)
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output.")
@@ -1516,9 +1836,9 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
     if order_type not in ("market", "limit-chase"):
         _fail(f"invalid order_type {order_type!r} in config — use 'market' or 'limit-chase'.")
     chase_cfg = None
-    if order_type == "limit-chase" or any(
-            str(a.get("order_type", "")) == "limit-chase" for a in accounts):
+    if order_type == "limit-chase" or any(str(a.get("order_type", "")) == "limit-chase" for a in accounts):
         from .chase import ChaseConfig
+
         chase_cfg = ChaseConfig(
             retries=int(cfg.get("chase_retries", 5)),
             reprice_interval=float(cfg.get("chase_interval", 5.0)),
@@ -1576,11 +1896,16 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
             # per-account `allocation`, `order_type`, `stop_pct` win over top-level.
             acct_order_type = str(acct.get("order_type", order_type))
             acct_stop = acct.get("stop_pct", default_stop)
-            acct_targets = (_apply_default_stop(targets, Decimal(str(acct_stop)))
-                            if acct_stop is not None else targets)
+            acct_targets = _apply_default_stop(targets, Decimal(str(acct_stop))) if acct_stop is not None else targets
             r = _rebalance_one(
-                b, acct_targets, threshold=threshold, max_notional=max_notional, dry_run=dry_run,
-                force=force, margin_aware=margin_aware, min_weight=min_weight,
+                b,
+                acct_targets,
+                threshold=threshold,
+                max_notional=max_notional,
+                dry_run=dry_run,
+                force=force,
+                margin_aware=margin_aware,
+                min_weight=min_weight,
                 allocation=acct.get("allocation", allocation_default),
                 whole_shares=acct.get("whole_shares", whole_shares),
                 threshold_mode=str(acct.get("threshold_mode", threshold_mode)),
@@ -1616,9 +1941,22 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
     table.add_column("Failed", justify="right")
     for r in results:
         st = r.get("status", "?")
-        color = "green" if st in ("executed", "dry-run", "nothing-to-do") else "yellow" if st in ("duplicate", "partial") else "red"
+        color = (
+            "green"
+            if st in ("executed", "dry-run", "nothing-to-do")
+            else "yellow"
+            if st in ("duplicate", "partial")
+            else "red"
+        )
         detail = f" {escape(str(r['reason']))}" if r.get("reason") else ""
-        table.add_row(r.get("name", "?"), r.get("broker", "—"), f"[{color}]{st}[/{color}]{detail}", str(r.get("orders", "—")), str(r.get("sent", "—")), str(r.get("failed", "—")))
+        table.add_row(
+            r.get("name", "?"),
+            r.get("broker", "—"),
+            f"[{color}]{st}[/{color}]{detail}",
+            str(r.get("orders", "—")),
+            str(r.get("sent", "—")),
+            str(r.get("failed", "—")),
+        )
     c.print(table)
     if any(r.get("status") in ("error", "blocked", "partial") for r in results):
         sys.exit(1)
@@ -1626,7 +1964,12 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
 
 @main.command()
 @_BROKER_OPT
-@click.option("--creds-file", type=click.Path(exists=True, dir_okay=False), default=None, help="Load credentials from a file first.")
+@click.option(
+    "--creds-file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Load credentials from a file first.",
+)
 @click.pass_context
 def doctor(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -> None:
     """Health check: credentials, connectivity, market status, a sample quote."""
@@ -1634,7 +1977,10 @@ def doctor(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -
         _load_creds_file_or_exit(creds_file)
 
     ms = market_status()
-    c.print(f"Market: [bold]{ms.status}[/bold]" + (f" · closes in {ms.minutes_to_close} min" if ms.minutes_to_close is not None else ""))
+    c.print(
+        f"Market: [bold]{ms.status}[/bold]"
+        + (f" · closes in {ms.minutes_to_close} min" if ms.minutes_to_close is not None else "")
+    )
 
     requested = (broker_opt or ctx.obj.get("broker") or "").lower().strip()
     names = [requested] if requested else list(keychain.list_brokers()) or list(SUPPORTED)

@@ -25,6 +25,7 @@ class _Resp:
 def _broker(account=None, quotes=None):
     b = Schwab.__new__(Schwab)
     b._account_hash = "HASH"
+    b.account_hash = "HASH"
     b.account_id = "HASH…"
     b._client = SimpleNamespace(
         get_account=lambda h, fields=None: _Resp(account or {}),

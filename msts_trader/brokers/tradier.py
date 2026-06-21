@@ -11,6 +11,7 @@ Auth (env or creds-file):
 
 Equity market orders are whole-share (Tradier does not do fractional).
 """
+
 from __future__ import annotations
 
 import json
@@ -140,8 +141,13 @@ class Tradier:
             if qty <= 0:
                 continue
             params = {
-                "class": "equity", "symbol": o.ticker, "side": "buy",
-                "quantity": qty, "type": "market", "duration": "day", "preview": "true",
+                "class": "equity",
+                "symbol": o.ticker,
+                "side": "buy",
+                "quantity": qty,
+                "type": "market",
+                "duration": "day",
+                "preview": "true",
             }
             try:
                 resp = self._request("POST", f"/v1/accounts/{self.account_id}/orders", params)
@@ -174,7 +180,14 @@ class Tradier:
         resp = self._request("POST", f"/v1/accounts/{self.account_id}/orders", params)
         o = resp.get("order") or {}
         if dry_run:
-            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value, "quantity": qty, "dry_run": True, "preview": o}
+            return {
+                "status": "dry-run",
+                "ticker": order.ticker,
+                "side": order.side.value,
+                "quantity": qty,
+                "dry_run": True,
+                "preview": o,
+            }
         status = o.get("status") or "submitted"
         if str(status).lower() in ("rejected", "error"):
             return {"status": "error", "reason": json.dumps(o)[:300], "ticker": order.ticker}
@@ -194,20 +207,29 @@ class Tradier:
         market-fallbacks the dust)."""
         qty = int(order.quantity)
         if qty <= 0:
-            return {"status": "skipped", "reason": "qty rounds to 0 (Tradier whole shares)",
-                    "ticker": order.ticker}
+            return {"status": "skipped", "reason": "qty rounds to 0 (Tradier whole shares)", "ticker": order.ticker}
         side = "buy" if order.side == Side.BUY else "sell"
         params = {
-            "class": "equity", "symbol": order.ticker, "side": side,
-            "quantity": qty, "type": "limit", "duration": "day",
+            "class": "equity",
+            "symbol": order.ticker,
+            "side": side,
+            "quantity": qty,
+            "type": "limit",
+            "duration": "day",
             "price": f"{float(limit_price):.2f}",
         }
         if dry_run:
             params["preview"] = "true"
             resp = self._request("POST", f"/v1/accounts/{self.account_id}/orders", params)
-            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value,
-                    "quantity": qty, "limit_price": float(limit_price), "dry_run": True,
-                    "preview": resp.get("order") or {}}
+            return {
+                "status": "dry-run",
+                "ticker": order.ticker,
+                "side": order.side.value,
+                "quantity": qty,
+                "limit_price": float(limit_price),
+                "dry_run": True,
+                "preview": resp.get("order") or {},
+            }
         resp = self._request("POST", f"/v1/accounts/{self.account_id}/orders", params)
         o = resp.get("order") or {}
         status = o.get("status") or "submitted"
@@ -229,8 +251,7 @@ class Tradier:
         try:
             resp = self._request("GET", f"/v1/accounts/{self.account_id}/orders/{order_id}", None)
         except Exception as e:
-            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None,
-                    "reason": str(e)}
+            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None, "reason": str(e)}
         o = resp.get("order") or {}
         raw = str(o.get("status", "")).lower()
         if raw == "filled":
@@ -247,8 +268,11 @@ class Tradier:
             status = UNKNOWN
         filled = float(o.get("exec_quantity") or 0)
         avg = o.get("avg_fill_price")
-        return {"status": status, "filled_qty": filled,
-                "filled_avg_price": float(avg) if avg and float(avg) > 0 else None}
+        return {
+            "status": status,
+            "filled_qty": filled,
+            "filled_avg_price": float(avg) if avg and float(avg) > 0 else None,
+        }
 
     # ---- protective stops -------------------------------------------------
     def place_stop(self, ticker: str, quantity, stop_price, dry_run: bool = False) -> dict:
@@ -256,21 +280,30 @@ class Tradier:
         if qty <= 0:
             return {"status": "skipped", "reason": "whole-share qty rounds to 0", "ticker": ticker}
         params = {
-            "class": "equity", "symbol": ticker, "side": "sell",
-            "quantity": qty, "type": "stop", "duration": "gtc",
+            "class": "equity",
+            "symbol": ticker,
+            "side": "sell",
+            "quantity": qty,
+            "type": "stop",
+            "duration": "gtc",
             "stop": f"{float(stop_price):.2f}",
         }
         if dry_run:
             return {"status": "dry-run", "ticker": ticker, "stop_price": float(stop_price), "dry_run": True}
         resp = self._request("POST", f"/v1/accounts/{self.account_id}/orders", params)
         o = resp.get("order") or {}
-        return {"status": str(o.get("status") or "submitted"), "ticker": ticker,
-                "order_id": str(o.get("id", "")), "quantity": qty,
-                "stop_price": float(stop_price), "dry_run": False}
+        return {
+            "status": str(o.get("status") or "submitted"),
+            "ticker": ticker,
+            "order_id": str(o.get("id", "")),
+            "quantity": qty,
+            "stop_price": float(stop_price),
+            "dry_run": False,
+        }
 
     def open_stops(self) -> dict:
         resp = self._request("GET", f"/v1/accounts/{self.account_id}/orders", None)
-        raw = (resp.get("orders") or {})
+        raw = resp.get("orders") or {}
         items = raw.get("order") if isinstance(raw, dict) else None
         if items is None:
             return {}
@@ -285,11 +318,13 @@ class Tradier:
             tkr = o.get("symbol")
             if not tkr:
                 continue
-            out.setdefault(tkr, []).append({
-                "order_id": str(o.get("id")),
-                "quantity": Decimal(str(o.get("quantity", 0))),
-                "stop_price": Decimal(str(o.get("stop_price", 0) or 0)),
-            })
+            out.setdefault(tkr, []).append(
+                {
+                    "order_id": str(o.get("id")),
+                    "quantity": Decimal(str(o.get("quantity", 0))),
+                    "stop_price": Decimal(str(o.get("stop_price", 0) or 0)),
+                }
+            )
         return out
 
     def cancel_order(self, order_id) -> dict:

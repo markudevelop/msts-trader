@@ -349,6 +349,7 @@ def test_schwab_order_status_normalizes():
     def status_of(payload):
         b = Schwab.__new__(Schwab)
         b._account_hash = "H"
+        b.account_hash = "H"
         b._client = SimpleNamespace(
             get_order=lambda oid, h: SimpleNamespace(raise_for_status=lambda: None,
                                                      json=lambda: payload))

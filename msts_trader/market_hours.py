@@ -1,7 +1,8 @@
 """Minimal market-hours check. ET timezone, US equity sessions.
 
-Holidays list covers 2025-2027 — keep refreshed annually.
+Holidays list covers 2025-2028 (official NYSE/NASDAQ dates) — refresh annually.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,17 +14,48 @@ ET = ZoneInfo("America/New_York")
 # NYSE/NASDAQ full closures.
 HOLIDAYS: set[date] = {
     # 2025
-    date(2025, 1, 1), date(2025, 1, 20), date(2025, 2, 17), date(2025, 4, 18),
-    date(2025, 5, 26), date(2025, 6, 19), date(2025, 7, 4), date(2025, 9, 1),
-    date(2025, 11, 27), date(2025, 12, 25),
+    date(2025, 1, 1),
+    date(2025, 1, 20),
+    date(2025, 2, 17),
+    date(2025, 4, 18),
+    date(2025, 5, 26),
+    date(2025, 6, 19),
+    date(2025, 7, 4),
+    date(2025, 9, 1),
+    date(2025, 11, 27),
+    date(2025, 12, 25),
     # 2026
-    date(2026, 1, 1), date(2026, 1, 19), date(2026, 2, 16), date(2026, 4, 3),
-    date(2026, 5, 25), date(2026, 6, 19), date(2026, 7, 3), date(2026, 9, 7),
-    date(2026, 11, 26), date(2026, 12, 25),
+    date(2026, 1, 1),
+    date(2026, 1, 19),
+    date(2026, 2, 16),
+    date(2026, 4, 3),
+    date(2026, 5, 25),
+    date(2026, 6, 19),
+    date(2026, 7, 3),
+    date(2026, 9, 7),
+    date(2026, 11, 26),
+    date(2026, 12, 25),
     # 2027
-    date(2027, 1, 1), date(2027, 1, 18), date(2027, 2, 15), date(2027, 3, 26),
-    date(2027, 5, 31), date(2027, 6, 18), date(2027, 7, 5), date(2027, 9, 6),
-    date(2027, 11, 25), date(2027, 12, 24),
+    date(2027, 1, 1),
+    date(2027, 1, 18),
+    date(2027, 2, 15),
+    date(2027, 3, 26),
+    date(2027, 5, 31),
+    date(2027, 6, 18),
+    date(2027, 7, 5),
+    date(2027, 9, 6),
+    date(2027, 11, 25),
+    date(2027, 12, 24),
+    # 2028 (New Year’s Day falls on Saturday — no trading-day observance)
+    date(2028, 1, 17),
+    date(2028, 2, 21),
+    date(2028, 4, 14),
+    date(2028, 5, 29),
+    date(2028, 6, 19),
+    date(2028, 7, 4),
+    date(2028, 9, 4),
+    date(2028, 11, 23),
+    date(2028, 12, 25),
 }
 
 RTH_OPEN = time(9, 30)
@@ -35,9 +67,16 @@ EARLY_CLOSE = time(13, 0)
 # market_status uses 13:00 as the close, so the MOC cutoff fires correctly instead
 # of submitting a market/MOC order into an already-closed/closing auction.
 EARLY_CLOSES: set[date] = {
-    date(2025, 7, 3), date(2025, 11, 28), date(2025, 12, 24),
-    date(2026, 11, 27), date(2026, 12, 24),
+    date(2025, 7, 3),
+    date(2025, 11, 28),
+    date(2025, 12, 24),
+    date(2026, 11, 27),
+    date(2026, 12, 24),
     date(2027, 11, 26),
+    # 2028
+    date(2028, 7, 3),
+    date(2028, 11, 24),
+    # (Christmas Eve 2028-12-24 falls on Sunday — no trading session)
 }
 
 
@@ -73,7 +112,7 @@ def market_status(now: datetime | None = None) -> MarketStatus:
         return MarketStatus("closed", None, _next_open(now))
 
     t = now.timetz().replace(tzinfo=None)
-    rth_close = close_time_for(today)   # 13:00 on half-days, else 16:00
+    rth_close = close_time_for(today)  # 13:00 on half-days, else 16:00
     if time(4, 0) <= t < RTH_OPEN:
         return MarketStatus("premarket", None, None)
     if RTH_OPEN <= t < rth_close:

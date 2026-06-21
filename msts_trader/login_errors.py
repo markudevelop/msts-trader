@@ -5,6 +5,7 @@ The broker SDKs surface low-level errors (e.g. Tastytrade's
 that don't tell a user what to actually do. This maps the common ones to
 plain-language guidance.
 """
+
 from __future__ import annotations
 
 

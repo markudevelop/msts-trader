@@ -3,6 +3,7 @@
 Built on the public `alpaca-py` SDK (https://pypi.org/project/alpaca-py/).
 Fractional shares supported on MARKET orders.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -23,6 +24,7 @@ try:
         MarketOrderRequest,
         StopOrderRequest,
     )
+
     _ALPACA_OK = True
 except ImportError:
     _ALPACA_OK = False
@@ -139,11 +141,16 @@ class Alpaca:
             return {"status": "skipped", "reason": "qty<=0", "ticker": order.ticker}
         px = round(float(limit_price), 2)
         if dry_run:
-            return {"status": "dry-run", "ticker": order.ticker, "side": order.side.value,
-                    "quantity": qty, "limit_price": px, "dry_run": True}
+            return {
+                "status": "dry-run",
+                "ticker": order.ticker,
+                "side": order.side.value,
+                "quantity": qty,
+                "limit_price": px,
+                "dry_run": True,
+            }
         side = OrderSide.BUY if order.side == Side.BUY else OrderSide.SELL
-        req = LimitOrderRequest(symbol=order.ticker, qty=qty, side=side,
-                                time_in_force=TimeInForce.DAY, limit_price=px)
+        req = LimitOrderRequest(symbol=order.ticker, qty=qty, side=side, time_in_force=TimeInForce.DAY, limit_price=px)
         try:
             resp = self._client.submit_order(req)
         except Exception as e:
@@ -164,8 +171,7 @@ class Alpaca:
         try:
             o = self._client.get_order_by_id(order_id)
         except Exception as e:
-            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None,
-                    "reason": str(e)}
+            return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None, "reason": str(e)}
         st = getattr(o, "status", None)
         # alpaca-py returns an OrderStatus enum (str() -> "OrderStatus.FILLED");
         # prefer .value ("filled") so the match below works either way.
@@ -178,40 +184,51 @@ class Alpaca:
             status = REJECTED
         elif raw in ("canceled", "cancelled", "expired", "done_for_day", "stopped"):
             status = CANCELLED
-        elif raw in ("new", "accepted", "pending_new", "accepted_for_bidding",
-                     "pending_replace", "replaced", "calculated"):
+        elif raw in (
+            "new",
+            "accepted",
+            "pending_new",
+            "accepted_for_bidding",
+            "pending_replace",
+            "replaced",
+            "calculated",
+        ):
             status = WORKING
         else:
             status = UNKNOWN
         filled = float(getattr(o, "filled_qty", 0) or 0)
         avg = getattr(o, "filled_avg_price", None)
-        return {"status": status, "filled_qty": filled,
-                "filled_avg_price": float(avg) if avg else None}
+        return {"status": status, "filled_qty": filled, "filled_avg_price": float(avg) if avg else None}
 
     # ---- protective stops -------------------------------------------------
-    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal,
-                   dry_run: bool = False) -> dict:
+    def place_stop(self, ticker: str, quantity: Decimal, stop_price: Decimal, dry_run: bool = False) -> dict:
         """GTC SELL STOP for an existing long. Alpaca stop orders are
         whole-share only — fractional quantity rounds DOWN (residual fraction
         stays unprotected rather than over-selling)."""
         qty = int(quantity)
         if qty <= 0:
-            return {"status": "skipped", "reason": "whole-share qty rounds to 0",
-                    "ticker": ticker}
+            return {"status": "skipped", "reason": "whole-share qty rounds to 0", "ticker": ticker}
         if dry_run:
-            return {"status": "dry-run", "ticker": ticker,
-                    "stop_price": float(stop_price), "dry_run": True}
-        req = StopOrderRequest(symbol=ticker, qty=qty, side=OrderSide.SELL,
-                               time_in_force=TimeInForce.GTC,
-                               stop_price=round(float(stop_price), 2))
+            return {"status": "dry-run", "ticker": ticker, "stop_price": float(stop_price), "dry_run": True}
+        req = StopOrderRequest(
+            symbol=ticker,
+            qty=qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.GTC,
+            stop_price=round(float(stop_price), 2),
+        )
         try:
             resp = self._client.submit_order(req)
         except Exception as e:
             return {"status": "error", "reason": str(e), "ticker": ticker}
-        return {"status": str(getattr(resp, "status", "submitted")),
-                "ticker": ticker, "order_id": str(getattr(resp, "id", "")),
-                "quantity": float(qty), "stop_price": float(stop_price),
-                "dry_run": False}
+        return {
+            "status": str(getattr(resp, "status", "submitted")),
+            "ticker": ticker,
+            "order_id": str(getattr(resp, "id", "")),
+            "quantity": float(qty),
+            "stop_price": float(stop_price),
+            "dry_run": False,
+        }
 
     def open_stops(self) -> dict[str, list[dict]]:
         req = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500)
@@ -222,11 +239,13 @@ class Alpaca:
             tkr = getattr(o, "symbol", None)
             if not tkr:
                 continue
-            out.setdefault(tkr, []).append({
-                "order_id": str(o.id),
-                "quantity": Decimal(str(o.qty or 0)),
-                "stop_price": Decimal(str(o.stop_price or 0)),
-            })
+            out.setdefault(tkr, []).append(
+                {
+                    "order_id": str(o.id),
+                    "quantity": Decimal(str(o.qty or 0)),
+                    "stop_price": Decimal(str(o.stop_price or 0)),
+                }
+            )
         return out
 
     def cancel_order(self, order_id: str) -> dict:

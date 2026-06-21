@@ -779,13 +779,15 @@ or with uv (uses the Python pinned in `.python-version`):
 uv sync --all-extras
 uv run pytest -v
 uv run ruff check msts_trader
+uv run ruff format --check msts_trader   # or `ruff format msts_trader` to apply
+
 ```
 
 The test suite covers:
 
 - CSV parser (header validation, weights, leverage, comments, dup/neg guards)
 - Diff math (drift threshold, exits, warnings, blockers, BP overrun, leverage)
-- Market hours (RTH/pre/after/closed, holidays through 2027, weekends)
+- Market hours (RTH/pre/after/closed, holidays through 2028, weekends)
 - Paper broker end-to-end (cash accounting, position lifecycle, dry-run, persistence)
 - Broker protocol conformance (every adapter exposes the required attrs + methods)
 - Keychain + env-derived credentials (per-broker, quote stripping, fallbacks)

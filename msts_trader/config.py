@@ -17,6 +17,7 @@ Example ~/.msts-trader/config.toml:
     whole_shares = true                     # round every order to whole shares
     quiet = false
 """
+
 from __future__ import annotations
 
 import os
@@ -30,19 +31,32 @@ except ModuleNotFoundError:  # pragma: no cover
 DEFAULT_PATH = Path(os.path.expanduser("~/.msts-trader/config.toml"))
 
 _KNOWN = {
-    "broker", "threshold", "csv_file", "csv_url", "creds_file",
-    "max_notional", "max_stale_hours", "notify_url", "quiet", "margin_aware",
+    "broker",
+    "threshold",
+    "csv_file",
+    "csv_url",
+    "creds_file",
+    "max_notional",
+    "max_stale_hours",
+    "notify_url",
+    "quiet",
+    "margin_aware",
     "moc",
     "order_type",  # "market" (default) | "limit-chase"
-    "chase_retries", "chase_interval", "chase_poll", "chase_aggression", "chase_fallback",
+    "chase_retries",
+    "chase_interval",
+    "chase_poll",
+    "chase_aggression",
+    "chase_fallback",
     "whole_shares",  # round every order down to whole shares (no fractional)
-    "telegram_token", "telegram_chat_id",  # Telegram bot creds (else MSTS_TELEGRAM_* env)
-    "min_weight",   # ignore CSV rows with 0 < weight < this
-    "stop_pct",     # default protective stop (fraction below entry) for rows lacking a per-row one
+    "telegram_token",
+    "telegram_chat_id",  # Telegram bot creds (else MSTS_TELEGRAM_* env)
+    "min_weight",  # ignore CSV rows with 0 < weight < this
+    "stop_pct",  # default protective stop (fraction below entry) for rows lacking a per-row one
     "threshold_mode",  # drift denominator: "nav" (default) | "position"
     "rebalance_scope",  # execution: "whole-book" (default) | "per-ticker"
-    "sweep",        # liquidate held tickers not in the CSV (default true); false = only touch listed tickers
-    "allocation",   # dollar base the weights apply to (default: full NAV)
+    "sweep",  # liquidate held tickers not in the CSV (default true); false = only touch listed tickers
+    "allocation",  # dollar base the weights apply to (default: full NAV)
     "account",  # array of [[account]] tables for the `multi` command
 }
 
