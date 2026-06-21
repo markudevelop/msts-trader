@@ -94,7 +94,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --notes-file "${{ steps.notes.outputs.notes_file }}" \
-            dist/*
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists — uploading assets (idempotent)"
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber || true
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file "${{ steps.notes.outputs.notes_file }}" \
+              dist/*
+          fi
