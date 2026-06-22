@@ -38,6 +38,11 @@ def test_parse_dotenv_aliases():
     assert out == {"APCA_API_KEY_ID": "K", "APCA_API_SECRET_KEY": "S", "APCA_PAPER": "true"}
 
 
+def test_parse_schwab_account_hash_alias():
+    out = parse(json.dumps({"account_hash": "HASH", "app_key": "k", "app_secret": "s"}))
+    assert out == {"SCHWAB_ACCOUNT_HASH": "HASH", "SCHWAB_APP_KEY": "k", "SCHWAB_APP_SECRET": "s"}
+
+
 def test_parse_client_secret_alias():
     # tastytrade's developer portal labels the provider secret "client secret"
     out = parse("client_secret=cs\nrefresh_token=rt\n")
@@ -94,6 +99,7 @@ def test_load_into_env_sets_vars(tmp_path, monkeypatch):
     keys = load_into_env(f)
     assert set(keys) == {"TT_PROVIDER_SECRET", "TT_REFRESH_TOKEN"}
     import os
+
     assert os.environ["TT_PROVIDER_SECRET"] == "x"
     assert os.environ["TT_REFRESH_TOKEN"] == "y"
 
@@ -105,6 +111,7 @@ def test_load_into_env_does_not_overwrite_by_default(tmp_path, monkeypatch):
     keys = load_into_env(f)
     assert keys == []  # nothing set because env already had it
     import os
+
     assert os.environ["TT_PROVIDER_SECRET"] == "already-set"
 
 
@@ -114,6 +121,7 @@ def test_load_into_env_overwrite(tmp_path, monkeypatch):
     f.write_text(json.dumps({"TT_PROVIDER_SECRET": "from-file"}))
     load_into_env(f, overwrite=True)
     import os
+
     assert os.environ["TT_PROVIDER_SECRET"] == "from-file"
 
 

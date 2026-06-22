@@ -2,6 +2,7 @@
 
 Doesn't hit any real broker — uses the paper broker which is self-contained.
 """
+
 from __future__ import annotations
 
 import keyring
@@ -96,7 +97,9 @@ def test_rebalance_moc_refused_on_unsupported_broker(tmp_path, monkeypatch):
         supports_moc = False
 
     monkeypatch.setattr(cli, "_load_broker", lambda name: _NoMoc())
-    monkeypatch.setattr(cli, "market_status", lambda: type("MS", (), {"status": "open", "next_open": None, "minutes_to_close": 120})())
+    monkeypatch.setattr(
+        cli, "market_status", lambda: type("MS", (), {"status": "open", "next_open": None, "minutes_to_close": 120})()
+    )
     r = CliRunner().invoke(
         main, ["--broker", "tastytrade", "rebalance", "--moc", "--dry-run"], input="ticker,weight\nSPY,1.0\n"
     )
@@ -168,7 +171,7 @@ def test_multi_dry_run_two_paper_accounts(tmp_path, monkeypatch):
     b.write_text("PAPER_STARTING_CASH=50000\n")
     cfg = tmp_path / "multi.toml"
     cfg.write_text(
-        f'threshold = 0.04\n'
+        f"threshold = 0.04\n"
         f'[[account]]\nname = "a"\nbroker = "paper"\ncreds_file = "{a.as_posix()}"\n'
         f'[[account]]\nname = "b"\nbroker = "paper"\ncreds_file = "{b.as_posix()}"\n'
     )
@@ -204,13 +207,14 @@ def test_help_survives_legacy_console_encoding():
 
 def test_multi_no_accounts_errors(tmp_path):
     cfg = tmp_path / "multi.toml"
-    cfg.write_text('threshold = 0.04\n')  # no [[account]] tables
+    cfg.write_text("threshold = 0.04\n")  # no [[account]] tables
     csv = tmp_path / "t.csv"
     csv.write_text("ticker,weight\nSPY,1.0\n")
     r = CliRunner().invoke(main, ["multi", "--config", str(cfg), "--csv-file", str(csv), "--dry-run"])
     assert r.exit_code != 0
     # brackets must survive (rich-escaped), not be eaten to "no [] entries"
     import re as _re
+
     _clean = _re.sub(r"\x1b\[[0-9;]*m", "", r.output)  # strip ANSI color (env-dependent in CliRunner)
     assert "[[account]]" in _clean
 
@@ -260,6 +264,25 @@ def test_login_creds_file_overrides_stale_env(tmp_path, monkeypatch):
     assert payload["nav"] == "40000", "creds file must override stale env var"
 
 
+def test_paper_login_existing_book_shows_hint(tmp_path, monkeypatch):
+    from decimal import Decimal
+
+    from msts_trader.brokers import paper
+    from tests.conftest import write_paper_state
+
+    state = tmp_path / "paper_state.json"
+    monkeypatch.setattr(paper, "STATE_PATH", state)
+    write_paper_state(state, cash="42000", positions={"SPY": "5"}, last_prices={"SPY": "500"})
+
+    r = CliRunner().invoke(main, ["login", "--broker", "paper"], input="60000\n")
+    assert r.exit_code == 0, r.output
+    assert "existing book" in r.output.lower()
+    assert "paper-reset" in r.output.lower()
+    assert "60000" in r.output
+    # Existing book must survive login — starting cash only seeds new files.
+    assert paper.Paper().balances().cash == Decimal("42000")
+
+
 def test_paper_reset_clears_book(tmp_path, monkeypatch):
     from msts_trader.brokers import paper
 
@@ -269,6 +292,24 @@ def test_paper_reset_clears_book(tmp_path, monkeypatch):
     r = runner.invoke(main, ["paper-reset"])
     assert r.exit_code == 0
     assert "paper book reset" in r.output.lower()
+
+
+def test_paper_reset_uses_keychain_starting_cash(tmp_path, monkeypatch):
+    from decimal import Decimal
+
+    from msts_trader.brokers import paper
+    from tests.conftest import write_paper_state
+
+    state = tmp_path / "paper_state.json"
+    monkeypatch.setattr(paper, "STATE_PATH", state)
+    write_paper_state(state, cash="1000", positions={"SPY": "1"}, last_prices={"SPY": "500"})
+
+    runner = CliRunner()
+    runner.invoke(main, ["login", "--broker", "paper"], input="75000\n")
+    r = runner.invoke(main, ["paper-reset"])
+    assert r.exit_code == 0, r.output
+    assert paper.Paper().balances().cash == Decimal("75000")
+    assert paper.Paper().positions() == {}
 
 
 def test_rebalance_whole_shares_rounds_quantities(tmp_path, monkeypatch):
@@ -315,7 +356,8 @@ def test_rebalance_without_whole_shares_allows_fraction(tmp_path, monkeypatch):
     csv.write_text("ticker,weight\nSPY,0.6\nSHV,0.4\n")
 
     r = CliRunner().invoke(
-        main, ["--broker", "paper", "rebalance", "--dry-run", "--json", "--csv-file", str(csv)],
+        main,
+        ["--broker", "paper", "rebalance", "--dry-run", "--json", "--csv-file", str(csv)],
     )
     assert r.exit_code == 0, r.output
     payload = _json.loads(r.output.strip().splitlines()[-1])

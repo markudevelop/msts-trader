@@ -7,7 +7,7 @@ from msts_trader.creds_file import broker_kwargs_from_env, broker_kwargs_from_fi
 TT = ("TT_PROVIDER_SECRET", "TT_REFRESH_TOKEN", "TT_ACCOUNT_ID", "TT_TEST")
 ALP = ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "APCA_PAPER")
 IB = ("IBKR_HOST", "IBKR_PORT", "IBKR_CLIENT_ID", "IBKR_ACCOUNT_ID")
-SC = ("SCHWAB_APP_KEY", "SCHWAB_APP_SECRET", "SCHWAB_CALLBACK_URL")
+SC = ("SCHWAB_APP_KEY", "SCHWAB_APP_SECRET", "SCHWAB_CALLBACK_URL", "SCHWAB_ACCOUNT_HASH")
 TR = ("TRADIER_ACCESS_TOKEN", "TRADIER_ACCOUNT_ID", "TRADIER_SANDBOX")
 
 
@@ -111,6 +111,21 @@ def test_schwab_callback_env_override(monkeypatch):
     assert out["callback_url"] == "https://127.0.0.1:9999/"
 
 
+def test_schwab_account_hash_from_env(monkeypatch):
+    monkeypatch.setenv("SCHWAB_APP_KEY", "ak")
+    monkeypatch.setenv("SCHWAB_APP_SECRET", "as")
+    monkeypatch.setenv("SCHWAB_ACCOUNT_HASH", "HASH123")
+    out = broker_kwargs_from_env("schwab")
+    assert out["account_hash"] == "HASH123"
+
+
+def test_schwab_account_hash_optional(monkeypatch):
+    monkeypatch.setenv("SCHWAB_APP_KEY", "ak")
+    monkeypatch.setenv("SCHWAB_APP_SECRET", "as")
+    out = broker_kwargs_from_env("schwab")
+    assert "account_hash" not in out
+
+
 def test_tradier_from_env(monkeypatch):
     monkeypatch.setenv("TRADIER_ACCESS_TOKEN", "tok")
     monkeypatch.setenv("TRADIER_ACCOUNT_ID", "VA123")
@@ -164,6 +179,7 @@ def test_from_file_isolated(tmp_path, monkeypatch):
     out = broker_kwargs_from_file("tastytrade", f)
     assert out == {"provider_secret": "ps1", "refresh_token": "rt1", "account_id": "acc1", "is_test": False}
     import os
+
     assert "TT_PROVIDER_SECRET" not in os.environ  # not leaked into the process env
 
 

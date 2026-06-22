@@ -10,6 +10,19 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.24.4] — 2026-06-22
+
+### Fixed
+- **`paper-reset` now honors configured starting cash.** The command always reset to the hardcoded $100k default even when login (or `PAPER_STARTING_CASH`) stored a different amount — contradicting the existing-book login hint. Reset now resolves cash from env/creds-file, then keychain, then the default.
+
+### Improved
+- **Schwab headless creds** accept optional `SCHWAB_ACCOUNT_HASH` (or `account_hash` in a creds file) so automated runs can skip re-discovering the account hash.
+
+### Tests
+- 2028 NYSE holiday + early-close calendar coverage.
+- Paper login existing-book UX, `paper-reset` keychain cash, and `Paper.reset()` explicit/default starting cash.
+- Schwab `SCHWAB_ACCOUNT_HASH` env + creds-file alias.
+
 ## [0.24.3] — 2026-06-21
 
 ### Fixed

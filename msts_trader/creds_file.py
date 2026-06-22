@@ -38,6 +38,7 @@ _ALIASES = {
     "app_key": "SCHWAB_APP_KEY",
     "app_secret": "SCHWAB_APP_SECRET",
     "callback_url": "SCHWAB_CALLBACK_URL",
+    "account_hash": "SCHWAB_ACCOUNT_HASH",
     "host": "IBKR_HOST",
     "port": "IBKR_PORT",
     "client_id": "IBKR_CLIENT_ID",
@@ -133,7 +134,15 @@ def broker_kwargs(broker: str, get) -> dict | None:
     if broker == "schwab":
         k, s = e("SCHWAB_APP_KEY"), e("SCHWAB_APP_SECRET")
         if k and s:
-            return {"app_key": k, "app_secret": s, "callback_url": e("SCHWAB_CALLBACK_URL") or "https://127.0.0.1:8182"}
+            out: dict = {
+                "app_key": k,
+                "app_secret": s,
+                "callback_url": e("SCHWAB_CALLBACK_URL") or "https://127.0.0.1:8182",
+            }
+            ah = e("SCHWAB_ACCOUNT_HASH")
+            if ah:
+                out["account_hash"] = ah
+            return out
         return None
     if broker == "hyperliquid":
         pk = e("HL_PRIVATE_KEY")

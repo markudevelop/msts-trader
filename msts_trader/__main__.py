@@ -643,12 +643,28 @@ def brokers() -> None:
     c.print(table)
 
 
+def _resolve_paper_starting_cash() -> Decimal:
+    """Starting cash for paper-reset: env/creds-file, then keychain, else default."""
+    from .brokers.paper import STARTING_CASH
+
+    creds = broker_kwargs_from_env("paper")
+    if creds and creds.get("starting_cash"):
+        return Decimal(str(creds["starting_cash"]))
+    try:
+        stored = keychain.load("paper")
+        if stored.get("starting_cash"):
+            return Decimal(str(stored["starting_cash"]))
+    except keychain.CredsMissingError:
+        pass
+    return STARTING_CASH
+
+
 @main.command(name="paper-reset")
 def paper_reset() -> None:
     """Reset the paper broker book to its starting cash."""
     from .brokers.paper import Paper
 
-    Paper().reset()
+    Paper().reset(starting_cash=_resolve_paper_starting_cash())
     c.print("[green]✓ paper book reset.[/green]")
 
 

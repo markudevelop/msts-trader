@@ -118,6 +118,28 @@ def test_rejects_zero_or_negative_qty(qty):
     assert r["status"] == "skipped"
 
 
+def test_reset_with_explicit_starting_cash(isolate_paper_state):
+    p = Paper(starting_cash="50000")
+    p.set_quote("SPY", Decimal("500"))
+    p.place_market(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10"), estimated_price=Decimal("500")))
+    assert p.positions()["SPY"].quantity == Decimal("10")
+
+    p.reset(starting_cash=Decimal("75000"))
+    assert p.positions() == {}
+    assert p.balances().cash == Decimal("75000")
+
+
+def test_reset_defaults_to_starting_cash_constant(isolate_paper_state):
+    from msts_trader.brokers.paper import STARTING_CASH
+
+    p = Paper(starting_cash="50000")
+    p.set_quote("SPY", Decimal("500"))
+    p.place_market(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("5"), estimated_price=Decimal("500")))
+    p.reset()
+    assert p.positions() == {}
+    assert p.balances().cash == STARTING_CASH
+
+
 def test_lowercase_order_ticker_is_normalized():
     # A lowercase ticker must book under the uppercase key so positions()
     # finds its price in last_prices (which quote()/set_quote() uppercase).
