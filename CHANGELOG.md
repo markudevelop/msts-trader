@@ -10,6 +10,11 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.25.2] — 2026-06-23
+
+### Fixed
+- **CHANGELOG version headings weren't clickable (links stopped at 0.16.2).** The Keep-a-Changelog link-reference footer was maintained by hand and silently drifted — every version from 0.17.0 through 0.25.1 had no `[x.y.z]:` definition, so those headings rendered as plain text instead of linking to their compare diff. Regenerated the full footer from the headings (each version → compare from its nearest tagged predecessor; the never-tagged 0.21.0 spans v0.20.1...v0.22.0), and added a test (`test_every_version_heading_has_a_link_definition`) that fails if any heading lacks a link definition, so it can't drift again.
+
 ## [0.25.1] — 2026-06-23
 
 ### Fixed
@@ -1151,8 +1156,31 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.16.2...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.25.2...HEAD
+[0.25.2]: https://github.com/markudevelop/msts-trader/compare/v0.25.1...v0.25.2
+[0.25.1]: https://github.com/markudevelop/msts-trader/compare/v0.25.0...v0.25.1
+[0.25.0]: https://github.com/markudevelop/msts-trader/compare/v0.24.4...v0.25.0
+[0.24.4]: https://github.com/markudevelop/msts-trader/compare/v0.24.3...v0.24.4
+[0.24.3]: https://github.com/markudevelop/msts-trader/compare/v0.24.2...v0.24.3
+[0.24.2]: https://github.com/markudevelop/msts-trader/compare/v0.24.1...v0.24.2
+[0.24.1]: https://github.com/markudevelop/msts-trader/compare/v0.24.0...v0.24.1
+[0.24.0]: https://github.com/markudevelop/msts-trader/compare/v0.23.0...v0.24.0
+[0.23.0]: https://github.com/markudevelop/msts-trader/compare/v0.22.1...v0.23.0
+[0.22.1]: https://github.com/markudevelop/msts-trader/compare/v0.22.0...v0.22.1
+[0.22.0]: https://github.com/markudevelop/msts-trader/compare/v0.20.1...v0.22.0
+[0.21.0]: https://github.com/markudevelop/msts-trader/compare/v0.20.1...v0.22.0
+[0.20.1]: https://github.com/markudevelop/msts-trader/compare/v0.20.0...v0.20.1
+[0.20.0]: https://github.com/markudevelop/msts-trader/compare/v0.19.0...v0.20.0
+[0.19.0]: https://github.com/markudevelop/msts-trader/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/markudevelop/msts-trader/compare/v0.17.1...v0.18.0
+[0.17.1]: https://github.com/markudevelop/msts-trader/compare/v0.17.0...v0.17.1
+[0.17.0]: https://github.com/markudevelop/msts-trader/compare/v0.16.2...v0.17.0
 [0.16.2]: https://github.com/markudevelop/msts-trader/compare/v0.16.1...v0.16.2
+[0.16.1]: https://github.com/markudevelop/msts-trader/compare/v0.16.0...v0.16.1
+[0.16.0]: https://github.com/markudevelop/msts-trader/compare/v0.15.1...v0.16.0
+[0.15.1]: https://github.com/markudevelop/msts-trader/compare/v0.15.0...v0.15.1
+[0.15.0]: https://github.com/markudevelop/msts-trader/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/markudevelop/msts-trader/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/markudevelop/msts-trader/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/markudevelop/msts-trader/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/markudevelop/msts-trader/compare/v0.10.0...v0.11.0

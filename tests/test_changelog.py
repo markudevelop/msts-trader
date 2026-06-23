@@ -53,6 +53,22 @@ def test_last_section_captured_to_eof():
     assert "paper-reset cash." in notes
 
 
+def test_every_version_heading_has_a_link_definition():
+    # Keep-a-Changelog: every `## [x.y.z]` heading must have a matching
+    # `[x.y.z]: <url>` link-reference definition (else the heading renders as
+    # plain text). The footer had silently drifted — stale since 0.16.2 — so
+    # 0.17.0..0.25.1 weren't clickable. This guard fails if any heading lacks one.
+    import re
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text(encoding="utf-8")
+    headings = set(re.findall(r"^## \[(\d+\.\d+\.\d+)\]", text, re.MULTILINE))
+    defs = set(re.findall(r"^\[(\d+\.\d+\.\d+)\]:\s+http", text, re.MULTILINE))
+    missing = sorted(headings - defs)
+    assert not missing, f"CHANGELOG.md version headings without a link definition: {missing}"
+    assert re.search(r"^\[Unreleased\]:\s+http", text, re.MULTILINE), "missing [Unreleased] link definition"
+
+
 def test_real_changelog_current_version_is_nonempty():
     # The repo's own CHANGELOG must yield real notes for the current version —
     # this is the regression guard that would have caught the silent fallback.
