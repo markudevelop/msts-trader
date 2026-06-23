@@ -18,6 +18,13 @@ class _Res:
         return "converged" if self.ok else "NOT converged"
 
 
+class _O:
+    """Minimal order stub with a ticker (self-heal filters residuals by ticker)."""
+
+    def __init__(self, ticker):
+        self.ticker = ticker
+
+
 class _Post:
     def __init__(self, orders):
         self.orders = orders
@@ -80,6 +87,31 @@ def test_converged_first_pass_no_execute(monkeypatch):
     res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=True, heal_passes=1)
     assert res.ok is True
     assert calls["exec"] == 0       # already converged, nothing to heal
+
+
+def test_self_heal_skips_just_traded_leg_when_positions_lag(monkeypatch):
+    # The fill went through but positions() lags (eventually-consistent broker),
+    # so verify shows the just-sent leg as residual. Self-heal MUST NOT re-trade
+    # it — re-firing a non-idempotent market order would double the position.
+    # (Same bug class as the MOC self-heal double-fire, for normal orders.)
+    calls = _patch(monkeypatch, verify_seq=[(_Res(False), _Post([_O("SPY")]))], market="open")
+    res = m._post_trade_verify(
+        _broker(), [], settle_seconds=0, self_heal=True, heal_passes=2, recent_clean={"SPY"}
+    )
+    assert res.ok is False
+    assert calls["exec"] == 0  # SPY was just traded — skipped, reconciles next run
+
+
+def test_self_heal_still_heals_a_leg_not_traded_this_run(monkeypatch):
+    # A residual leg we did NOT send this run (genuinely failed/rejected) is still
+    # healed — the lag guard only protects just-sent tickers.
+    seq = [(_Res(False), _Post([_O("QQQ")])), (_Res(True), _Post([]))]
+    calls = _patch(monkeypatch, verify_seq=seq, market="open")
+    res = m._post_trade_verify(
+        _broker(), [], settle_seconds=0, self_heal=True, heal_passes=1, recent_clean={"SPY"}
+    )
+    assert res.ok is True
+    assert calls["exec"] == 1  # QQQ wasn't just traded -> healed
 
 
 def test_moc_run_never_self_heals(monkeypatch):

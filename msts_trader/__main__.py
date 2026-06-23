@@ -1304,6 +1304,7 @@ def rebalance(
                 heal_passes=heal_passes,
                 order_type=order_type,
                 moc=moc,
+                recent_clean={r.get("ticker") for r in results if _is_clean_send(r.get("status", "?"))},
                 chase_cfg=chase_cfg,
                 notify_url=notify_url,
                 tg_token=tg_token,
@@ -1359,7 +1360,7 @@ def rebalance(
             say("[red]Cancelled.[/red]")
             sys.exit(0)
 
-    sent, failed, _ = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
+    sent, failed, results = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
     if sent > 0 and failed == 0:
         runstate.record(fp)  # only mark done on clean success, so a partial run can re-complete
 
@@ -1384,6 +1385,7 @@ def rebalance(
             heal_passes=heal_passes,
             order_type=order_type,
             moc=moc,
+            recent_clean={r.get("ticker") for r in results if _is_clean_send(r.get("status", "?"))},
             chase_cfg=chase_cfg,
             notify_url=notify_url,
             tg_token=tg_token,
@@ -1651,6 +1653,7 @@ def _post_trade_verify(
     heal_passes=1,
     order_type="market",
     moc=False,
+    recent_clean=None,
     chase_cfg=None,
     notify_url=None,
     tg_token=None,
@@ -1675,6 +1678,16 @@ def _post_trade_verify(
     if moc and self_heal:
         say("[dim]MOC run: self-heal disabled (MOC fills at the close; check convergence after the auction).[/dim]")
         self_heal = False
+
+    # Legs we've already cleanly sent this run. We must NOT re-trade these even
+    # if the verify diff still shows them as residual: a market order is not
+    # idempotent, and a residual for a just-sent leg is almost always positions()
+    # lagging the fill (eventually-consistent broker reads) — re-trading it would
+    # double the position. Same bug class as the MOC self-heal double-fire, but it
+    # bites normal market orders on any lagging broker. Genuinely-failed legs
+    # (rejected/skipped/resting) were never recorded as clean sends, so they still
+    # heal here; a real miss on a just-sent leg reconciles on the next run.
+    recent = {t for t in (recent_clean or set()) if t}
 
     healed = 0
     res = None
@@ -1701,13 +1714,26 @@ def _post_trade_verify(
             if market_status().status != "open":
                 say("[yellow]self-heal skipped — market not open.[/yellow]")
                 break
+            heal_orders = (
+                post.orders if not recent else [o for o in post.orders if getattr(o, "ticker", None) not in recent]
+            )
+            if not heal_orders:
+                say(
+                    "[yellow]self-heal: residual legs were all already traded this run — not re-trading "
+                    "(likely position-read lag, not a real miss); reconciles on the next run.[/yellow]"
+                )
+                break
             say(
                 f"[yellow]self-heal pass {attempt + 1}/{heal_passes}: re-executing "
-                f"{len(post.orders)} residual leg(s)…[/yellow]"
+                f"{len(heal_orders)} residual leg(s)…[/yellow]"
             )
+            post.orders = heal_orders
             try:
-                _execute(b, post, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
+                ret = _execute(b, post, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
                 healed += 1
+                # Don't re-trade these on the next pass either, for the same reason.
+                heal_results = ret[2] if isinstance(ret, tuple) and len(ret) >= 3 else []
+                recent |= {r.get("ticker") for r in heal_results if _is_clean_send(r.get("status", "?"))}
             except Exception as e:
                 say(f"[red]self-heal execute failed: {e}[/red]")
                 break
