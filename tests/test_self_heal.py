@@ -80,3 +80,15 @@ def test_converged_first_pass_no_execute(monkeypatch):
     res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=True, heal_passes=1)
     assert res.ok is True
     assert calls["exec"] == 0       # already converged, nothing to heal
+
+
+def test_moc_run_never_self_heals(monkeypatch):
+    # An MOC order won't fill until the closing auction, so post-trade verify
+    # always sees "not converged" right after submission. Self-heal MUST NOT
+    # re-execute (it would place an immediate MARKET order on top of the resting
+    # MOC — the double-execution bug). Reports only, never re-trades.
+    calls = _patch(monkeypatch, verify_seq=[(_Res(False), _Post([1, 2]))], market="open")
+    res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=True, heal_passes=2, moc=True)
+    assert res.ok is False
+    assert calls["exec"] == 0       # MOC: never re-trades despite self_heal=True
+    assert calls["verify"] == 1     # single verify, no heal loop

@@ -4,6 +4,7 @@ Subcommands:
   login [--broker NAME]      — store creds in OS keychain (per-broker)
   status [--broker NAME]     — show NAV / positions / market status
   rebalance [--broker NAME]  — (default) paste CSV, preview, prompt, execute
+  liquidate [--broker NAME]  — flatten the account to cash via the limit-chase
   logout [--broker NAME]     — clear stored creds for one broker
   brokers                    — list supported and currently-configured brokers
   paper-reset                — reset the paper-broker book
@@ -739,6 +740,168 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
 
 @main.command()
 @_BROKER_OPT
+@click.option(
+    "--creds-file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Load credentials from a JSON or KEY=VALUE file (headless).",
+)
+@click.option("--dry-run", is_flag=True, help="Preview only — never sends orders.")
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirm prompt (auto-execute). Required for unattended runs.")
+@click.option("--only", default=None, help="Comma-separated tickers: liquidate ONLY these.")
+@click.option("--exclude", default=None, help="Comma-separated tickers to KEEP (do not liquidate).")
+@click.option(
+    "--aggression",
+    type=float,
+    default=0.0,
+    help="Chase price vs the mid: 0 pegs the mid (default); NEGATIVE is more "
+    "passive (rest above the mid on a sell — better price, slower fill); "
+    "POSITIVE crosses toward the touch (faster, worse price).",
+)
+@click.option("--retries", type=int, default=6, help="Limit-chase reprice attempts before the market mop-up. Default 6.")
+@click.option("--interval", type=float, default=8.0, help="Seconds to rest each limit rung waiting for a fill. Default 8.")
+@click.option("--pace", type=float, default=0.0, help="Seconds to wait between names — spread the flatten out. Default 0.")
+@click.option(
+    "--no-fallback",
+    is_flag=True,
+    help="Do NOT market mop-up the unfilled/fractional remainder (may leave dust unsold).",
+)
+@click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON result.")
+@click.pass_context
+def liquidate(
+    ctx: click.Context,
+    broker_opt: str | None,
+    creds_file: str | None,
+    dry_run: bool,
+    yes: bool,
+    only: str | None,
+    exclude: str | None,
+    aggression: float,
+    retries: int,
+    interval: float,
+    pace: float,
+    no_fallback: bool,
+    json_out: bool,
+) -> None:
+    """Flatten the account — sell every position to cash via the patient limit-chase.
+
+    Longs are SOLD, shorts BOUGHT to cover, largest first. Each line is worked as
+    a LIMIT pegged to the mid and chased, with a MARKET mop-up for the unfilled /
+    fractional remainder. RTH only for live execution; --dry-run previews any
+    time. Live execution needs confirmation (or --yes for unattended runs).
+    """
+    import time as _time
+
+    from . import liquidate as _liq
+
+    global _JSON
+    if json_out:
+        _JSON = True
+
+    if creds_file:
+        _load_creds_file_or_exit(creds_file)
+    broker_name = _resolve_broker_name(ctx, broker_opt)
+    broker = _load_broker(broker_name)
+
+    try:
+        positions = broker.positions()
+    except Exception as e:
+        _fail(f"could not fetch positions: {e}")
+
+    only_list = [t.strip() for t in only.split(",") if t.strip()] if only else None
+    excl_list = [t.strip() for t in exclude.split(",") if t.strip()] if exclude else None
+    plan = _liq.build_plan(positions, only=only_list, exclude=excl_list)
+
+    if not plan.orders:
+        if json_out:
+            print(
+                json.dumps(
+                    {"broker": broker.name, "account_id": broker.account_id, "orders": [], "note": "nothing to liquidate"}
+                )
+            )
+        else:
+            c.print("[yellow]Nothing to liquidate — no matching open positions.[/yellow]")
+        return
+
+    ms = market_status()
+
+    if not json_out:
+        c.print(f"\n[bold]{broker.name}[/bold] · account [bold]{broker.account_id}[/bold] · market [bold]{ms.status}[/bold]")
+        table = Table(show_header=True, header_style="bold", box=None)
+        table.add_column("#", justify="right")
+        table.add_column("Symbol")
+        table.add_column("Side")
+        table.add_column("Qty", justify="right")
+        table.add_column("Est. value", justify="right")
+        for i, o in enumerate(plan.orders, 1):
+            qty_str = f"{o.quantity:.4f}".rstrip("0").rstrip(".")
+            table.add_row(str(i), o.ticker, o.side.value, qty_str, f"${o.notional:,.0f}")
+        c.print(table)
+        c.print(f"[bold]{len(plan.orders)} positions[/bold] · gross ~[bold]${plan.gross:,.0f}[/bold] to liquidate")
+        if plan.skipped:
+            c.print(f"[dim]keeping: {', '.join(t for t, _ in plan.skipped)}[/dim]")
+
+    if not dry_run:
+        if ms.status != "open":
+            _fail(
+                f"market is {ms.status!r} — the liquidation chase + market mop-up are RTH-only. "
+                f"Re-run during regular hours, or use --dry-run to preview."
+            )
+        if not yes:
+            if not sys.stdin.isatty():
+                _fail("refusing to liquidate without --yes in a non-interactive run.")
+            if not Confirm.ask(
+                f"Liquidate {len(plan.orders)} positions (~${plan.gross:,.0f}) on {broker.name} {broker.account_id}?",
+                default=False,
+            ):
+                c.print("[yellow]Aborted — no orders sent.[/yellow]")
+                return
+
+    cfg = _liq.liquidation_config(
+        retries=retries, interval=interval, aggression=aggression, fallback_to_market=not no_fallback
+    )
+    results = _liq.run_liquidation(broker, plan, cfg, dry_run=dry_run, pace=pace, log=say, sleep=_time.sleep)
+
+    sent = sum(1 for r in results if _is_clean_send(r.get("status", "?")))
+    failed = len(results) - sent
+
+    remaining: dict = {}
+    if not dry_run:
+        try:
+            remaining = {t: p for t, p in broker.positions().items() if p.quantity != 0}
+        except Exception:
+            remaining = {}
+
+    if json_out:
+        print(
+            json.dumps(
+                {
+                    "broker": broker.name,
+                    "account_id": broker.account_id,
+                    "dry_run": dry_run,
+                    "market": ms.status,
+                    "planned": len(plan.orders),
+                    "sent": sent,
+                    "failed": failed,
+                    "results": results,
+                    "remaining_positions": [{"ticker": t, "quantity": str(p.quantity)} for t, p in remaining.items()],
+                },
+                default=str,
+            )
+        )
+        return
+
+    suffix = " (dry-run, no orders sent)" if dry_run else ""
+    c.print(f"\n[bold]Done.[/bold] {broker.name}: {sent} ok, {failed} failed{suffix}")
+    if not dry_run:
+        if remaining:
+            c.print(f"[yellow]Still holding {len(remaining)}: {', '.join(sorted(remaining))} — re-run to finish.[/yellow]")
+        else:
+            c.print("[green]Account is flat.[/green]")
+
+
+@main.command()
+@_BROKER_OPT
 @click.option("--dry-run", is_flag=True, help="Preview only — never sends orders.")
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirm prompt (auto-execute). Required for unattended runs.")
 @click.option("--threshold", default=None, type=float, help="Drift threshold (fraction of NAV). Default 0.04.")
@@ -1125,6 +1288,7 @@ def rebalance(
                 self_heal=not no_self_heal,
                 heal_passes=heal_passes,
                 order_type=order_type,
+                moc=moc,
                 chase_cfg=chase_cfg,
                 notify_url=notify_url,
                 tg_token=tg_token,
@@ -1204,6 +1368,7 @@ def rebalance(
             self_heal=not no_self_heal,
             heal_passes=heal_passes,
             order_type=order_type,
+            moc=moc,
             chase_cfg=chase_cfg,
             notify_url=notify_url,
             tg_token=tg_token,
@@ -1470,6 +1635,7 @@ def _post_trade_verify(
     self_heal=False,
     heal_passes=1,
     order_type="market",
+    moc=False,
     chase_cfg=None,
     notify_url=None,
     tg_token=None,
@@ -1486,6 +1652,15 @@ def _post_trade_verify(
     normal _execute path (so re-bought legs get their protective stops too). A leg that simply
     cannot fill (no liquidity / repeatedly rejected) stops after the cap and is reported 🔴.
     """
+    # MOC orders fill ONLY in the closing auction, so an immediate post-trade
+    # convergence check always shows the book "unconverged" and self-heal would
+    # re-execute the residual as a plain MARKET order that fills NOW — double-
+    # executing the rebalance (one immediate market fill + the resting MOC).
+    # Convergence is only meaningful after the close, so never self-heal a MOC run.
+    if moc and self_heal:
+        say("[dim]MOC run: self-heal disabled (MOC fills at the close; check convergence after the auction).[/dim]")
+        self_heal = False
+
     healed = 0
     res = None
     try:

@@ -10,6 +10,18 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-06-23
+
+### Added
+- **`liquidate` command** — flatten an account to cash via the patient limit-chase. Sells every long / buys back every short, largest position first, working each line as a LIMIT pegged to the mid (chased over rungs) with a MARKET mop-up for the unfilled / fractional remainder — captures the spread instead of crossing it. RTH-only for live execution; `--dry-run` previews any time. Knobs: `--only` / `--exclude`, `--aggression` (negative = more passive/better price), `--retries`, `--interval`, `--pace` (delay between names), `--no-fallback`, `--json`. Live execution requires confirmation or `--yes`. Resting protective stops on names being sold are cancelled first. New module `msts_trader/liquidate.py` (planner + runner) reuses the existing `chase` engine and broker adapter primitives.
+
+### Fixed
+- **MOC orders no longer double-execute (IBKR / any MOC broker).** A market-on-close order fills only in the closing auction, but the post-trade verify ran with self-heal enabled and re-checked convergence ~2s after submission. Seeing the book still "unconverged" (the MOC hadn't filled), self-heal re-executed the residual as a **plain MARKET order that filled immediately** — so each position got one immediate market fill *plus* the resting MOC. Self-heal is now disabled for MOC runs (convergence is only meaningful after the auction); a one-line note explains why. Affected IBKR, Alpaca, Schwab, and paper MOC runs.
+
+### Tests
+- `tests/test_liquidate.py`: planner (longs→SELL, shorts→BUY, largest-first, only/exclude, flat/fractional handling), runner fills, dry-run sends nothing, fractional remainder routes to the market mop-up, and config aggression/fallback wiring.
+- `tests/test_self_heal.py::test_moc_run_never_self_heals`: a MOC run with `self_heal=True` reports only and never re-executes.
+
 ## [0.24.4] — 2026-06-22
 
 ### Fixed
