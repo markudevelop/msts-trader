@@ -121,6 +121,51 @@ def test_rebalance_moc_accepted_on_paper(tmp_path, monkeypatch):
     assert r.exit_code == 0, r.output
 
 
+def test_moc_and_limit_chase_are_mutually_exclusive(monkeypatch):
+    # MOC fills in the closing auction; limit-chase works the order live now —
+    # combining them is incoherent and must be refused, not silently resolved.
+    import msts_trader.__main__ as cli
+
+    class _Stub:
+        name = "paper"
+        account_id = "ACC"
+        supports_moc = True
+
+    monkeypatch.setattr(cli, "_load_broker", lambda name: _Stub())
+    monkeypatch.setattr(
+        cli, "market_status", lambda: type("MS", (), {"status": "open", "next_open": None, "minutes_to_close": 120})()
+    )
+    r = CliRunner().invoke(
+        main,
+        ["--broker", "paper", "rebalance", "--moc", "--order-type", "limit-chase", "--dry-run"],
+        input="ticker,weight\nSPY,1.0\n",
+    )
+    assert r.exit_code != 0
+    assert "mutually exclusive" in r.output.lower()
+
+
+def test_moc_refused_too_close_to_the_close(monkeypatch):
+    # Exchanges stop accepting MOC ~15:50 ET; the CLI must refuse a live MOC run
+    # inside the cutoff rather than fire orders that bounce at the broker.
+    import msts_trader.__main__ as cli
+
+    class _Stub:
+        name = "paper"
+        account_id = "ACC"
+        supports_moc = True
+
+    monkeypatch.setattr(cli, "_load_broker", lambda name: _Stub())
+    monkeypatch.setattr(
+        cli, "market_status", lambda: type("MS", (), {"status": "open", "next_open": None, "minutes_to_close": 5})()
+    )
+    # NOT --dry-run: the cutoff guard intentionally applies only to a live run.
+    r = CliRunner().invoke(
+        main, ["--broker", "paper", "rebalance", "--moc", "--yes"], input="ticker,weight\nSPY,1.0\n"
+    )
+    assert r.exit_code != 0
+    assert "moc" in r.output.lower() and "close" in r.output.lower()
+
+
 def test_login_schwab_reauth_clears_cached_token(tmp_path, monkeypatch):
     # --reauth must delete the cached token file so the browser flow re-runs
     # (the weekend refresh-token reset).

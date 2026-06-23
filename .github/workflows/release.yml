@@ -72,24 +72,19 @@ jobs:
         with:
           name: dist
           path: dist/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
       - name: Extract changelog section for this tag
         id: notes
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          # Pull the section for this version out of CHANGELOG.md (between
-          # its heading and the next "## [" heading). Fall back to a generic
-          # message if the section isn't found.
-          if [ -f CHANGELOG.md ]; then
-            awk -v ver="## [$VERSION]" '
-              $0 ~ ver {capture=1; next}
-              /^## \[/ {if (capture) exit}
-              capture {print}
-            ' CHANGELOG.md > _notes.md
-          fi
-          if [ ! -s _notes.md ]; then
-            echo "See CHANGELOG.md for details." > _notes.md
-          fi
+          # Literal-heading extraction (import-tested in tests/test_changelog.py).
+          # Replaces the old inline awk, which fed `## [x.y.z]` to a regex match —
+          # the brackets were read as a character class, so it never matched and
+          # every release silently fell back to the generic note.
+          python -m msts_trader.changelog "$GITHUB_REF_NAME" CHANGELOG.md > _notes.md
           echo "notes_file=_notes.md" >> "$GITHUB_OUTPUT"
+          echo "--- release notes preview ---"; cat _notes.md
       - name: Create Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,8 +93,13 @@ jobs:
             echo "Release $GITHUB_REF_NAME already exists — uploading assets (idempotent)"
             gh release upload "$GITHUB_REF_NAME" dist/* --clobber || true
           else
+            # --notes-file (our CHANGELOG section) is PREPENDED to --generate-notes,
+            # which appends GitHub's "What's Changed" — clickable commit/PR links +
+            # a "Full Changelog: prev...this" compare link — so every release is
+            # navigable to its commits, not just a static blurb.
             gh release create "$GITHUB_REF_NAME" \
               --title "$GITHUB_REF_NAME" \
               --notes-file "${{ steps.notes.outputs.notes_file }}" \
+              --generate-notes \
               dist/*
           fi

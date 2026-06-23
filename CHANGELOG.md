@@ -10,6 +10,14 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Fixed
+- **Release notes were always the generic fallback.** The release workflow extracted the CHANGELOG section with an inline `awk` that fed `## [x.y.z]` to a regex match — the brackets were read as a character class, so it never matched and every GitHub release showed "See CHANGELOG.md for details." instead of the real notes. Extraction moved to an import-tested helper (`msts_trader/changelog.py`, literal-heading match) and the release now also runs `--generate-notes`, so each release shows the changelog **plus** clickable commit/PR links and a "Full Changelog" compare link.
+
+### Tests / robustness
+- `tests/test_changelog.py`: release-notes extraction (bracketed heading, tag form, missing/blank version, last-section-to-EOF, and a guard that the repo's own CHANGELOG yields non-empty notes for the current version).
+- `tests/test_cli.py`: MOC + limit-chase mutual-exclusion is refused; a live MOC run inside the ~15:50 ET cutoff is refused. (Companion to the MOC self-heal fix in 0.25.0 — locks the guards so they can't regress.)
+- `msts_trader/changelog` CLI writes UTF-8 bytes so the em-dashes/arrows in the changelog can't crash it on a legacy Windows console.
+
 ## [0.25.0] — 2026-06-23
 
 ### Added
