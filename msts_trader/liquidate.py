@@ -70,9 +70,7 @@ def build_plan(
             continue
         side = Side.SELL if qty > 0 else Side.BUY
         notional = abs(Decimal(str(p.market_value)))
-        plan.orders.append(
-            Order(ticker=tkr, side=side, quantity=abs(qty), estimated_price=p.price, notional=notional)
-        )
+        plan.orders.append(Order(ticker=tkr, side=side, quantity=abs(qty), estimated_price=p.price, notional=notional))
         plan.gross += notional
 
     plan.orders.sort(key=lambda o: -(o.notional or Decimal(0)))

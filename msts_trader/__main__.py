@@ -758,9 +758,15 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
     "passive (rest above the mid on a sell — better price, slower fill); "
     "POSITIVE crosses toward the touch (faster, worse price).",
 )
-@click.option("--retries", type=int, default=6, help="Limit-chase reprice attempts before the market mop-up. Default 6.")
-@click.option("--interval", type=float, default=8.0, help="Seconds to rest each limit rung waiting for a fill. Default 8.")
-@click.option("--pace", type=float, default=0.0, help="Seconds to wait between names — spread the flatten out. Default 0.")
+@click.option(
+    "--retries", type=int, default=6, help="Limit-chase reprice attempts before the market mop-up. Default 6."
+)
+@click.option(
+    "--interval", type=float, default=8.0, help="Seconds to rest each limit rung waiting for a fill. Default 8."
+)
+@click.option(
+    "--pace", type=float, default=0.0, help="Seconds to wait between names — spread the flatten out. Default 0."
+)
 @click.option(
     "--no-fallback",
     is_flag=True,
@@ -816,7 +822,12 @@ def liquidate(
         if json_out:
             print(
                 json.dumps(
-                    {"broker": broker.name, "account_id": broker.account_id, "orders": [], "note": "nothing to liquidate"}
+                    {
+                        "broker": broker.name,
+                        "account_id": broker.account_id,
+                        "orders": [],
+                        "note": "nothing to liquidate",
+                    }
                 )
             )
         else:
@@ -826,7 +837,9 @@ def liquidate(
     ms = market_status()
 
     if not json_out:
-        c.print(f"\n[bold]{broker.name}[/bold] · account [bold]{broker.account_id}[/bold] · market [bold]{ms.status}[/bold]")
+        c.print(
+            f"\n[bold]{broker.name}[/bold] · account [bold]{broker.account_id}[/bold] · market [bold]{ms.status}[/bold]"
+        )
         table = Table(show_header=True, header_style="bold", box=None)
         table.add_column("#", justify="right")
         table.add_column("Symbol")
@@ -895,7 +908,9 @@ def liquidate(
     c.print(f"\n[bold]Done.[/bold] {broker.name}: {sent} ok, {failed} failed{suffix}")
     if not dry_run:
         if remaining:
-            c.print(f"[yellow]Still holding {len(remaining)}: {', '.join(sorted(remaining))} — re-run to finish.[/yellow]")
+            c.print(
+                f"[yellow]Still holding {len(remaining)}: {', '.join(sorted(remaining))} — re-run to finish.[/yellow]"
+            )
         else:
             c.print("[green]Account is flat.[/green]")
 
