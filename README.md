@@ -204,9 +204,11 @@ msts-trader login --broker schwab
 
 Requires a Schwab Developer app (https://developer.schwab.com) with the
 callback URL set to `https://127.0.0.1:8182`. msts-trader pops a
-browser window, you authorize, and the token JSON is written to
-`~/.msts-trader/schwab_token.json`. Schwab refresh tokens expire every
-7 days — re-run `msts-trader login --broker schwab` when that happens.
+browser window, you authorize, and the token JSON is stored in your OS
+keychain. Legacy plaintext token files at
+`~/.msts-trader/schwab_token.json` are migrated into the keychain and
+removed on next Schwab use. Schwab refresh tokens expire every 7 days
+— re-run `msts-trader login --broker schwab` when that happens.
 
 > **The callback URL must match your app's registration EXACTLY** —
 > character for character, trailing slash included. Schwab treats

@@ -58,6 +58,15 @@ def test_clear_removes_creds():
         keychain.load("alpaca")
 
 
+def test_secret_roundtrip_and_clear():
+    from msts_trader import keychain
+
+    keychain.save_secret("schwab_oauth_token", '{"token": "x"}')
+    assert keychain.load_secret("schwab_oauth_token") == '{"token": "x"}'
+    keychain.clear_secret("schwab_oauth_token")
+    assert keychain.load_secret("schwab_oauth_token") is None
+
+
 def test_default_broker_roundtrip():
     from msts_trader import keychain
 

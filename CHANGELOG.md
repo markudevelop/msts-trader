@@ -10,6 +10,15 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.25.3] — 2026-06-28
+
+### Fixed
+- **Schwab OAuth tokens now live in the OS keychain.** The adapter uses
+  schwab-py's token read/write callback API instead of leaving
+  `~/.msts-trader/schwab_token.json` as durable plaintext on disk. Existing
+  legacy token files are migrated into the keychain and removed on next Schwab
+  use; `--reauth` and `logout --broker schwab` clear the keychain token too.
+
 ## [0.25.2] — 2026-06-23
 
 ### Fixed
@@ -1156,7 +1165,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.25.2...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.25.3...HEAD
+[0.25.3]: https://github.com/markudevelop/msts-trader/compare/v0.25.2...v0.25.3
 [0.25.2]: https://github.com/markudevelop/msts-trader/compare/v0.25.1...v0.25.2
 [0.25.1]: https://github.com/markudevelop/msts-trader/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/markudevelop/msts-trader/compare/v0.24.4...v0.25.0

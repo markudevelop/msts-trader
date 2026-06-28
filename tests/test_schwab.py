@@ -1,6 +1,7 @@
 """Schwab adapter parsing — mock the schwab-py client (no network)."""
 from __future__ import annotations
 
+import json
 import pytest
 
 pytest.importorskip("schwab")  # optional dep — skip when the SDK is not installed
@@ -8,6 +9,7 @@ pytest.importorskip("schwab")  # optional dep — skip when the SDK is not insta
 from decimal import Decimal
 from types import SimpleNamespace
 
+import msts_trader.brokers.schwab as schwab_mod
 from msts_trader.brokers.schwab import Schwab
 
 
@@ -81,6 +83,64 @@ def test_quote_price_priority():
 
 def test_quote_empty():
     assert _broker().quote([]) == {}
+
+
+def test_legacy_token_file_migrates_to_keychain(tmp_path, monkeypatch):
+    store = {}
+
+    monkeypatch.setattr(schwab_mod.keychain, "load_secret", lambda name: store.get(name))
+    monkeypatch.setattr(schwab_mod.keychain, "save_secret", lambda name, value: store.__setitem__(name, value))
+    legacy = tmp_path / "schwab_token.json"
+    payload = {"creation_timestamp": 123, "token": {"access_token": "A", "refresh_token": "R"}}
+    legacy.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(schwab_mod, "TOKEN_PATH", legacy)
+
+    assert schwab_mod._load_stored_token() == payload
+    assert json.loads(store[schwab_mod.TOKEN_KEY]) == payload
+    assert not legacy.exists()
+
+
+def test_schwab_init_loads_keychain_token_without_persistent_file(tmp_path, monkeypatch):
+    store = {
+        schwab_mod.TOKEN_KEY: json.dumps(
+            {"creation_timestamp": 123, "token": {"access_token": "A", "refresh_token": "R"}}
+        )
+    }
+    captured = {}
+
+    monkeypatch.setattr(schwab_mod.keychain, "load_secret", lambda name: store.get(name))
+    monkeypatch.setattr(schwab_mod.keychain, "save_secret", lambda name, value: store.__setitem__(name, value))
+    monkeypatch.setattr(schwab_mod, "TOKEN_PATH", tmp_path / "schwab_token.json")
+
+    class _Client:
+        def token_age(self):
+            return 0
+
+        def get_account_numbers(self):
+            return _Resp([{"hashValue": "HASH123456"}])
+
+    def fake_client_from_access_functions(api_key, app_secret, token_read_func, token_write_func, enforce_enums=True):
+        captured["api_key"] = api_key
+        captured["app_secret"] = app_secret
+        captured["token"] = token_read_func()
+        captured["enforce_enums"] = enforce_enums
+        token_write_func({"creation_timestamp": 123, "token": {"access_token": "NEW", "refresh_token": "R"}})
+        return _Client()
+
+    def fake_login_flow(**kwargs):
+        raise AssertionError("stored keychain token should avoid browser login")
+
+    monkeypatch.setattr(schwab_mod, "client_from_access_functions", fake_client_from_access_functions)
+    monkeypatch.setattr(schwab_mod, "client_from_login_flow", fake_login_flow)
+
+    b = Schwab("app-key", "app-secret")
+    assert b.account_hash == "HASH123456"
+    assert captured["api_key"] == "app-key"
+    assert captured["app_secret"] == "app-secret"
+    assert captured["token"]["token"]["access_token"] == "A"
+    assert captured["enforce_enums"] is False
+    assert json.loads(store[schwab_mod.TOKEN_KEY])["token"]["access_token"] == "NEW"
+    assert not schwab_mod.TOKEN_PATH.exists()
 
 
 # ----- place_market -----

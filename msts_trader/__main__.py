@@ -339,13 +339,14 @@ def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None, re
         c.print(f"[red]unknown broker {broker!r}[/red]")
         sys.exit(1)
     if reauth and broker == "schwab":
-        # Schwab reuses the on-disk token file when present; deleting it is
+        # Schwab reuses the cached OAuth token when present; deleting it is
         # what forces the full browser flow (and a fresh 7-day refresh token).
-        from .brokers.schwab import clear_token, has_token, token_path
+        from .brokers.schwab import clear_token, has_token, token_location
 
         if has_token():
+            location = token_location()
             clear_token()
-            c.print(f"[yellow]cleared cached Schwab token ({token_path()}) — the browser flow will run fresh.[/yellow]")
+            c.print(f"[yellow]cleared cached Schwab token ({location}) - the browser flow will run fresh.[/yellow]")
         else:
             c.print("[dim]no cached Schwab token — the browser flow runs anyway.[/dim]")
     flow()
@@ -623,9 +624,15 @@ def logout(ctx: click.Context, broker_opt: str | None) -> None:
     if not broker:
         broker = _prompt_choice("broker to forget", choices=list(SUPPORTED), default=SUPPORTED[0])
     keychain.clear(broker)
+    cleared_extra = ""
+    if broker == "schwab":
+        from .brokers.schwab import clear_token
+
+        clear_token()
+        cleared_extra = " and cached token"
     if keychain.get_default() == broker:
         keychain.clear_default()
-    c.print(f"[green]✓ creds cleared for {broker}.[/green]")
+    c.print(f"[green]✓ creds{cleared_extra} cleared for {broker}.[/green]")
 
 
 @main.command()

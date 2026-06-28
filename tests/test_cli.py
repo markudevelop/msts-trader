@@ -167,18 +167,40 @@ def test_moc_refused_too_close_to_the_close(monkeypatch):
 
 
 def test_login_schwab_reauth_clears_cached_token(tmp_path, monkeypatch):
-    # --reauth must delete the cached token file so the browser flow re-runs
-    # (the weekend refresh-token reset).
+    # --reauth must delete the cached token so the browser flow re-runs
+    # (the weekend refresh-token reset). It clears both the keychain-backed
+    # cache and any legacy plaintext file.
     import msts_trader.__main__ as cli
     import msts_trader.brokers.schwab as schwab_mod
+    from msts_trader import keychain
 
     tok = tmp_path / "schwab_token.json"
     tok.write_text("{}")
     monkeypatch.setattr(schwab_mod, "TOKEN_PATH", tok)
+    keychain.save_secret(schwab_mod.TOKEN_KEY, '{"creation_timestamp": 0, "token": {}}')
     monkeypatch.setitem(cli._LOGIN_FLOWS, "schwab", lambda: None)  # skip the real OAuth flow
     r = CliRunner().invoke(main, ["login", "--broker", "schwab", "--reauth"])
     assert r.exit_code == 0, r.output
     assert "cleared cached schwab token" in r.output.lower()
+    assert "os keychain" in r.output.lower()
+    assert keychain.load_secret(schwab_mod.TOKEN_KEY) is None
+    assert not tok.exists()
+
+
+def test_logout_schwab_clears_cached_token(tmp_path, monkeypatch):
+    import msts_trader.brokers.schwab as schwab_mod
+    from msts_trader import keychain
+
+    tok = tmp_path / "schwab_token.json"
+    tok.write_text("{}")
+    monkeypatch.setattr(schwab_mod, "TOKEN_PATH", tok)
+    keychain.save("schwab", {"app_key": "ak", "app_secret": "as", "callback_url": "https://127.0.0.1:8182"})
+    keychain.save_secret(schwab_mod.TOKEN_KEY, '{"creation_timestamp": 0, "token": {}}')
+
+    r = CliRunner().invoke(main, ["logout", "--broker", "schwab"])
+    assert r.exit_code == 0, r.output
+    assert "cached token" in r.output.lower()
+    assert keychain.load_secret(schwab_mod.TOKEN_KEY) is None
     assert not tok.exists()
 
 

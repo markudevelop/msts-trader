@@ -13,6 +13,7 @@ import keyring
 
 SERVICE = "msts-trader"
 DEFAULT_KEY = "default_broker"
+SECRET_PREFIX = "secret:"
 
 
 class CredsMissingError(RuntimeError):
@@ -35,6 +36,21 @@ def load(broker: str) -> dict:
 def clear(broker: str) -> None:
     try:
         keyring.delete_password(SERVICE, f"creds:{broker}")
+    except keyring.errors.PasswordDeleteError:
+        pass
+
+
+def save_secret(name: str, value: str) -> None:
+    keyring.set_password(SERVICE, f"{SECRET_PREFIX}{name}", value)
+
+
+def load_secret(name: str) -> str | None:
+    return keyring.get_password(SERVICE, f"{SECRET_PREFIX}{name}")
+
+
+def clear_secret(name: str) -> None:
+    try:
+        keyring.delete_password(SERVICE, f"{SECRET_PREFIX}{name}")
     except keyring.errors.PasswordDeleteError:
         pass
 

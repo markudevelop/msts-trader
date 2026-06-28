@@ -3,8 +3,8 @@
 Built on https://github.com/alexgolec/schwab-py (MIT-licensed). Schwab's
 Trader API uses OAuth2 with a 30-minute access token + a refresh token
 that expires every 7 days, so subscribers must re-run the browser auth
-flow weekly. Once a token file exists on disk, day-to-day rebalances
-just read it.
+flow weekly. Once a token exists in the OS keychain, day-to-day
+rebalances just read it.
 
 One-time setup
 --------------
@@ -18,25 +18,29 @@ One-time setup
 3. Copy the **app key** and **app secret** from the Schwab portal.
 4. Run `msts-trader login --broker schwab` — a browser window opens,
    you authorize, and the resulting token JSON is stored in your OS
-   keychain (the token file path lives in the keychain blob too).
+   keychain.
 
-The token JSON itself is written to
-`~/.msts-trader/schwab_token.json` because schwab-py expects a file.
-That file is gitignore-equivalent (~/.msts-trader is per-user).
+Older msts-trader releases wrote the token to
+`~/.msts-trader/schwab_token.json` because schwab-py expects file-like
+token persistence by default. This adapter now uses schwab-py's token
+read/write callback API instead; any legacy token file is migrated into
+the keychain and then removed on next Schwab use.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
 
+from .. import keychain
 from ..models import Order, Position, Side
 from .base import Balances, BrokerError, first_present
 
 try:
-    from schwab.auth import client_from_token_file, easy_client  # type: ignore
+    from schwab.auth import client_from_access_functions, client_from_login_flow  # type: ignore
     from schwab.orders.equities import (  # type: ignore
         equity_buy_limit,
         equity_buy_market,
@@ -48,7 +52,9 @@ try:
 except ImportError:
     _SCHWAB_OK = False
 
-TOKEN_PATH = Path(os.path.expanduser("~/.msts-trader/schwab_token.json"))
+TOKEN_KEY = "schwab_oauth_token"
+TOKEN_PATH = Path(os.path.expanduser("~/.msts-trader/schwab_token.json"))  # legacy plaintext cache
+TOKEN_MAX_AGE_SECONDS = int(60 * 60 * 24 * 6.5)
 
 
 class Schwab:
@@ -69,22 +75,26 @@ class Schwab:
     ):
         if not _SCHWAB_OK:
             raise BrokerError("schwab-py not installed. Run: pip install schwab-py")
-        TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
         # enforce_enums=False so we can pass plain strings like fields=["positions"]
         # instead of schwab-py's Client.Account.Fields enums. Without this the
         # default (enforce_enums=True) rejects the string and balances()/
         # positions() fail on the first real call.
-        if TOKEN_PATH.exists():
-            self._client = client_from_token_file(str(TOKEN_PATH), app_key, app_secret, enforce_enums=False)
-        else:
-            # easy_client opens a browser and runs the local callback listener
-            self._client = easy_client(
+        client = _client_from_stored_token(app_key, app_secret)
+        if client is None:
+            # client_from_login_flow opens a browser and runs the local callback
+            # listener. token_path is retained only for schwab-py's messages;
+            # token_write_func keeps the durable token in the OS keychain.
+            self._client = client_from_login_flow(
                 api_key=app_key,
                 app_secret=app_secret,
                 callback_url=callback_url,
                 token_path=str(TOKEN_PATH),
+                token_write_func=_write_token,
                 enforce_enums=False,
             )
+            _delete_legacy_token_file()
+        else:
+            self._client = client
         self._account_hash = account_hash or self._discover_account_hash()
         self.account_hash = self._account_hash  # stable public attr for login / creds reuse
         self.account_id = self._account_hash[:8] + "…"  # display-safe truncation
@@ -336,8 +346,94 @@ class Schwab:
             return {"status": "error", "reason": str(e), "order_id": order_id}
 
 
+def _read_token() -> dict | None:
+    raw = keychain.load_secret(TOKEN_KEY)
+    if not raw:
+        return None
+    try:
+        token = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise BrokerError(
+            "stored Schwab token is not valid JSON; run `msts-trader login --broker schwab --reauth`"
+        ) from e
+    if not isinstance(token, dict):
+        raise BrokerError("stored Schwab token is invalid; run `msts-trader login --broker schwab --reauth`")
+    return token
+
+
+def _write_token(token: dict, *args, **kwargs) -> None:
+    keychain.save_secret(TOKEN_KEY, json.dumps(token))
+    _delete_legacy_token_file()
+
+
+def _delete_legacy_token_file(*, strict: bool = False) -> None:
+    try:
+        TOKEN_PATH.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        if strict:
+            raise BrokerError(
+                f"stored Schwab token in the OS keychain but could not remove legacy plaintext file {TOKEN_PATH}; "
+                "delete that file manually"
+            ) from e
+        # The keychain write already succeeded. Do not break an otherwise good
+        # session if the old plaintext file cannot be removed right now.
+        pass
+
+
+def _migrate_legacy_token_file() -> dict | None:
+    if not TOKEN_PATH.exists():
+        return None
+    try:
+        raw = TOKEN_PATH.read_text(encoding="utf-8")
+        token = json.loads(raw)
+    except Exception as e:
+        raise BrokerError(
+            f"could not read legacy Schwab token file {TOKEN_PATH}; "
+            "delete it or re-run `msts-trader login --broker schwab --reauth`"
+        ) from e
+    if not isinstance(token, dict):
+        raise BrokerError(
+            f"legacy Schwab token file {TOKEN_PATH} is invalid; "
+            "delete it or re-run `msts-trader login --broker schwab --reauth`"
+        )
+    keychain.save_secret(TOKEN_KEY, json.dumps(token))
+    _delete_legacy_token_file(strict=True)
+    return token
+
+
+def _load_stored_token() -> dict | None:
+    return _read_token() or _migrate_legacy_token_file()
+
+
+def _client_from_stored_token(app_key: str, app_secret: str):
+    token = _load_stored_token()
+    if token is None:
+        return None
+    client = client_from_access_functions(
+        app_key,
+        app_secret,
+        lambda: token,
+        _write_token,
+        enforce_enums=False,
+    )
+    if TOKEN_MAX_AGE_SECONDS > 0 and client.token_age() >= TOKEN_MAX_AGE_SECONDS:
+        clear_token()
+        return None
+    return client
+
+
 def has_token() -> bool:
-    return TOKEN_PATH.exists()
+    return bool(keychain.load_secret(TOKEN_KEY)) or TOKEN_PATH.exists()
+
+
+def token_location() -> str:
+    if keychain.load_secret(TOKEN_KEY):
+        return f"OS keychain ({keychain.SERVICE}:{keychain.SECRET_PREFIX}{TOKEN_KEY})"
+    if TOKEN_PATH.exists():
+        return str(TOKEN_PATH)
+    return f"OS keychain ({keychain.SERVICE}:{keychain.SECRET_PREFIX}{TOKEN_KEY})"
 
 
 def token_path() -> str:
@@ -345,6 +441,7 @@ def token_path() -> str:
 
 
 def clear_token() -> None:
+    keychain.clear_secret(TOKEN_KEY)
     try:
         TOKEN_PATH.unlink()
     except FileNotFoundError:
