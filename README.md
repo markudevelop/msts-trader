@@ -229,6 +229,12 @@ on a Saturday or Sunday to force a fresh browser authorization and
 restart the 7-day clock, guaranteeing auth works through the whole
 trading week.
 
+After the first successful Schwab login, the app key, app secret, callback
+URL, account hash, and OAuth token are all stored in your OS keychain. You can
+delete the original `--creds-file`; future `login --broker schwab --reauth`
+runs reuse those stored app credentials and only refresh the Schwab OAuth
+token.
+
 ### Paper (offline simulator)
 
 ```bash

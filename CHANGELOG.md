@@ -10,6 +10,15 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.25.4] — 2026-06-29
+
+### Fixed
+- **Schwab reauth now reuses stored app credentials.** After an initial
+  `login --broker schwab --creds-file ...`, users can delete the creds file;
+  future `login --broker schwab --reauth` runs pull the app key, app secret,
+  callback URL, and account hash from the OS keychain instead of prompting
+  again.
+
 ## [0.25.3] — 2026-06-28
 
 ### Fixed
@@ -1165,7 +1174,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.25.3...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.25.4...HEAD
+[0.25.4]: https://github.com/markudevelop/msts-trader/compare/v0.25.3...v0.25.4
 [0.25.3]: https://github.com/markudevelop/msts-trader/compare/v0.25.2...v0.25.3
 [0.25.2]: https://github.com/markudevelop/msts-trader/compare/v0.25.1...v0.25.2
 [0.25.1]: https://github.com/markudevelop/msts-trader/compare/v0.25.0...v0.25.1

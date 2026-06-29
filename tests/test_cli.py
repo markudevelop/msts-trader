@@ -187,6 +187,63 @@ def test_login_schwab_reauth_clears_cached_token(tmp_path, monkeypatch):
     assert not tok.exists()
 
 
+def test_login_schwab_reauth_reuses_stored_app_creds(tmp_path, monkeypatch):
+    from decimal import Decimal
+
+    import msts_trader.__main__ as cli
+    import msts_trader.brokers.schwab as schwab_mod
+    from msts_trader import keychain
+    from msts_trader.brokers.base import Balances
+
+    tok = tmp_path / "schwab_token.json"
+    monkeypatch.setattr(schwab_mod, "TOKEN_PATH", tok)
+    keychain.save(
+        "schwab",
+        {
+            "app_key": "stored-key",
+            "app_secret": "stored-secret",
+            "callback_url": "https://127.0.0.1:9999/",
+            "account_hash": "HASH123456",
+        },
+    )
+    keychain.save_secret(schwab_mod.TOKEN_KEY, '{"creation_timestamp": 0, "token": {}}')
+
+    def fail_prompt(*args, **kwargs):
+        raise AssertionError("stored Schwab creds should avoid prompting")
+
+    captured = {}
+
+    class _SchwabStub:
+        account_hash = "HASH123456"
+        account_id = "HASH1234..."
+
+        def balances(self):
+            return Balances(nav=Decimal("1000"), cash=Decimal("1000"), buying_power=Decimal("1000"))
+
+    def fake_make(name, **creds):
+        captured["name"] = name
+        captured["creds"] = creds
+        return _SchwabStub()
+
+    monkeypatch.setattr(cli, "ask_secret", fail_prompt)
+    monkeypatch.setattr(cli, "ask_text", fail_prompt)
+    monkeypatch.setattr(cli, "make", fake_make)
+
+    r = CliRunner().invoke(main, ["login", "--broker", "schwab", "--reauth"])
+    assert r.exit_code == 0, r.output
+    assert "using stored schwab app credentials" in r.output.lower()
+    assert captured == {
+        "name": "schwab",
+        "creds": {
+            "app_key": "stored-key",
+            "app_secret": "stored-secret",
+            "callback_url": "https://127.0.0.1:9999/",
+            "account_hash": "HASH123456",
+        },
+    }
+    assert keychain.load_secret(schwab_mod.TOKEN_KEY) is None
+
+
 def test_logout_schwab_clears_cached_token(tmp_path, monkeypatch):
     import msts_trader.brokers.schwab as schwab_mod
     from msts_trader import keychain

@@ -175,6 +175,13 @@ def _load_creds_file_or_exit(path: str) -> None:
     c.print(f"[green]✓ loaded {len(keys)} value(s) from {path}[/green] [dim]({escape(names)})[/dim]")
 
 
+def _stored_creds_or_empty(broker: str) -> dict:
+    try:
+        return keychain.load(broker)
+    except keychain.CredsMissingError:
+        return {}
+
+
 def _fetch_url_or_exit(url: str) -> str:
     """Fetch CSV text from a URL using the stdlib (no extra dependency)."""
     import urllib.request
@@ -528,15 +535,32 @@ def _login_schwab() -> None:
             border_style="cyan",
         )
     )
-    app_key = ask_secret("app key", env_var="SCHWAB_APP_KEY")
-    app_secret = ask_secret("app secret", env_var="SCHWAB_APP_SECRET")
-    callback_url = env_value("SCHWAB_CALLBACK_URL") or ask_text(
+    stored = _stored_creds_or_empty("schwab")
+    env_app_key = env_value("SCHWAB_APP_KEY")
+    env_app_secret = env_value("SCHWAB_APP_SECRET")
+    app_key = ask_secret("app key", env_var="SCHWAB_APP_KEY") if env_app_key else stored.get("app_key")
+    app_secret = ask_secret("app secret", env_var="SCHWAB_APP_SECRET") if env_app_secret else stored.get("app_secret")
+    callback_url = env_value("SCHWAB_CALLBACK_URL") or stored.get("callback_url")
+    account_hash = env_value("SCHWAB_ACCOUNT_HASH") or stored.get("account_hash")
+    if (app_key and app_secret) and (not env_app_key or not env_app_secret):
+        c.print("[dim]using stored Schwab app credentials from the OS keychain.[/dim]")
+    if not app_key:
+        app_key = ask_secret("app key", env_var="SCHWAB_APP_KEY")
+    if not app_secret:
+        app_secret = ask_secret("app secret", env_var="SCHWAB_APP_SECRET")
+    callback_url = callback_url or ask_text(
         "callback url (must EXACTLY match your app's registered callback)",
         default="https://127.0.0.1:8182",
     )
 
     try:
-        b = make("schwab", app_key=app_key, app_secret=app_secret, callback_url=callback_url)
+        b = make(
+            "schwab",
+            app_key=app_key,
+            app_secret=app_secret,
+            callback_url=callback_url,
+            account_hash=account_hash,
+        )
         bal = b.balances()
     except Exception as e:
         c.print(f"[red]✗ {escape(explain_login_error('schwab', e))}[/red]")
