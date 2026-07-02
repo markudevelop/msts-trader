@@ -1,4 +1,5 @@
 """IBKR read-path parsing — faked ib_insync socket (no live connection)."""
+
 from __future__ import annotations
 
 import pytest
@@ -45,12 +46,14 @@ def _row(tag, value):
 
 
 def test_balances():
-    b = _ibkr(summary=[
-        _row("NetLiquidation", "100000"),
-        _row("TotalCashValue", "25000"),
-        _row("BuyingPower", "400000"),
-        _row("Junk", "not-a-number"),  # skipped, no crash
-    ])
+    b = _ibkr(
+        summary=[
+            _row("NetLiquidation", "100000"),
+            _row("TotalCashValue", "25000"),
+            _row("BuyingPower", "400000"),
+            _row("Junk", "not-a-number"),  # skipped, no crash
+        ]
+    )
     bal = b.balances()
     assert bal.nav == Decimal("100000")
     assert bal.cash == Decimal("25000")
@@ -60,7 +63,9 @@ def test_balances():
 def test_positions_filters_non_stk_and_zero():
     positions = [
         SimpleNamespace(contract=SimpleNamespace(secType="STK", symbol="SPY"), position=10, avgCost=500),
-        SimpleNamespace(contract=SimpleNamespace(secType="OPT", symbol="SPY  240..."), position=1, avgCost=2),  # non-STK
+        SimpleNamespace(
+            contract=SimpleNamespace(secType="OPT", symbol="SPY  240..."), position=1, avgCost=2
+        ),  # non-STK
         SimpleNamespace(contract=SimpleNamespace(secType="STK", symbol="FLAT"), position=0, avgCost=0),  # zero
         SimpleNamespace(contract=SimpleNamespace(secType="STK", symbol="TSLA"), position=-4, avgCost=395),  # short kept
     ]
@@ -79,8 +84,8 @@ def _ticker(sym, **fields):
 
 def test_quote_prefers_last_then_close_then_mid():
     tickers = [
-        _ticker("SPY", last=500.0, close=499.0, bid=499.0, ask=501.0),         # last wins
-        _ticker("QQQ", last=float("nan"), close=400.0, bid=0, ask=0),          # close
+        _ticker("SPY", last=500.0, close=499.0, bid=499.0, ask=501.0),  # last wins
+        _ticker("QQQ", last=float("nan"), close=400.0, bid=0, ask=0),  # close
         _ticker("IWM", last=float("nan"), close=float("nan"), bid=200.0, ask=202.0),  # midpoint 201
     ]
     out = _ibkr(tickers=tickers).quote(["SPY", "QQQ", "IWM"])
@@ -105,10 +110,13 @@ def test_place_market_moc_builds_moc_order():
 
     captured = {}
     b = _ibkr()
-    b._ib.placeOrder = lambda ct, o: captured.update(order=o) or SimpleNamespace(
-        orderStatus=SimpleNamespace(status="Submitted"),
-        order=SimpleNamespace(permId="77", orderId=1),
-        log=[],
+    b._ib.placeOrder = lambda ct, o: (
+        captured.update(order=o)
+        or SimpleNamespace(
+            orderStatus=SimpleNamespace(status="Submitted"),
+            order=SimpleNamespace(permId="77", orderId=1),
+            log=[],
+        )
     )
     b._ib.sleep = lambda s: None
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10.7"), moc=True))
@@ -129,10 +137,13 @@ def test_place_market_without_moc_stays_mkt():
 
     captured = {}
     b = _ibkr()
-    b._ib.placeOrder = lambda ct, o: captured.update(order=o) or SimpleNamespace(
-        orderStatus=SimpleNamespace(status="Submitted"),
-        order=SimpleNamespace(permId="78", orderId=2),
-        log=[],
+    b._ib.placeOrder = lambda ct, o: (
+        captured.update(order=o)
+        or SimpleNamespace(
+            orderStatus=SimpleNamespace(status="Submitted"),
+            order=SimpleNamespace(permId="78", orderId=2),
+            log=[],
+        )
     )
     b._ib.sleep = lambda s: None
     b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10.7")))
@@ -172,8 +183,12 @@ def test_open_stops_filters_to_stop_orders():
 def test_place_stop_submits_gtc_sell_and_rounds_to_whole_shares():
     captured = {}
     b = _ibkr()
-    b._ib.placeOrder = lambda ct, o: captured.update(order=o) or SimpleNamespace(
-        orderStatus=SimpleNamespace(status="Submitted"), order=SimpleNamespace(orderId=99),
+    b._ib.placeOrder = lambda ct, o: (
+        captured.update(order=o)
+        or SimpleNamespace(
+            orderStatus=SimpleNamespace(status="Submitted"),
+            order=SimpleNamespace(orderId=99),
+        )
     )
     b._ib.sleep = lambda s: None
     r = b.place_stop("SPY", Decimal("10.9"), Decimal("480"))
@@ -195,18 +210,21 @@ def test_cancel_order_finds_and_cancels():
 
 def test_balances_zero_values_do_not_fall_through():
     # A legitimate 0 must not fall through to the fallback tag.
-    b = _ibkr(summary=[
-        _row("NetLiquidation", "0"),
-        _row("NetLiquidationByCurrency", "100000"),
-        _row("BuyingPower", "0"),
-        _row("AvailableFunds", "50000"),
-    ])
+    b = _ibkr(
+        summary=[
+            _row("NetLiquidation", "0"),
+            _row("NetLiquidationByCurrency", "100000"),
+            _row("BuyingPower", "0"),
+            _row("AvailableFunds", "50000"),
+        ]
+    )
     bal = b.balances()
     assert bal.nav == Decimal("0")
     assert bal.buying_power == Decimal("0")
 
 
 # ----- event-loop bootstrap (Python 3.12+ removed implicit loop creation) -----
+
 
 def test_ensure_event_loop_creates_loop_when_unset():
     # set_event_loop(None) reproduces a fresh Python 3.14 main thread:

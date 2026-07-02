@@ -53,6 +53,11 @@ class Hyperliquid:
     supports_stops = False  # perps use trigger orders; equity stop path never routes here
     supports_limit_chase = True  # GTC limit via exchange.order (EXPERIMENTAL — see module docstring)
 
+    # The rebalance flow translates target tickers through this before diffing,
+    # so a "BTC-USD" CSV matches the "BTC" key positions() returns (otherwise
+    # every run sweep-sells BTC and rebuys BTC-USD — the same coin, churned).
+    normalize_symbol = staticmethod(_coin)
+
     def __init__(self, private_key: str, account_address: str | None = None, testnet: bool = False):
         if not _HL_OK:
             raise BrokerError('hyperliquid deps not installed. Run: pip install "msts-trader[hyperliquid]"')

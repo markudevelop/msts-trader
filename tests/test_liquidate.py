@@ -5,6 +5,7 @@ largest first, with only/exclude filters). run_liquidation drives each order
 through the chase engine; here it's exercised against a scripted FakeBroker with
 sleep stubbed out, mirroring test_chase.py.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -24,9 +25,9 @@ def _pos(ticker, qty, px):
 
 def test_build_plan_longs_sell_shorts_buy_largest_first():
     positions = {
-        "AAA": _pos("AAA", 10, 100),    # $1,000 long -> SELL
-        "BBB": _pos("BBB", -5, 50),     # $250 short -> BUY to cover
-        "CCC": _pos("CCC", 100, 30),    # $3,000 long -> SELL (largest)
+        "AAA": _pos("AAA", 10, 100),  # $1,000 long -> SELL
+        "BBB": _pos("BBB", -5, 50),  # $250 short -> BUY to cover
+        "CCC": _pos("CCC", 100, 30),  # $3,000 long -> SELL (largest)
     }
     plan = build_plan(positions)
     assert [o.ticker for o in plan.orders] == ["CCC", "AAA", "BBB"]  # largest notional first

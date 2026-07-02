@@ -1,4 +1,5 @@
 """Alpaca adapter parsing — mock the SDK clients (no network)."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -41,10 +42,10 @@ def test_positions_skips_zero_qty():
 
 def test_quote_midpoint_and_fallbacks():
     quotes = {
-        "SPY": SimpleNamespace(ask_price=500.0, bid_price=499.0),   # midpoint 499.5
-        "QQQ": SimpleNamespace(ask_price=400.0, bid_price=0),       # ask only
-        "IWM": SimpleNamespace(ask_price=0, bid_price=200.0),       # bid only
-        "DEAD": SimpleNamespace(ask_price=0, bid_price=0),          # dropped
+        "SPY": SimpleNamespace(ask_price=500.0, bid_price=499.0),  # midpoint 499.5
+        "QQQ": SimpleNamespace(ask_price=400.0, bid_price=0),  # ask only
+        "IWM": SimpleNamespace(ask_price=0, bid_price=200.0),  # bid only
+        "DEAD": SimpleNamespace(ask_price=0, bid_price=0),  # dropped
     }
     out = _broker(quotes=quotes).quote(["SPY", "QQQ", "IWM", "DEAD"])
     assert out["SPY"] == Decimal("499.5")
@@ -65,9 +66,11 @@ def test_quote_swallows_data_errors():
 
 # ----- place_market -----
 
+
 def test_place_market_dry_run():
     from msts_trader.models import Order, Side
     from decimal import Decimal as D
+
     b = _broker()
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")), dry_run=True)
     assert r["status"] == "dry-run" and r["dry_run"] is True
@@ -76,9 +79,12 @@ def test_place_market_dry_run():
 def test_place_market_submits_and_reads_resp():
     from msts_trader.models import Order, Side
     from decimal import Decimal as D
+
     captured = {}
     b = Alpaca.__new__(Alpaca)
-    b._client = SimpleNamespace(submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="abc-1"))
+    b._client = SimpleNamespace(
+        submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="abc-1")
+    )
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")), dry_run=False)
     assert r["status"] == "accepted" and r["order_id"] == "abc-1" and r["dry_run"] is False
 
@@ -86,8 +92,11 @@ def test_place_market_submits_and_reads_resp():
 def test_place_market_error():
     from msts_trader.models import Order, Side
     from decimal import Decimal as D
+
     b = Alpaca.__new__(Alpaca)
-    b._client = SimpleNamespace(submit_order=lambda req: (_ for _ in ()).throw(RuntimeError("rejected: insufficient bp")))
+    b._client = SimpleNamespace(
+        submit_order=lambda req: (_ for _ in ()).throw(RuntimeError("rejected: insufficient bp"))
+    )
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
     assert r["status"] == "error" and "insufficient" in r["reason"]
 
@@ -95,6 +104,7 @@ def test_place_market_error():
 def test_place_market_zero_qty():
     from msts_trader.models import Order, Side
     from decimal import Decimal as D
+
     r = _broker().place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("0")))
     assert r["status"] == "skipped"
 
@@ -106,9 +116,12 @@ def test_place_market_moc_uses_cls_tif_and_whole_shares():
     from alpaca.trading.enums import TimeInForce
 
     from msts_trader.models import Order, Side
+
     captured = {}
     b = Alpaca.__new__(Alpaca)
-    b._client = SimpleNamespace(submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="m-1"))
+    b._client = SimpleNamespace(
+        submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="m-1")
+    )
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10.7"), moc=True))
     assert captured["req"].time_in_force == TimeInForce.CLS
     assert r["quantity"] == 10.0 and r["moc"] is True
@@ -118,6 +131,7 @@ def test_place_market_moc_sub_share_skips():
     from decimal import Decimal as D
 
     from msts_trader.models import Order, Side
+
     r = _broker().place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("0.6"), moc=True))
     assert r["status"] == "skipped" and "whole shares" in r["reason"]
 
@@ -128,9 +142,12 @@ def test_place_market_day_tif_without_moc():
     from alpaca.trading.enums import TimeInForce
 
     from msts_trader.models import Order, Side
+
     captured = {}
     b = Alpaca.__new__(Alpaca)
-    b._client = SimpleNamespace(submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="d-1"))
+    b._client = SimpleNamespace(
+        submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="d-1")
+    )
     b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10.7")))
     assert captured["req"].time_in_force == TimeInForce.DAY
     assert captured["req"].qty == 10.7  # fractional preserved on regular market orders
@@ -141,6 +158,7 @@ def test_place_market_missing_order_id_is_none():
     from decimal import Decimal as D
 
     from msts_trader.models import Order, Side
+
     b = Alpaca.__new__(Alpaca)
     b._client = SimpleNamespace(submit_order=lambda req: SimpleNamespace(status="accepted", id=None))
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
@@ -149,12 +167,15 @@ def test_place_market_missing_order_id_is_none():
 
 # ----- protective stops (regression: keep these methods bound + correct) -----
 
+
 def test_place_stop_submits_gtc_sell_stop():
     from alpaca.trading.enums import OrderSide, TimeInForce
+
     captured = {}
     b = _broker()
     b._client = SimpleNamespace(
-        submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="ord-1"))
+        submit_order=lambda req: captured.update(req=req) or SimpleNamespace(status="accepted", id="ord-1")
+    )
     r = b.place_stop("SPY", Decimal("10.9"), Decimal("480.25"))
     assert r["status"] == "accepted" and r["order_id"] == "ord-1" and r["quantity"] == 10.0
     req = captured["req"]
@@ -171,7 +192,8 @@ def test_place_stop_sub_share_skips():
 def test_place_stop_error_wrapped():
     b = _broker()
     b._client = SimpleNamespace(
-        submit_order=lambda req: (_ for _ in ()).throw(RuntimeError("422 potential wash trade")))
+        submit_order=lambda req: (_ for _ in ()).throw(RuntimeError("422 potential wash trade"))
+    )
     r = b.place_stop("SPY", Decimal("5"), Decimal("480"))
     assert r["status"] == "error" and "422" in r["reason"]
 
@@ -192,8 +214,7 @@ def test_cancel_order_ok_and_error():
     b = _broker()
     b._client = SimpleNamespace(cancel_order_by_id=lambda oid: None)
     assert b.cancel_order("o1")["status"] == "CANCELLED"
-    b._client = SimpleNamespace(
-        cancel_order_by_id=lambda oid: (_ for _ in ()).throw(RuntimeError("404 not found")))
+    b._client = SimpleNamespace(cancel_order_by_id=lambda oid: (_ for _ in ()).throw(RuntimeError("404 not found")))
     r = b.cancel_order("o1")
     assert r["status"] == "error" and "404" in r["reason"]
 
@@ -227,10 +248,41 @@ def test_order_status_normalizes_enum_and_string():
     def st(status, fq, avg):
         b = _broker()
         b._client = SimpleNamespace(
-            get_order_by_id=lambda oid: SimpleNamespace(status=status, filled_qty=fq, filled_avg_price=avg))
+            get_order_by_id=lambda oid: SimpleNamespace(status=status, filled_qty=fq, filled_avg_price=avg)
+        )
         return b.order_status("x")
 
-    r = st(OS.FILLED, "3", "499.5")          # enum -> .value
+    r = st(OS.FILLED, "3", "499.5")  # enum -> .value
     assert r["status"] == FILLED and r["filled_qty"] == 3.0 and r["filled_avg_price"] == 499.5
     assert st("partially_filled", "1", None)["status"] == PARTIAL
     assert st("new", "0", None)["status"] == WORKING
+
+
+def test_place_market_enum_status_normalized_to_value():
+    """alpaca-py returns an OrderStatus enum; str() yields 'St.REJECTED' and
+    defeats downstream 'rejected' checks — the adapter must report .value."""
+    import enum
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+
+    class St(enum.Enum):
+        REJECTED = "rejected"
+
+    b = Alpaca.__new__(Alpaca)
+    b._client = SimpleNamespace(submit_order=lambda req: SimpleNamespace(status=St.REJECTED, id="r-1"))
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")), dry_run=False)
+    assert r["status"] == "rejected"
+
+
+def test_place_limit_enum_status_normalized_to_value():
+    import enum
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+
+    class St(enum.Enum):
+        NEW = "new"
+
+    b = Alpaca.__new__(Alpaca)
+    b._client = SimpleNamespace(submit_order=lambda req: SimpleNamespace(status=St.NEW, id="l-1"))
+    r = b.place_limit(Order(ticker="SPY", side=Side.BUY, quantity=D("10")), Decimal("100"), dry_run=False)
+    assert r["status"] == "new"

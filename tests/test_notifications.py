@@ -52,7 +52,8 @@ def test_notify_telegram_explicit_args_override_env(monkeypatch):
     captured = {}
     monkeypatch.setattr(notifications, "env_value", lambda k: None)
     monkeypatch.setattr(
-        notifications, "_send_telegram",
+        notifications,
+        "_send_telegram",
         lambda t, c, text: captured.update(token=t, chat=c) or True,
     )
     sent, _ = notifications.notify("hi", telegram_token="TOK", telegram_chat_id="CID")
@@ -63,6 +64,7 @@ def test_notify_telegram_explicit_args_override_env(monkeypatch):
 def test_format_summary_dry_run_announces_preview():
     from decimal import Decimal
     from msts_trader.models import Order, Side
+
     orders = [Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10"))]
     s = notifications.format_summary("ibkr", "ACC", 0, 0, orders, dry_run=True)
     assert "DRY-RUN" in s and "nothing sent" in s and "BUY 10 SPY" in s
@@ -76,21 +78,27 @@ def test_webhook_failure_does_not_raise(monkeypatch):
 
 def test_discord_payload_uses_content(monkeypatch):
     captured = {}
-    monkeypatch.setattr(notifications, "_post_json", lambda url, payload, timeout=10.0: captured.update(payload) or True)
+    monkeypatch.setattr(
+        notifications, "_post_json", lambda url, payload, timeout=10.0: captured.update(payload) or True
+    )
     notifications._send_webhook("https://discord.com/api/webhooks/x", "hello")
     assert "content" in captured and captured["content"] == "hello"
 
 
 def test_slack_payload_uses_text(monkeypatch):
     captured = {}
-    monkeypatch.setattr(notifications, "_post_json", lambda url, payload, timeout=10.0: captured.update(payload) or True)
+    monkeypatch.setattr(
+        notifications, "_post_json", lambda url, payload, timeout=10.0: captured.update(payload) or True
+    )
     notifications._send_webhook("https://hooks.slack.com/services/x", "hello")
     assert captured.get("text") == "hello"
 
 
 def test_generic_webhook_uses_text(monkeypatch):
     captured = {}
-    monkeypatch.setattr(notifications, "_post_json", lambda url, payload, timeout=10.0: captured.update(payload) or True)
+    monkeypatch.setattr(
+        notifications, "_post_json", lambda url, payload, timeout=10.0: captured.update(payload) or True
+    )
     notifications._send_webhook("https://example.com/hook", "hello")
     assert captured.get("text") == "hello"
 

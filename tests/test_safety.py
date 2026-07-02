@@ -8,7 +8,9 @@ from msts_trader.safety import check_max_notional, check_stale, gross_buy_notion
 
 
 def _buy(tkr, notional):
-    return Order(ticker=tkr, side=Side.BUY, quantity=Decimal("1"), estimated_price=Decimal("1"), notional=Decimal(str(notional)))
+    return Order(
+        ticker=tkr, side=Side.BUY, quantity=Decimal("1"), estimated_price=Decimal("1"), notional=Decimal(str(notional))
+    )
 
 
 def test_gross_buy_only_counts_buys():
@@ -65,3 +67,18 @@ def test_check_stale_noop_without_asof():
 def test_check_stale_noop_without_limit():
     old = (datetime.now(timezone.utc) - timedelta(hours=999)).isoformat()
     assert check_stale(f"# asof: {old}\nx,1\n", None) is None
+
+
+def test_check_stale_fails_closed_on_unparseable_asof():
+    # A stamp that is PRESENT but corrupt must not silently disable the armed
+    # guard (fail closed, with a fix-it message) — a producer-side typo used
+    # to fail the gate OPEN.
+    csv_text = "# asof: not-a-date\nticker,weight\nSPY,1.0\n"
+    msg = check_stale(csv_text, max_stale_hours=24)
+    assert msg is not None
+    assert "cannot be parsed" in msg
+
+
+def test_check_stale_still_noop_without_any_asof():
+    csv_text = "ticker,weight\nSPY,1.0\n"
+    assert check_stale(csv_text, max_stale_hours=24) is None

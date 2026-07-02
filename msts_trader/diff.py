@@ -49,6 +49,19 @@ def build_preview(
     # the held quantity.
     qexp = Decimal("1") if whole_shares else Decimal("0.01")
 
+    def _mv(pos: Position | None, tkr: str) -> Decimal:
+        """Current market value of a held position, sized from the LIVE quote
+        when one is available. Some adapters report Position.price as average
+        cost (tradier, ibkr) or previous close (tastytrade) — drift, deltas and
+        sell sizing computed on those fictitious dollars mis-size every order
+        for any position carrying P&L."""
+        if pos is None:
+            return Decimal(0)
+        px = quotes.get(tkr)
+        if px is not None and px > 0:
+            return pos.quantity * px
+        return pos.market_value
+
     if nav <= 0:
         blockers.append("Account NAV is zero or negative — cannot size orders.")
         return Preview(
@@ -98,7 +111,7 @@ def build_preview(
                 continue  # ignored line — never trades, never triggers
             tgt_d = base * tw
             cur = positions.get(t.ticker)
-            cur_d = cur.market_value if cur else Decimal(0)
+            cur_d = _mv(cur, t.ticker)
             if tw == 0:
                 if cur is not None and cur.quantity > 0 and abs(cur_d) >= MIN_ORDER_DOLLARS:
                     book_breached = True
@@ -112,7 +125,7 @@ def build_preview(
             for tkr, pos in positions.items():
                 if tkr in target_map:
                     continue
-                if pos.quantity > 0 and pos.market_value >= MIN_ORDER_DOLLARS:
+                if pos.quantity > 0 and _mv(pos, tkr) >= MIN_ORDER_DOLLARS:
                     book_breached = True
                     break
 
@@ -144,7 +157,7 @@ def build_preview(
         target_w = t.weight
         target_dollars = base * target_w
         cur_pos = positions.get(tkr)
-        cur_dollars = cur_pos.market_value if cur_pos else Decimal(0)
+        cur_dollars = _mv(cur_pos, tkr)
         delta_dollars = target_dollars - cur_dollars
         current_pct = (cur_dollars / base) if base else Decimal(0)
 
@@ -248,7 +261,7 @@ def build_preview(
             continue
         if pos.quantity <= 0:  # shorts left untouched in v1
             continue
-        cur_dollars = pos.market_value
+        cur_dollars = _mv(pos, tkr)
         current_pct = cur_dollars / base if base else Decimal(0)
         row = RebalanceRow(
             ticker=tkr,
@@ -266,18 +279,18 @@ def build_preview(
             row.note = "kept — not in targets (--no-sweep)"
             rows.append(row)
             continue
-        # Whole-share exits round DOWN — never try to sell more than is held
-        # (a fractional residual on a whole-share-only account stays put; the
-        # broker couldn't sell it anyway).
-        qty = (
-            pos.quantity.quantize(qexp, rounding=ROUND_DOWN) if whole_shares else pos.quantity.quantize(Decimal("0.01"))
-        )
+        # Exits round DOWN — never try to sell more than is held. (HALF_EVEN
+        # here used to round 10.456789 up to a 10.46 SELL: the broker rejects
+        # the oversell and the exit never completes, or a lenient one opens a
+        # fractional short. The unsellable sub-0.01 residual stays put — the
+        # broker couldn't sell it anyway.)
+        qty = pos.quantity.quantize(qexp, rounding=ROUND_DOWN)
         if qty > 0:
             order = Order(
                 ticker=tkr,
                 side=Side.SELL,
                 quantity=qty,
-                estimated_price=pos.price,
+                estimated_price=(px if (px := quotes.get(tkr)) and px > 0 else pos.price),
                 notional=cur_dollars,
             )
             row.order = order

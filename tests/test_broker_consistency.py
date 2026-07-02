@@ -4,6 +4,7 @@ Prevents the class of bug where a broker is added to one registry but not
 another (e.g. in the factory but missing a login flow — which is exactly
 what shipped broken for Hyperliquid in 0.3.x).
 """
+
 from __future__ import annotations
 
 import pytest

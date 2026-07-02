@@ -11,6 +11,19 @@ class BrokerError(RuntimeError):
     """Anything the broker layer can't fix without user action."""
 
 
+def status_str(status, default: str = "submitted") -> str:
+    """Plain string form of an SDK order status.
+
+    SDK enums stringify as "OrderStatus.REJECTED", which silently defeats
+    downstream checks for "rejected" (the chase engine's place-failed path,
+    _is_clean_send). Prefer the enum's .value so adapters always report the
+    bare status word.
+    """
+    if status is None or status == "":
+        return default
+    return str(getattr(status, "value", status))
+
+
 def first_present(*values):
     """First value that is not None.
 

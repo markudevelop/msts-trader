@@ -26,11 +26,7 @@ def test_load_valid(tmp_path):
 
 def test_load_accepts_whole_shares_and_telegram(tmp_path):
     p = tmp_path / "config.toml"
-    p.write_text(
-        'whole_shares = true\n'
-        'telegram_token = "123:abc"\n'
-        'telegram_chat_id = "987"\n'
-    )
+    p.write_text('whole_shares = true\ntelegram_token = "123:abc"\ntelegram_chat_id = "987"\n')
     cfg = config.load(p)
     assert cfg["whole_shares"] is True
     assert cfg["telegram_token"] == "123:abc"
@@ -39,7 +35,7 @@ def test_load_accepts_whole_shares_and_telegram(tmp_path):
 
 def test_load_unknown_key_raises(tmp_path):
     p = tmp_path / "config.toml"
-    p.write_text('bogus = 1\n')
+    p.write_text("bogus = 1\n")
     with pytest.raises(config.ConfigError, match="unknown config keys"):
         config.load(p)
 

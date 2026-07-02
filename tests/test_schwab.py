@@ -1,4 +1,5 @@
 """Schwab adapter parsing — mock the schwab-py client (no network)."""
+
 from __future__ import annotations
 
 import json
@@ -37,9 +38,15 @@ def _broker(account=None, quotes=None):
 
 
 def test_balances():
-    acct = {"securitiesAccount": {"currentBalances": {
-        "liquidationValue": 50000, "cashBalance": 10000, "buyingPower": 80000,
-    }}}
+    acct = {
+        "securitiesAccount": {
+            "currentBalances": {
+                "liquidationValue": 50000,
+                "cashBalance": 10000,
+                "buyingPower": 80000,
+            }
+        }
+    }
     bal = _broker(account=acct).balances()
     assert bal.nav == Decimal("50000")
     assert bal.cash == Decimal("10000")
@@ -47,12 +54,20 @@ def test_balances():
 
 
 def test_positions_filters_non_equity_and_computes_price():
-    acct = {"securitiesAccount": {"positions": [
-        {"instrument": {"symbol": "SPY", "assetType": "ETF"}, "longQuantity": 10, "marketValue": 5000},
-        {"instrument": {"symbol": "AAPL", "assetType": "EQUITY"}, "longQuantity": 5, "marketValue": 1000},
-        {"instrument": {"symbol": "OPT", "assetType": "OPTION"}, "longQuantity": 1, "marketValue": 100},  # skipped
-        {"instrument": {"symbol": "ZERO", "assetType": "EQUITY"}, "longQuantity": 0, "marketValue": 0},   # flat
-    ]}}
+    acct = {
+        "securitiesAccount": {
+            "positions": [
+                {"instrument": {"symbol": "SPY", "assetType": "ETF"}, "longQuantity": 10, "marketValue": 5000},
+                {"instrument": {"symbol": "AAPL", "assetType": "EQUITY"}, "longQuantity": 5, "marketValue": 1000},
+                {
+                    "instrument": {"symbol": "OPT", "assetType": "OPTION"},
+                    "longQuantity": 1,
+                    "marketValue": 100,
+                },  # skipped
+                {"instrument": {"symbol": "ZERO", "assetType": "EQUITY"}, "longQuantity": 0, "marketValue": 0},  # flat
+            ]
+        }
+    }
     out = _broker(account=acct).positions()
     assert set(out) == {"SPY", "AAPL"}
     assert out["SPY"].quantity == Decimal("10")
@@ -60,9 +75,13 @@ def test_positions_filters_non_equity_and_computes_price():
 
 
 def test_positions_short_quantity():
-    acct = {"securitiesAccount": {"positions": [
-        {"instrument": {"symbol": "TSLA", "assetType": "EQUITY"}, "shortQuantity": 4, "marketValue": -1600},
-    ]}}
+    acct = {
+        "securitiesAccount": {
+            "positions": [
+                {"instrument": {"symbol": "TSLA", "assetType": "EQUITY"}, "shortQuantity": 4, "marketValue": -1600},
+            ]
+        }
+    }
     out = _broker(account=acct).positions()
     assert out["TSLA"].quantity == Decimal("-4")
 
@@ -71,8 +90,8 @@ def test_quote_price_priority():
     quotes = {
         "SPY": {"quote": {"lastPrice": 500.1}},
         "QQQ": {"quote": {"mark": 400.2, "closePrice": 399}},  # no last -> mark
-        "IWM": {"quote": {"closePrice": 200.0}},               # only close
-        "DEAD": {"quote": {"lastPrice": 0}},                   # zero -> dropped
+        "IWM": {"quote": {"closePrice": 200.0}},  # only close
+        "DEAD": {"quote": {"lastPrice": 0}},  # zero -> dropped
     }
     out = _broker(quotes=quotes).quote(["SPY", "QQQ", "IWM", "DEAD"])
     assert out["SPY"] == Decimal("500.1")
@@ -145,6 +164,7 @@ def test_schwab_init_loads_keychain_token_without_persistent_file(tmp_path, monk
 
 # ----- place_market -----
 
+
 class _OrderResp:
     def __init__(self, location=None):
         self.headers = {"Location": location} if location else {}
@@ -156,8 +176,11 @@ class _OrderResp:
 def test_place_market_submits_and_reads_location(monkeypatch):
     from msts_trader.models import Order, Side
     from decimal import Decimal as D
+
     b = _broker()
-    b._client = SimpleNamespace(place_order=lambda h, spec: _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/12345"))
+    b._client = SimpleNamespace(
+        place_order=lambda h, spec: _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/12345")
+    )
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
     assert r["status"] == "submitted" and r["order_id"] == "12345" and r["quantity"] == 10
 
@@ -165,6 +188,7 @@ def test_place_market_submits_and_reads_location(monkeypatch):
 def test_place_market_dry_run():
     from msts_trader.models import Order, Side
     from decimal import Decimal as D
+
     r = _broker().place_market(Order(ticker="SPY", side=Side.SELL, quantity=D("5")), dry_run=True)
     assert r["status"] == "dry-run" and r["dry_run"] is True
 
@@ -172,6 +196,7 @@ def test_place_market_dry_run():
 def test_place_market_fractional_skipped():
     from msts_trader.models import Order, Side
     from decimal import Decimal as D
+
     # 0.4 shares -> int() -> 0 -> Schwab whole-share skip
     r = _broker().place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("0.4")))
     assert r["status"] == "skipped" and "whole shares" in r["reason"]
@@ -182,10 +207,13 @@ def test_place_market_moc_sets_order_type(monkeypatch):
     from decimal import Decimal as D
 
     from msts_trader.models import Order, Side
+
     captured = {}
     b = _broker()
     b._client = SimpleNamespace(
-        place_order=lambda h, spec: captured.update(spec=spec) or _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/777")
+        place_order=lambda h, spec: (
+            captured.update(spec=spec) or _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/777")
+        )
     )
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10"), moc=True))
     assert r["status"] == "submitted" and r["moc"] is True
@@ -196,10 +224,13 @@ def test_place_market_without_moc_stays_market():
     from decimal import Decimal as D
 
     from msts_trader.models import Order, Side
+
     captured = {}
     b = _broker()
     b._client = SimpleNamespace(
-        place_order=lambda h, spec: captured.update(spec=spec) or _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/778")
+        place_order=lambda h, spec: (
+            captured.update(spec=spec) or _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/778")
+        )
     )
     b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
     assert captured["spec"].get("orderType") == "MARKET"
@@ -208,6 +239,7 @@ def test_place_market_without_moc_stays_market():
 def test_place_market_error():
     from msts_trader.models import Order, Side
     from decimal import Decimal as D
+
     b = _broker()
     b._client = SimpleNamespace(place_order=lambda h, spec: (_ for _ in ()).throw(RuntimeError("401 unauthorized")))
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("10")))
@@ -217,12 +249,14 @@ def test_place_market_error():
 # ----- protective stops (regression: these methods were once mis-indented
 # into the module-level clear_token() and silently absent from the class) -----
 
+
 def test_place_stop_builds_gtc_stop_spec():
     captured = {}
     b = _broker()
     b._client = SimpleNamespace(
-        place_order=lambda h, spec: captured.update(spec=spec) or _OrderResp(
-            "https://api.schwab.com/v1/accounts/HASH/orders/55501")
+        place_order=lambda h, spec: (
+            captured.update(spec=spec) or _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/55501")
+        )
     )
     r = b.place_stop("SPY", Decimal("10.9"), Decimal("480"))
     assert r["status"] == "submitted" and r["order_id"] == "55501"
@@ -249,10 +283,17 @@ def test_place_stop_sub_share_skips():
 
 def test_open_stops_filters_and_keys_by_symbol():
     orders = [
-        {"orderType": "STOP", "orderId": 9001, "stopPrice": 475.5,
-         "orderLegCollection": [{"instrument": {"symbol": "SPY"}, "quantity": 10}]},
-        {"orderType": "MARKET", "orderId": 9002,  # not a stop -> ignored
-         "orderLegCollection": [{"instrument": {"symbol": "QQQ"}, "quantity": 5}]},
+        {
+            "orderType": "STOP",
+            "orderId": 9001,
+            "stopPrice": 475.5,
+            "orderLegCollection": [{"instrument": {"symbol": "SPY"}, "quantity": 10}],
+        },
+        {
+            "orderType": "MARKET",
+            "orderId": 9002,  # not a stop -> ignored
+            "orderLegCollection": [{"instrument": {"symbol": "QQQ"}, "quantity": 5}],
+        },
     ]
     b = _broker()
     b._client = SimpleNamespace(get_orders_for_account=lambda h, status=None: _Resp(orders))
@@ -265,7 +306,8 @@ def test_open_stops_filters_and_keys_by_symbol():
 def test_open_stops_swallows_errors():
     b = _broker()
     b._client = SimpleNamespace(
-        get_orders_for_account=lambda h, status=None: (_ for _ in ()).throw(RuntimeError("403")))
+        get_orders_for_account=lambda h, status=None: (_ for _ in ()).throw(RuntimeError("403"))
+    )
     assert b.open_stops() == {}
 
 
@@ -273,8 +315,7 @@ def test_cancel_order_ok_and_error():
     b = _broker()
     b._client = SimpleNamespace(cancel_order=lambda oid, h: _OrderResp())
     assert b.cancel_order("9001")["status"] == "CANCELLED"
-    b._client = SimpleNamespace(
-        cancel_order=lambda oid, h: (_ for _ in ()).throw(RuntimeError("404")))
+    b._client = SimpleNamespace(cancel_order=lambda oid, h: (_ for _ in ()).throw(RuntimeError("404")))
     r = b.cancel_order("9001")
     assert r["status"] == "error" and "404" in r["reason"]
 
@@ -282,10 +323,17 @@ def test_cancel_order_ok_and_error():
 def test_balances_zero_values_do_not_fall_through():
     # A legitimate 0 (account in liquidation, exhausted BP) must not fall
     # through to the secondary field.
-    acct = {"securitiesAccount": {"currentBalances": {
-        "liquidationValue": 0, "equity": 50000, "cashBalance": 0,
-        "buyingPower": 0, "dayTradingBuyingPower": 99999,
-    }}}
+    acct = {
+        "securitiesAccount": {
+            "currentBalances": {
+                "liquidationValue": 0,
+                "equity": 50000,
+                "cashBalance": 0,
+                "buyingPower": 0,
+                "dayTradingBuyingPower": 99999,
+            }
+        }
+    }
     bal = _broker(account=acct).balances()
     assert bal.nav == Decimal("0")
     assert bal.cash == Decimal("0")

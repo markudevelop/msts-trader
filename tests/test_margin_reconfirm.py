@@ -1,5 +1,6 @@
 """Re-confirm pass: with real broker margin, scaling iterates until the
 book actually fits (handles non-linear margin tiers)."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -31,7 +32,9 @@ def _preview():
     return build_preview(
         targets=[Target(ticker="SPY", weight=Decimal("2.0"))],
         positions={},
-        nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("100000"),
+        nav=Decimal("100000"),
+        cash=Decimal("100000"),
+        buying_power=Decimal("100000"),
         quotes={"SPY": Decimal("500")},
     )
 
@@ -75,7 +78,10 @@ def test_no_broker_query_when_notional_fits(monkeypatch):
     b = _CountingBroker()
     p = build_preview(
         targets=[Target(ticker="SPY", weight=Decimal("0.5"))],
-        positions={}, nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("100000"),
+        positions={},
+        nav=Decimal("100000"),
+        cash=Decimal("100000"),
+        buying_power=Decimal("100000"),
         quotes={"SPY": Decimal("500")},
     )  # $50k buys, $100k BP -> fits
     m._apply_margin_aware(b, p, Decimal("100000"))
@@ -93,7 +99,10 @@ def test_notional_broker_single_pass(monkeypatch):
 
     p = build_preview(
         targets=[Target(ticker="SPY", weight=Decimal("1.0")), Target(ticker="QQQ", weight=Decimal("0.6"))],
-        positions={}, nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("80000"),
+        positions={},
+        nav=Decimal("100000"),
+        cash=Decimal("100000"),
+        buying_power=Decimal("80000"),
         quotes={"SPY": Decimal("500"), "QQQ": Decimal("400")},
     )
     m._apply_margin_aware(_NoMargin(), p, Decimal("80000"))

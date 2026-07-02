@@ -4,6 +4,7 @@ The paper broker writes state to ~/.msts-trader/paper_state.json. Tests
 monkeypatch that path to a tmp dir so they never touch the real user
 state file and can run in parallel without contention.
 """
+
 from __future__ import annotations
 
 import json
@@ -59,7 +60,9 @@ def basic_positions() -> dict[str, Position]:
     }
 
 
-def write_paper_state(path: Path, *, cash: str = "50000", positions: dict | None = None, last_prices: dict | None = None):
+def write_paper_state(
+    path: Path, *, cash: str = "50000", positions: dict | None = None, last_prices: dict | None = None
+):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(

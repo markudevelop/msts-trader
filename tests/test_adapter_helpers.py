@@ -3,6 +3,7 @@
 These don't touch any live SDK — they exercise the parsing/normalisation
 logic that real bugs (like the IBKR KID/10349 surfacing) live in.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -19,9 +20,11 @@ def _trade(*log_entries):
 
 # ----- ibkr._reject_reason (safety-critical: surfaces why an order died) -----
 
+
 def test_reject_reason_prefers_specific_over_10349():
-    t = _trade((10349, "TIF set to DAY based on order preset."),
-               (201, "No Trading Permission ... does not have a KID ..."))
+    t = _trade(
+        (10349, "TIF set to DAY based on order preset."), (201, "No Trading Permission ... does not have a KID ...")
+    )
     msg = ibkr._reject_reason(t)
     assert msg.startswith("IBKR 201")
     assert "KID" in msg
@@ -35,7 +38,9 @@ def test_reject_reason_10349_fallback_with_hint():
 
 
 def test_reject_reason_10243_suggests_whole_shares():
-    t = _trade((10243, "Fractional-sized order cannot be placed via API. Please use desktop version to place this order."))
+    t = _trade(
+        (10243, "Fractional-sized order cannot be placed via API. Please use desktop version to place this order.")
+    )
     msg = ibkr._reject_reason(t)
     assert "IBKR 10243" in msg
     assert "--whole-shares" in msg  # points at the fix
@@ -44,8 +49,9 @@ def test_reject_reason_10243_suggests_whole_shares():
 def test_reject_reason_10243_beats_10349_noise():
     # When both fire, the actionable fractional message wins over the cosmetic
     # 10349 preset note.
-    t = _trade((10349, "TIF set to DAY based on order preset."),
-               (10243, "Fractional-sized order cannot be placed via API."))
+    t = _trade(
+        (10349, "TIF set to DAY based on order preset."), (10243, "Fractional-sized order cannot be placed via API.")
+    )
     msg = ibkr._reject_reason(t)
     assert "10243" in msg and "--whole-shares" in msg
 
@@ -67,6 +73,7 @@ def test_reject_reason_empty_log():
 
 # ----- ibkr._f (NaN-safe float) -----
 
+
 def test_f_none():
     assert ibkr._f(None) is None
 
@@ -80,6 +87,7 @@ def test_f_valid():
 
 
 # ----- ibkr._midpoint -----
+
 
 def test_midpoint_normal():
     assert ibkr._midpoint(100, 102) == 101.0
@@ -96,6 +104,7 @@ def test_midpoint_nonpositive():
 
 
 # ----- hyperliquid._coin (ticker normalisation) -----
+
 
 def test_coin_strips_usd_suffix():
     assert hl._coin("BTC-USD") == "BTC"

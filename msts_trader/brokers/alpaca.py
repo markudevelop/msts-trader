@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError
+from .base import Balances, BrokerError, status_str
 
 try:
     from alpaca.data.historical import StockHistoricalDataClient
@@ -122,7 +122,7 @@ class Alpaca:
         except Exception as e:
             return {"status": "error", "reason": str(e), "ticker": order.ticker}
         return {
-            "status": str(getattr(resp, "status", "submitted")),
+            "status": status_str(getattr(resp, "status", None)),
             "ticker": order.ticker,
             "side": order.side.value,
             "quantity": qty,
@@ -156,7 +156,7 @@ class Alpaca:
         except Exception as e:
             return {"status": "error", "reason": str(e), "ticker": order.ticker}
         return {
-            "status": str(getattr(resp, "status", "submitted")),
+            "status": status_str(getattr(resp, "status", None)),
             "ticker": order.ticker,
             "side": order.side.value,
             "quantity": qty,
@@ -222,7 +222,7 @@ class Alpaca:
         except Exception as e:
             return {"status": "error", "reason": str(e), "ticker": ticker}
         return {
-            "status": str(getattr(resp, "status", "submitted")),
+            "status": status_str(getattr(resp, "status", None)),
             "ticker": ticker,
             "order_id": str(getattr(resp, "id", "")),
             "quantity": float(qty),

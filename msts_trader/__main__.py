@@ -1237,6 +1237,10 @@ def rebalance(
                 f"only {ms.minutes_to_close} min to the close — exchanges stop accepting MOC orders around 15:50 ET.",
                 code=2,
             )
+    try:
+        targets = _normalize_targets(b, targets)
+    except CSVParseError as e:
+        _fail(str(e))
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
     universe = sorted({tg.ticker for tg in targets} | set(pos.keys()))
@@ -1335,7 +1339,7 @@ def rebalance(
                 heal_passes=heal_passes,
                 order_type=order_type,
                 moc=moc,
-                recent_clean={r.get("ticker") for r in results if _is_clean_send(r.get("status", "?"))},
+                recent_clean={r.get("ticker") for r in results if _no_reheal(r)},
                 chase_cfg=chase_cfg,
                 notify_url=notify_url,
                 tg_token=tg_token,
@@ -1416,7 +1420,7 @@ def rebalance(
             heal_passes=heal_passes,
             order_type=order_type,
             moc=moc,
-            recent_clean={r.get("ticker") for r in results if _is_clean_send(r.get("status", "?"))},
+            recent_clean={r.get("ticker") for r in results if _no_reheal(r)},
             chase_cfg=chase_cfg,
             notify_url=notify_url,
             tg_token=tg_token,
@@ -1472,6 +1476,33 @@ def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
         c.print(f"[red]✗ {escape(b)}[/red]")
 
 
+def _normalize_targets(b, targets):
+    """Translate CSV tickers to the broker's canonical symbols when the adapter
+    exposes normalize_symbol (e.g. hyperliquid: BTC-USD -> BTC). positions()
+    comes back keyed by canonical symbol — if targets don't match, the diff
+    sweep-sells the held name and rebuys its alias every run, and the chase's
+    quote lookup silently misses. Idempotent; a no-op for equity brokers."""
+    norm = getattr(b, "normalize_symbol", None)
+    if not callable(norm):
+        return targets
+    from dataclasses import replace
+
+    out = []
+    for t in targets:
+        nt = norm(t.ticker)
+        out.append(replace(t, ticker=nt) if nt and nt != t.ticker else t)
+    seen: dict[str, int] = {}
+    for t in out:
+        seen[t.ticker] = seen.get(t.ticker, 0) + 1
+    dups = sorted(k for k, n in seen.items() if n > 1)
+    if dups:
+        raise CSVParseError(
+            f"targets collide after {b.name} symbol normalization: {', '.join(dups)} "
+            f"(e.g. BTC and BTC-USD are the same instrument — list each one once)"
+        )
+    return out
+
+
 def _apply_default_stop(targets, default_stop):
     """Backfill a uniform protective stop on targets that carry no per-row one.
 
@@ -1494,7 +1525,26 @@ def _is_clean_send(status) -> bool:
     reached target, so it must not mark the run done; the post-trade verify /
     self-heal chases the unfilled remainder and idempotency stays open for a re-run.
     """
-    return str(status).lower() not in ("error", "skipped", "resting")
+    return str(status).lower() not in ("error", "skipped", "resting", "rejected")
+
+
+def _leg_order_live(result: dict) -> bool:
+    """True if this leg's original order may still be LIVE at the broker:
+    a RESTING market order (placed, unfilled, still working) or a chase abort
+    that left an order it couldn't confirm dead (result carries order_live).
+    Nothing here has cancelled that order, so sending another for the same leg
+    would double the position once both fill."""
+    if result.get("order_live"):
+        return True
+    return str(result.get("status", "")).lower() == "resting"
+
+
+def _no_reheal(result: dict) -> bool:
+    """Legs self-heal must NEVER re-trade this run: cleanly-sent ones (their
+    residuals are position-read lag, per the 0.25.1 fix) AND legs whose order
+    may still be live at the broker (a second full-size order on top of a
+    working one double-fills — same bug class, opposite direction)."""
+    return _is_clean_send(result.get("status", "?")) or _leg_order_live(result)
 
 
 def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, targets=None):
@@ -1560,7 +1610,10 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
         if not _is_clean_send(status):
             failed += 1
             if str(status).lower() == "resting":
-                say(f"[yellow]RESTING (unfilled)[/yellow]  id={result.get('order_id', '?')} — verify will chase it")
+                say(
+                    f"[yellow]RESTING (unfilled)[/yellow]  id={result.get('order_id', '?')} — left working at "
+                    "the broker (self-heal won't re-trade it; reconciles once it fills or is cancelled)"
+                )
             else:
                 say(f"[red]{status.upper()}[/red] {escape(str(result.get('reason', '')))}")
         else:
@@ -1639,6 +1692,7 @@ def _verify_once(
     margin_aware=False,
 ):
     """Re-fetch broker state and rebuild the diff. Returns (VerifyResult, post_fill_preview)."""
+    targets = _normalize_targets(b, targets)
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
     universe = sorted({tg.ticker for tg in targets} | set(pos.keys()))
@@ -1710,14 +1764,15 @@ def _post_trade_verify(
         say("[dim]MOC run: self-heal disabled (MOC fills at the close; check convergence after the auction).[/dim]")
         self_heal = False
 
-    # Legs we've already cleanly sent this run. We must NOT re-trade these even
-    # if the verify diff still shows them as residual: a market order is not
-    # idempotent, and a residual for a just-sent leg is almost always positions()
-    # lagging the fill (eventually-consistent broker reads) — re-trading it would
-    # double the position. Same bug class as the MOC self-heal double-fire, but it
-    # bites normal market orders on any lagging broker. Genuinely-failed legs
-    # (rejected/skipped/resting) were never recorded as clean sends, so they still
-    # heal here; a real miss on a just-sent leg reconciles on the next run.
+    # Legs self-heal must not re-trade this run (see _no_reheal): cleanly-sent
+    # legs — a market order is not idempotent, and a residual for a just-sent
+    # leg is almost always positions() lagging the fill (eventually-consistent
+    # broker reads) — AND legs whose original order may still be LIVE at the
+    # broker (a RESTING remainder, or a chase abort that couldn't confirm its
+    # cancel): a second full-size order on top of a working one doubles the
+    # position once both fill. Genuinely-dead legs (rejected/skipped/errored
+    # with no live order) still heal here; everything else reconciles on the
+    # next run.
     recent = {t for t in (recent_clean or set()) if t}
 
     healed = 0
@@ -1764,7 +1819,7 @@ def _post_trade_verify(
                 healed += 1
                 # Don't re-trade these on the next pass either, for the same reason.
                 heal_results = ret[2] if isinstance(ret, tuple) and len(ret) >= 3 else []
-                recent |= {r.get("ticker") for r in heal_results if _is_clean_send(r.get("status", "?"))}
+                recent |= {r.get("ticker") for r in heal_results if _no_reheal(r)}
             except Exception as e:
                 say(f"[red]self-heal execute failed: {e}[/red]")
                 break
@@ -1962,6 +2017,10 @@ def _rebalance_one(
     """
     # Whole-share brokers truncate at submit; size the preview to match.
     whole_shares = whole_shares or not getattr(b, "supports_fractional", True)
+    try:
+        targets = _normalize_targets(b, targets)
+    except CSVParseError as e:
+        return {"broker": b.name, "account": b.account_id, "status": "blocked", "blockers": [str(e)]}
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
     universe = sorted({t.ticker for t in targets} | set(pos.keys()))

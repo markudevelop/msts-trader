@@ -3,6 +3,7 @@
 These don't connect to any broker; they check the class shape so a
 typo'd method or missing attribute fails fast in CI.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -24,6 +25,7 @@ def _broker_classes():
     from msts_trader.brokers.schwab import Schwab
     from msts_trader.brokers.tastytrade import Tastytrade
     from msts_trader.brokers.tradier import Tradier
+
     return {
         "tastytrade": Tastytrade,
         "alpaca": Alpaca,
@@ -109,3 +111,42 @@ def test_make_rejects_unknown_broker():
 def test_make_lists_supported_in_error():
     with pytest.raises(BrokerError, match="supported:"):
         make("nope")
+
+
+# ---- limit-chase surface (0.26.0): same structural guard as stops ----------
+CHASE_METHODS = ("place_limit", "order_status", "cancel_order")
+
+
+@pytest.mark.parametrize("name", SUPPORTED)
+def test_supports_limit_chase_is_bool(name):
+    cls = _broker_classes()[name]
+    assert hasattr(cls, "supports_limit_chase")
+    assert isinstance(cls.supports_limit_chase, bool)
+
+
+@pytest.mark.parametrize("name", SUPPORTED)
+def test_supports_limit_chase_implies_methods_bound(name):
+    """The chase engine calls place_limit/order_status/cancel_order on any
+    broker advertising supports_limit_chase — the same mis-indent regression
+    the stop guard exists for (0.13/0.14) would only surface mid-chase with a
+    live order resting. Checked via the class __dict__ like STOP_METHODS.
+    (Hyperliquid has supports_stops=False, so before this guard its entire
+    chase surface — including cancel_order — had no structural coverage.)"""
+    cls = _broker_classes()[name]
+    if not cls.supports_limit_chase:
+        return
+    for m in CHASE_METHODS:
+        assert m in vars(cls), f"{name} declares supports_limit_chase but {m} is not defined on the class"
+        assert callable(getattr(cls, m)), f"{name}.{m} not callable"
+
+
+@pytest.mark.parametrize("name", SUPPORTED)
+def test_place_limit_and_place_stop_signatures_accept_dry_run(name):
+    cls = _broker_classes()[name]
+    if cls.supports_limit_chase:
+        sig = inspect.signature(cls.place_limit)
+        assert "dry_run" in sig.parameters, f"{name}.place_limit must accept dry_run"
+        assert "limit_price" in sig.parameters or len(sig.parameters) >= 3, f"{name}.place_limit missing limit arg"
+    if cls.supports_stops:
+        sig = inspect.signature(cls.place_stop)
+        assert "dry_run" in sig.parameters, f"{name}.place_stop must accept dry_run"

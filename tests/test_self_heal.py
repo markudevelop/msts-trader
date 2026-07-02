@@ -4,6 +4,7 @@ The broker round-trip (_verify_once), market clock, executor, and notifier are m
 the control flow — re-execute when off-target, stop when converged or when capped or market-closed
 — is exercised deterministically without a broker.
 """
+
 import types
 
 from msts_trader import __main__ as m
@@ -55,22 +56,22 @@ def test_self_heal_executes_until_converged(monkeypatch):
     calls = _patch(monkeypatch, verify_seq=seq)
     res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=True, heal_passes=1)
     assert res.ok is True
-    assert calls["exec"] == 1       # one heal pass executed
-    assert calls["verify"] == 2     # verify -> heal -> verify
+    assert calls["exec"] == 1  # one heal pass executed
+    assert calls["verify"] == 2  # verify -> heal -> verify
 
 
 def test_self_heal_disabled_reports_only(monkeypatch):
     calls = _patch(monkeypatch, verify_seq=[(_Res(False), _Post([1]))])
     res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=False, heal_passes=1)
     assert res.ok is False
-    assert calls["exec"] == 0       # report-only, never re-trades
+    assert calls["exec"] == 0  # report-only, never re-trades
 
 
 def test_self_heal_skips_when_market_closed(monkeypatch):
     calls = _patch(monkeypatch, verify_seq=[(_Res(False), _Post([1]))], market="closed")
     res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=True, heal_passes=1)
     assert res.ok is False
-    assert calls["exec"] == 0       # never re-trades into a closed market
+    assert calls["exec"] == 0  # never re-trades into a closed market
 
 
 def test_self_heal_caps_passes(monkeypatch):
@@ -78,15 +79,15 @@ def test_self_heal_caps_passes(monkeypatch):
     calls = _patch(monkeypatch, verify_seq=[(_Res(False), _Post([1]))])
     res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=True, heal_passes=2)
     assert res.ok is False
-    assert calls["exec"] == 2       # exactly heal_passes executions
-    assert calls["verify"] == 3     # initial + after each of 2 heals
+    assert calls["exec"] == 2  # exactly heal_passes executions
+    assert calls["verify"] == 3  # initial + after each of 2 heals
 
 
 def test_converged_first_pass_no_execute(monkeypatch):
     calls = _patch(monkeypatch, verify_seq=[(_Res(True), _Post([]))])
     res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=True, heal_passes=1)
     assert res.ok is True
-    assert calls["exec"] == 0       # already converged, nothing to heal
+    assert calls["exec"] == 0  # already converged, nothing to heal
 
 
 def test_self_heal_skips_just_traded_leg_when_positions_lag(monkeypatch):
@@ -95,9 +96,7 @@ def test_self_heal_skips_just_traded_leg_when_positions_lag(monkeypatch):
     # it — re-firing a non-idempotent market order would double the position.
     # (Same bug class as the MOC self-heal double-fire, for normal orders.)
     calls = _patch(monkeypatch, verify_seq=[(_Res(False), _Post([_O("SPY")]))], market="open")
-    res = m._post_trade_verify(
-        _broker(), [], settle_seconds=0, self_heal=True, heal_passes=2, recent_clean={"SPY"}
-    )
+    res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=True, heal_passes=2, recent_clean={"SPY"})
     assert res.ok is False
     assert calls["exec"] == 0  # SPY was just traded — skipped, reconciles next run
 
@@ -107,9 +106,7 @@ def test_self_heal_still_heals_a_leg_not_traded_this_run(monkeypatch):
     # healed — the lag guard only protects just-sent tickers.
     seq = [(_Res(False), _Post([_O("QQQ")])), (_Res(True), _Post([]))]
     calls = _patch(monkeypatch, verify_seq=seq, market="open")
-    res = m._post_trade_verify(
-        _broker(), [], settle_seconds=0, self_heal=True, heal_passes=1, recent_clean={"SPY"}
-    )
+    res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=True, heal_passes=1, recent_clean={"SPY"})
     assert res.ok is True
     assert calls["exec"] == 1  # QQQ wasn't just traded -> healed
 
@@ -122,5 +119,36 @@ def test_moc_run_never_self_heals(monkeypatch):
     calls = _patch(monkeypatch, verify_seq=[(_Res(False), _Post([1, 2]))], market="open")
     res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=True, heal_passes=2, moc=True)
     assert res.ok is False
-    assert calls["exec"] == 0       # MOC: never re-trades despite self_heal=True
-    assert calls["verify"] == 1     # single verify, no heal loop
+    assert calls["exec"] == 0  # MOC: never re-trades despite self_heal=True
+    assert calls["verify"] == 1  # single verify, no heal loop
+
+
+# ---- live-order legs must never re-heal (0.26.0) ---------------------------
+def test_no_reheal_excludes_resting_and_unconfirmed_cancel_legs():
+    # A RESTING market order is live at the broker; a chase abort that couldn't
+    # confirm its cancel flags order_live. Healing either would stack a second
+    # full-size order on top of a working one — double-fill once both fill.
+    assert m._no_reheal({"status": "resting", "ticker": "HL"}) is True
+    assert m._no_reheal({"status": "error", "order_live": True, "ticker": "SPY"}) is True
+    # Cleanly-sent legs stay excluded too (position-read lag, 0.25.1 guard).
+    assert m._no_reheal({"status": "FILLED", "ticker": "SPY"}) is True
+    # Genuinely-dead legs (no live order) must still heal.
+    assert m._no_reheal({"status": "rejected", "ticker": "QQQ"}) is False
+    assert m._no_reheal({"status": "error", "ticker": "QQQ"}) is False
+    assert m._no_reheal({"status": "skipped", "ticker": "QQQ"}) is False
+
+
+def test_self_heal_skips_leg_with_resting_live_order(monkeypatch):
+    # The exclusion set computed at the call sites ({t for r in results if
+    # _no_reheal(r)}) reaches _post_trade_verify as recent_clean: a residual
+    # for a leg whose order is still working must not be re-traded.
+    results = [
+        {"status": "resting", "ticker": "BTC", "order_id": "oid-1"},
+        {"status": "rejected", "ticker": "QQQ"},
+    ]
+    no_reheal = {r.get("ticker") for r in results if m._no_reheal(r)}
+    assert no_reheal == {"BTC"}
+    calls = _patch(monkeypatch, verify_seq=[(_Res(False), _Post([_O("BTC")]))], market="open")
+    res = m._post_trade_verify(_broker(), [], settle_seconds=0, self_heal=True, heal_passes=2, recent_clean=no_reheal)
+    assert res.ok is False
+    assert calls["exec"] == 0  # the resting order stays the ONLY order for BTC

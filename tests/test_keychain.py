@@ -1,4 +1,5 @@
 """Keychain tests — use an in-memory backend so no real OS keychain is touched."""
+
 from __future__ import annotations
 
 import keyring

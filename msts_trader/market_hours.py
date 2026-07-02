@@ -126,6 +126,10 @@ def market_status(now: datetime | None = None) -> MarketStatus:
 
 def _next_open(now: datetime) -> datetime:
     d = now.date()
+    # Before 9:30 on a trading day, TODAY's open is the next open (3 AM Monday
+    # must report Monday 9:30, not Tuesday).
+    if not is_weekend(d) and not is_holiday(d) and now.timetz().replace(tzinfo=None) < RTH_OPEN:
+        return datetime.combine(d, RTH_OPEN, tzinfo=ET)
     for _ in range(10):
         d += timedelta(days=1)
         if not is_weekend(d) and not is_holiday(d):

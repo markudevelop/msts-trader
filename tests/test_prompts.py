@@ -1,6 +1,7 @@
 """Tests for the robust prompt helpers that work around the
 VS Code / Cursor integrated-terminal `getpass` bug.
 """
+
 from __future__ import annotations
 
 import io
@@ -102,13 +103,16 @@ def test_ask_text_returns_typed(monkeypatch):
     assert prompts.ask_text("name") == "alice"
 
 
-@pytest.mark.parametrize("ans, default, expected", [
-    ("y", False, True),
-    ("yes", False, True),
-    ("n", True, False),
-    ("", True, True),
-    ("", False, False),
-])
+@pytest.mark.parametrize(
+    "ans, default, expected",
+    [
+        ("y", False, True),
+        ("yes", False, True),
+        ("n", True, False),
+        ("", True, True),
+        ("", False, False),
+    ],
+)
 def test_ask_yes_no(monkeypatch, ans, default, expected):
     monkeypatch.setattr("builtins.input", lambda *a, **kw: ans)
     assert prompts.ask_yes_no("ok?", default=default) is expected

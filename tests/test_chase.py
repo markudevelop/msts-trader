@@ -6,6 +6,7 @@ tests cover the real simulated-fill primitives, and a small structural check
 guards the protocol contract (a broker that declares supports_limit_chase must
 implement place_limit + order_status).
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -44,8 +45,9 @@ class FakeBroker:
     name = "fake"
     supports_limit_chase = True
 
-    def __init__(self, *, mid="100", fill_attempt=None, partials=None,
-                 cancel_ok=True, quote_none=False, market_status="FILLED"):
+    def __init__(
+        self, *, mid="100", fill_attempt=None, partials=None, cancel_ok=True, quote_none=False, market_status="FILLED"
+    ):
         self.mid = Decimal(mid)
         self.fill_attempt = fill_attempt
         self.partials = partials or {}
@@ -78,8 +80,7 @@ class FakeBroker:
         if self.fill_attempt is not None and a >= self.fill_attempt:
             return {"status": FILLED, "filled_qty": float(rq), "filled_avg_price": float(self.mid)}
         if a in self.partials:
-            return {"status": PARTIAL, "filled_qty": float(self.partials[a]),
-                    "filled_avg_price": float(self.mid)}
+            return {"status": PARTIAL, "filled_qty": float(self.partials[a]), "filled_avg_price": float(self.mid)}
         return {"status": WORKING, "filled_qty": 0.0, "filled_avg_price": None}
 
     def cancel_order(self, oid):
@@ -91,8 +92,13 @@ class FakeBroker:
 
     def place_market(self, order, dry_run=False):
         self.market_calls.append(float(order.quantity))
-        return {"status": self.market_status, "ticker": order.ticker,
-                "quantity": float(order.quantity), "fill_price": float(self.mid), "order_id": "mkt"}
+        return {
+            "status": self.market_status,
+            "ticker": order.ticker,
+            "quantity": float(order.quantity),
+            "fill_price": float(self.mid),
+            "order_id": "mkt",
+        }
 
 
 # ---- pure price helper ---------------------------------------------------
@@ -112,8 +118,8 @@ def test_fills_on_first_rung_no_cancel_no_market():
     assert res["quantity"] == 10.0
     assert res["fill_price"] == 100.0
     assert len(b.placed) == 1
-    assert b.cancelled == []        # a filled order is never cancelled
-    assert b.market_calls == []     # no fallback needed
+    assert b.cancelled == []  # a filled order is never cancelled
+    assert b.market_calls == []  # no fallback needed
 
 
 def test_reprices_then_fills_on_later_rung():
@@ -121,8 +127,8 @@ def test_reprices_then_fills_on_later_rung():
     res = chase_fill(b, _order(qty="10"), _fast_cfg(), sleep=NOSLEEP)
     assert res["status"] == "FILLED"
     assert res["quantity"] == 10.0
-    assert len(b.placed) == 3       # repriced twice before filling
-    assert len(b.cancelled) == 2    # each unfilled rung cancelled before reprice
+    assert len(b.placed) == 3  # repriced twice before filling
+    assert len(b.cancelled) == 2  # each unfilled rung cancelled before reprice
     assert b.market_calls == []
 
 
@@ -154,16 +160,14 @@ def test_partial_then_fallback_for_remainder():
 
 def test_no_fallback_unfilled_is_error():
     b = FakeBroker(fill_attempt=None)
-    res = chase_fill(b, _order(qty="10"), _fast_cfg(retries=2, fallback_to_market=False),
-                     sleep=NOSLEEP)
+    res = chase_fill(b, _order(qty="10"), _fast_cfg(retries=2, fallback_to_market=False), sleep=NOSLEEP)
     assert res["status"] == "error"
     assert b.market_calls == []
 
 
 def test_no_fallback_partial_reports_partial():
     b = FakeBroker(fill_attempt=None, partials={1: 3})
-    res = chase_fill(b, _order(qty="10"), _fast_cfg(retries=1, fallback_to_market=False),
-                     sleep=NOSLEEP)
+    res = chase_fill(b, _order(qty="10"), _fast_cfg(retries=1, fallback_to_market=False), sleep=NOSLEEP)
     assert res["status"] == "PARTIAL"
     assert res["quantity"] == 3.0
 
@@ -173,13 +177,13 @@ def test_cancel_failure_aborts_to_avoid_double_fill():
     res = chase_fill(b, _order(qty="10"), _fast_cfg(retries=3), sleep=NOSLEEP)
     assert res["status"] == "error"
     assert "double-fill" in res["reason"]
-    assert b.market_calls == []     # never falls back after an abort
+    assert b.market_calls == []  # never falls back after an abort
 
 
 def test_no_quote_falls_through_to_market():
     b = FakeBroker(quote_none=True)
     chase_fill(b, _order(qty="10"), _fast_cfg(retries=3), sleep=NOSLEEP)
-    assert b.placed == []           # never placed a limit without a price
+    assert b.placed == []  # never placed a limit without a price
     assert b.market_calls == [10.0]
 
 
@@ -187,8 +191,8 @@ def test_dry_run_shows_single_initial_limit_no_orders():
     b = FakeBroker(fill_attempt=1)
     res = chase_fill(b, _order(qty="10"), _fast_cfg(), dry_run=True, sleep=NOSLEEP)
     assert res["status"] == "dry-run"
-    assert res["limit_price"] == 100.0   # the one initial limit at the current mid
-    assert b.placed == []                # nothing sent
+    assert res["limit_price"] == 100.0  # the one initial limit at the current mid
+    assert b.placed == []  # nothing sent
     assert b.market_calls == []
 
 
@@ -206,7 +210,7 @@ def test_missing_order_id_aborts():
     res = chase_fill(b, _order(qty="10"), _fast_cfg(), sleep=NOSLEEP)
     assert res["status"] == "error"
     assert "order_id" in res["reason"]
-    assert b.market_calls == []          # never falls back to market when unmanageable
+    assert b.market_calls == []  # never falls back to market when unmanageable
 
 
 def test_overreported_fill_is_clamped_to_qty():
@@ -217,7 +221,7 @@ def test_overreported_fill_is_clamped_to_qty():
     b.order_status = lambda oid: {**orig(oid), "filled_qty": 50.0}
     res = chase_fill(b, _order(qty="10"), _fast_cfg(), sleep=NOSLEEP)
     assert res["status"] == "FILLED"
-    assert res["quantity"] == 10.0       # clamped, not 50
+    assert res["quantity"] == 10.0  # clamped, not 50
 
 
 def test_zero_qty_skipped():
@@ -232,8 +236,7 @@ def test_paper_marketable_limit_fills_immediately():
 
     p = Paper()
     p.set_quote("SPY", Decimal("100"))
-    res = chase_fill(p, _order("SPY", Side.BUY, "5"), _fast_cfg(reprice_interval=0.01,
-                                                               poll_interval=0.01))
+    res = chase_fill(p, _order("SPY", Side.BUY, "5"), _fast_cfg(reprice_interval=0.01, poll_interval=0.01))
     assert res["status"] == "FILLED"
     assert p.positions()["SPY"].quantity == Decimal("5")
 
@@ -245,8 +248,8 @@ def test_paper_resting_limit_fills_when_mid_moves():
     p.set_quote("SPY", Decimal("100"))
     placed = p.place_limit(_order("SPY", Side.BUY, "5", px="99"), Decimal("99"))
     oid = placed["order_id"]
-    assert p.order_status(oid)["status"] == WORKING   # 99 < 100 mid: not marketable
-    p.set_quote("SPY", Decimal("98"))                 # mid drops below the limit
+    assert p.order_status(oid)["status"] == WORKING  # 99 < 100 mid: not marketable
+    p.set_quote("SPY", Decimal("98"))  # mid drops below the limit
     st = p.order_status(oid)
     assert st["status"] == FILLED
     assert p.positions()["SPY"].quantity == Decimal("5")
@@ -279,15 +282,18 @@ def test_config_accepts_chase_keys(tmp_path):
     assert cfg["chase_retries"] == 8
 
 
-@pytest.mark.parametrize("modpath,clsname", [
-    ("msts_trader.brokers.paper", "Paper"),
-    ("msts_trader.brokers.tastytrade", "Tastytrade"),
-    ("msts_trader.brokers.alpaca", "Alpaca"),
-    ("msts_trader.brokers.tradier", "Tradier"),
-    ("msts_trader.brokers.ibkr", "IBKR"),
-    ("msts_trader.brokers.schwab", "Schwab"),
-    ("msts_trader.brokers.hyperliquid", "Hyperliquid"),
-])
+@pytest.mark.parametrize(
+    "modpath,clsname",
+    [
+        ("msts_trader.brokers.paper", "Paper"),
+        ("msts_trader.brokers.tastytrade", "Tastytrade"),
+        ("msts_trader.brokers.alpaca", "Alpaca"),
+        ("msts_trader.brokers.tradier", "Tradier"),
+        ("msts_trader.brokers.ibkr", "IBKR"),
+        ("msts_trader.brokers.schwab", "Schwab"),
+        ("msts_trader.brokers.hyperliquid", "Hyperliquid"),
+    ],
+)
 def test_chase_capable_brokers_implement_contract(modpath, clsname):
     import importlib
 
@@ -307,8 +313,7 @@ def test_every_chase_broker_declared_in_audit():
     for name in SUPPORTED:
         # find the class without instantiating (no creds / SDK needed)
         mod = __import__(f"msts_trader.brokers.{name}", fromlist=["x"])
-        cls = next(v for v in vars(mod).values()
-                   if isinstance(v, type) and getattr(v, "name", None) == name)
+        cls = next(v for v in vars(mod).values() if isinstance(v, type) and getattr(v, "name", None) == name)
         if not getattr(cls, "supports_limit_chase", False):
             continue
         for m in ("place_limit", "order_status", "cancel_order"):
@@ -327,8 +332,8 @@ def test_ibkr_order_status_normalizes():
     def trade(status, filled, remaining, avg, perm="P1"):
         return SimpleNamespace(
             order=SimpleNamespace(permId=perm, orderId=1),
-            orderStatus=SimpleNamespace(status=status, filled=filled, remaining=remaining,
-                                        avgFillPrice=avg))
+            orderStatus=SimpleNamespace(status=status, filled=filled, remaining=remaining, avgFillPrice=avg),
+        )
 
     def status_of(t):
         b = IBKR.__new__(IBKR)
@@ -351,12 +356,17 @@ def test_schwab_order_status_normalizes():
         b._account_hash = "H"
         b.account_hash = "H"
         b._client = SimpleNamespace(
-            get_order=lambda oid, h: SimpleNamespace(raise_for_status=lambda: None,
-                                                     json=lambda: payload))
+            get_order=lambda oid, h: SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+        )
         return b.order_status("1")
 
-    f = status_of({"status": "FILLED", "filledQuantity": 3,
-                   "orderActivityCollection": [{"executionLegs": [{"quantity": 3, "price": 100.0}]}]})
+    f = status_of(
+        {
+            "status": "FILLED",
+            "filledQuantity": 3,
+            "orderActivityCollection": [{"executionLegs": [{"quantity": 3, "price": 100.0}]}],
+        }
+    )
     assert f["status"] == FILLED and f["filled_avg_price"] == 100.0
     assert status_of({"status": "WORKING", "filledQuantity": 1})["status"] == PARTIAL
     assert status_of({"status": "WORKING", "filledQuantity": 0})["status"] == WORKING
@@ -386,8 +396,7 @@ def test_hyperliquid_order_status_normalizes():
 def _preview(orders):
     from msts_trader.models import Preview
 
-    return Preview(nav=Decimal(0), buying_power=Decimal(0), cash=Decimal(0),
-                   rows=[], orders=orders)
+    return Preview(nav=Decimal(0), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=orders)
 
 
 def test_execute_unsupported_broker_falls_back_to_market():
@@ -406,9 +415,10 @@ def test_execute_unsupported_broker_falls_back_to_market():
             return {"status": "FILLED", "ticker": o.ticker, "order_id": "m1"}
 
     b = MiniBroker()
-    sent, failed, _ = _execute(b, _preview([_order("SPY", Side.BUY, "3")]),
-                               order_type="limit-chase", chase_cfg=_fast_cfg())
-    assert b.market == ["SPY"]      # warned + used market
+    sent, failed, _ = _execute(
+        b, _preview([_order("SPY", Side.BUY, "3")]), order_type="limit-chase", chase_cfg=_fast_cfg()
+    )
+    assert b.market == ["SPY"]  # warned + used market
     assert (sent, failed) == (1, 0)
 
 
@@ -419,8 +429,9 @@ def test_execute_routes_through_chase_on_supported_broker():
     p = Paper()
     p.set_quote("SPY", Decimal("100"))
     cfg = _fast_cfg(reprice_interval=0.01, poll_interval=0.01)
-    sent, failed, results = _execute(p, _preview([_order("SPY", Side.BUY, "4")]),
-                                     order_type="limit-chase", chase_cfg=cfg)
+    sent, failed, results = _execute(
+        p, _preview([_order("SPY", Side.BUY, "4")]), order_type="limit-chase", chase_cfg=cfg
+    )
     assert (sent, failed) == (1, 0)
     assert results[0].get("chase") is True
     assert p.positions()["SPY"].quantity == Decimal("4")
@@ -430,9 +441,9 @@ def test_execute_routes_through_chase_on_supported_broker():
 def test_partial_then_fallback_failure_preserves_fill_info():
     b = FakeBroker(fill_attempt=None, partials={1: 4}, market_status="error")
     res = chase_fill(b, _order(qty="10"), _fast_cfg(retries=1), sleep=NOSLEEP)
-    assert res["status"] == "error"           # the leg did not complete
-    assert res["chase_limit_filled"] == 4.0   # but 4 shares filled via the chase
-    assert res["fill_price"] == 100.0         # carry an anchor so a stop can be placed
+    assert res["status"] == "error"  # the leg did not complete
+    assert res["chase_limit_filled"] == 4.0  # but 4 shares filled via the chase
+    assert res["fill_price"] == 100.0  # carry an anchor so a stop can be placed
 
 
 def test_reconcile_stops_protects_partial_chase_fill_on_error():
@@ -462,11 +473,17 @@ def test_reconcile_stops_protects_partial_chase_fill_on_error():
         def cancel_order(self, oid):
             return {"status": "CANCELLED"}
 
-    o = Order(ticker="SPY", side=Side.BUY, quantity=D("10"),
-              estimated_price=D("100"), stop_pct=D("0.02"))
+    o = Order(ticker="SPY", side=Side.BUY, quantity=D("10"), estimated_price=D("100"), stop_pct=D("0.02"))
     preview = Preview(nav=D(0), buying_power=D(0), cash=D(0), rows=[], orders=[o])
-    results = [{"ticker": "SPY", "status": "error", "chase_limit_filled": 4.0,
-                "fill_price": 100.0, "reason": "fallback failed"}]
+    results = [
+        {
+            "ticker": "SPY",
+            "status": "error",
+            "chase_limit_filled": 4.0,
+            "fill_price": 100.0,
+            "reason": "fallback failed",
+        }
+    ]
 
     # held 4 shares -> stop placed on the 4 actually held, 2% below 100
     b = StopBroker({"SPY": Position(ticker="SPY", quantity=D("4"), price=D("100"))})
@@ -488,11 +505,9 @@ def test_ibkr_cancel_matches_permid_and_orderid():
     cancelled = []
     trade = SimpleNamespace(order=SimpleNamespace(permId="P9", orderId=42))
     b = IBKR.__new__(IBKR)
-    b._ib = SimpleNamespace(openTrades=lambda: [trade],
-                            cancelOrder=lambda o: cancelled.append(o),
-                            sleep=lambda s: None)
-    assert b.cancel_order("P9")["status"] == "CANCELLED"   # by permId (chase id)
-    assert b.cancel_order("42")["status"] == "CANCELLED"   # by orderId (stop id)
+    b._ib = SimpleNamespace(openTrades=lambda: [trade], cancelOrder=lambda o: cancelled.append(o), sleep=lambda s: None)
+    assert b.cancel_order("P9")["status"] == "CANCELLED"  # by permId (chase id)
+    assert b.cancel_order("42")["status"] == "CANCELLED"  # by orderId (stop id)
     assert b.cancel_order("nope")["status"] == "error"
     assert len(cancelled) == 2
 
@@ -508,12 +523,24 @@ def test_rebalance_one_routes_order_type_to_execute(monkeypatch):
     p = Paper()
     p.set_quote("SPY", D("100"))
     captured = {}
-    monkeypatch.setattr(m, "_execute", lambda b, preview, *, order_type="market", chase_cfg=None, targets=None:
-                        (captured.update(order_type=order_type, cfg=chase_cfg) or (1, 0, [])))
+    monkeypatch.setattr(
+        m,
+        "_execute",
+        lambda b, preview, *, order_type="market", chase_cfg=None, targets=None: (
+            captured.update(order_type=order_type, cfg=chase_cfg) or (1, 0, [])
+        ),
+    )
     cfg = _fast_cfg()
-    r = m._rebalance_one(p, [Target(ticker="SPY", weight=D("1.0"))],
-                         threshold=0.0, max_notional=None, dry_run=False, force=True,
-                         order_type="limit-chase", chase_cfg=cfg)
+    r = m._rebalance_one(
+        p,
+        [Target(ticker="SPY", weight=D("1.0"))],
+        threshold=0.0,
+        max_notional=None,
+        dry_run=False,
+        force=True,
+        order_type="limit-chase",
+        chase_cfg=cfg,
+    )
     assert captured["order_type"] == "limit-chase"
     assert captured["cfg"] is cfg
     assert r["status"] in ("executed", "partial")
@@ -547,3 +574,96 @@ def test_multi_routes_config_order_type(tmp_path, monkeypatch):
     assert r.exit_code == 0, r.output
     assert captured["order_type"] == "limit-chase"
     assert captured["chase_cfg"].retries == 9
+
+
+# ---- cancel-window race + live-order aborts (0.26.0 regressions) -----------
+class FillDuringCancelBroker(FakeBroker):
+    """The rung fills inside the cancel window: the cancel is ACCEPTED but the
+    post-cancel status read reports FILLED for the full rung."""
+
+    filled_in_cancel: str | None = None
+
+    def cancel_order(self, oid):
+        self.cancelled.append(oid)
+        self.filled_in_cancel = oid
+        return {"status": "CANCELLED", "order_id": oid}
+
+    def order_status(self, oid):
+        if self.filled_in_cancel == oid:
+            rq = self.rung_qty[oid]
+            return {"status": FILLED, "filled_qty": float(rq), "filled_avg_price": float(self.mid)}
+        return super().order_status(oid)
+
+
+def test_fill_landing_in_cancel_window_is_captured_not_retraded():
+    b = FillDuringCancelBroker()  # never fills during rung polls
+    res = chase_fill(b, _order(qty="10"), _fast_cfg(), sleep=NOSLEEP)
+    assert res["status"] == "FILLED"
+    assert res["quantity"] == 10.0
+    assert len(b.placed) == 1  # the remainder was NEVER re-placed
+    assert b.market_calls == []  # and never market-fallen-back
+
+
+class StatusBlackoutAfterCancelBroker(FakeBroker):
+    """order_status starts raising right after the cancel request — the true
+    rung fill is unknowable, so the chase must abort, not re-place."""
+
+    blackout = False
+
+    def cancel_order(self, oid):
+        self.cancelled.append(oid)
+        self.blackout = True
+        return {"status": "CANCELLED", "order_id": oid}
+
+    def order_status(self, oid):
+        if self.blackout:
+            raise RuntimeError("api down")
+        return super().order_status(oid)
+
+
+def test_status_blackout_after_cancel_aborts_with_order_live():
+    b = StatusBlackoutAfterCancelBroker()
+    res = chase_fill(b, _order(qty="10"), _fast_cfg(), sleep=NOSLEEP)
+    assert res["status"] == "error"
+    assert res["order_live"] is True
+    assert len(b.placed) == 1
+    assert b.market_calls == []  # never re-trade an unknowable rung
+
+
+class ZombieCancelBroker(FakeBroker):
+    """Cancel is ACCEPTED but the order keeps reading WORKING forever (the
+    async cancel never lands) — remainder must not be re-placed on top."""
+
+    def cancel_order(self, oid):
+        self.cancelled.append(oid)
+        return {"status": "CANCELLED", "order_id": oid}  # attempt_of kept: still WORKING
+
+
+def test_cancel_never_confirms_terminal_aborts_with_order_live():
+    b = ZombieCancelBroker()
+    res = chase_fill(b, _order(qty="10"), _fast_cfg(), sleep=NOSLEEP)
+    assert res["status"] == "error"
+    assert res["order_live"] is True
+    assert len(b.placed) == 1
+    assert b.market_calls == []
+
+
+def test_cancel_failure_abort_flags_order_live():
+    b = FakeBroker(fill_attempt=None, cancel_ok=False)
+    res = chase_fill(b, _order(qty="10"), _fast_cfg(), sleep=NOSLEEP)
+    assert res["status"] == "error"
+    assert res["order_live"] is True
+
+
+def test_enum_str_rejected_place_limit_falls_back_to_market():
+    """Adapter statuses like tastytrade's 'Rejected' (enum .value casing) must
+    hit the place-failed path, not be mistaken for a live order."""
+
+    class RejectingBroker(FakeBroker):
+        def place_limit(self, order, limit, dry_run=False):
+            return {"status": "Rejected", "ticker": order.ticker}
+
+    b = RejectingBroker()
+    res = chase_fill(b, _order(qty="10"), _fast_cfg(), sleep=NOSLEEP)
+    assert b.market_calls == [10.0]  # fell straight through to market
+    assert res["status"] == "FILLED"

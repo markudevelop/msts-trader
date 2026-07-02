@@ -31,7 +31,9 @@ def test_first_buy_when_flat(basic_targets, empty_positions, basic_quotes):
 
 def test_within_drift_skips_order():
     targets = [Target(ticker="SPY", weight=Decimal("0.50"))]
-    positions = {"SPY": Position(ticker="SPY", quantity=Decimal("50"), price=Decimal("502"))}  # mv=25100 vs target 25000 => 0.2%
+    positions = {
+        "SPY": Position(ticker="SPY", quantity=Decimal("50"), price=Decimal("502"))
+    }  # mv=25100 vs target 25000 => 0.2%
     p = build_preview(
         targets=targets,
         positions=positions,
@@ -46,7 +48,9 @@ def test_within_drift_skips_order():
 
 def test_drift_above_threshold_triggers_order():
     targets = [Target(ticker="SPY", weight=Decimal("0.50"))]
-    positions = {"SPY": Position(ticker="SPY", quantity=Decimal("40"), price=Decimal("500"))}  # 20k vs target 25k => 10%
+    positions = {
+        "SPY": Position(ticker="SPY", quantity=Decimal("40"), price=Decimal("500"))
+    }  # 20k vs target 25k => 10%
     p = build_preview(
         targets=targets,
         positions=positions,
@@ -116,10 +120,21 @@ def test_leveraged_book_warns_not_blocks():
 def test_real_160pct_leveraged_book(basic_quotes):
     # The user's actual production weights sum to ~1.60 (160% gross / 1.6x).
     weights = {
-        "QQQ": "0.3123", "GLD": "0.2537", "TBT": "0.1480", "SPY": "0.1178",
-        "EEM": "0.1125", "ORR": "0.1080", "XLP": "0.0948", "EWJ": "0.0810",
-        "SMH": "0.0675", "XLK": "0.0675", "USDU": "0.0671", "IWM": "0.0553",
-        "DXJ": "0.0540", "UUP": "0.0503", "PDBC": "0.0124",
+        "QQQ": "0.3123",
+        "GLD": "0.2537",
+        "TBT": "0.1480",
+        "SPY": "0.1178",
+        "EEM": "0.1125",
+        "ORR": "0.1080",
+        "XLP": "0.0948",
+        "EWJ": "0.0810",
+        "SMH": "0.0675",
+        "XLK": "0.0675",
+        "USDU": "0.0671",
+        "IWM": "0.0553",
+        "DXJ": "0.0540",
+        "UUP": "0.0503",
+        "PDBC": "0.0124",
     }
     targets = [Target(ticker=t, weight=Decimal(w)) for t, w in weights.items()]
     quotes = {t: Decimal("100") for t in weights}
@@ -141,9 +156,15 @@ def test_real_160pct_leveraged_book(basic_quotes):
     assert "QQQ" in ordered and p.orders[0].quantity == Decimal("312.30")  # 0.3123*100k/100
     assert any("160% gross" in w or "leveraged book" in w.lower() for w in p.warnings)
     # under per-ticker scope the sub-4% PDBC sleeve stays frozen on a fresh account
-    pt = build_preview(targets=targets, positions={}, nav=Decimal("100000"),
-                       cash=Decimal("100000"), buying_power=Decimal("250000"),
-                       quotes=quotes, rebalance_scope="per-ticker")
+    pt = build_preview(
+        targets=targets,
+        positions={},
+        nav=Decimal("100000"),
+        cash=Decimal("100000"),
+        buying_power=Decimal("250000"),
+        quotes=quotes,
+        rebalance_scope="per-ticker",
+    )
     assert len(pt.orders) == 14 and "PDBC" not in {o.ticker for o in pt.orders}
 
 
@@ -216,11 +237,14 @@ def test_sells_ordered_before_buys():
     targets = [Target(ticker="SPY", weight=Decimal("0.5")), Target(ticker="SHV", weight=Decimal("0.5"))]
     positions = {
         "GLD": Position(ticker="GLD", quantity=Decimal("100"), price=Decimal("200")),  # exit -> sell
-        "EEM": Position(ticker="EEM", quantity=Decimal("100"), price=Decimal("50")),    # exit -> sell
+        "EEM": Position(ticker="EEM", quantity=Decimal("100"), price=Decimal("50")),  # exit -> sell
     }
     p = build_preview(
-        targets=targets, positions=positions,
-        nav=Decimal("100000"), cash=Decimal("75000"), buying_power=Decimal("100000"),
+        targets=targets,
+        positions=positions,
+        nav=Decimal("100000"),
+        cash=Decimal("75000"),
+        buying_power=Decimal("100000"),
         quotes={"SPY": Decimal("500"), "SHV": Decimal("110"), "GLD": Decimal("200"), "EEM": Decimal("50")},
     )
     sides = [o.side for o in p.orders]
@@ -235,8 +259,11 @@ def test_build_preview_warns_on_bp_overrun_but_does_not_scale():
     # applied separately by apply_margin_aware.
     targets = [Target(ticker="SPY", weight=Decimal("1.5"))]
     p = build_preview(
-        targets=targets, positions={},
-        nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("50000"),
+        targets=targets,
+        positions={},
+        nav=Decimal("100000"),
+        cash=Decimal("100000"),
+        buying_power=Decimal("50000"),
         quotes={"SPY": Decimal("500")},
     )
     assert any("exceed buying power" in w for w in p.warnings)
@@ -249,8 +276,11 @@ def test_apply_margin_aware_notional_scales_to_fit():
 
     targets = [Target(ticker="SPY", weight=Decimal("1.0")), Target(ticker="QQQ", weight=Decimal("0.6"))]
     p = build_preview(
-        targets=targets, positions={},
-        nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("80000"),
+        targets=targets,
+        positions={},
+        nav=Decimal("100000"),
+        cash=Decimal("100000"),
+        buying_power=Decimal("80000"),
         quotes={"SPY": Decimal("500"), "QQQ": Decimal("400")},
     )
     apply_margin_aware(p, buying_power=Decimal("80000"))  # no real_margin -> notional
@@ -268,8 +298,11 @@ def test_apply_margin_aware_uses_real_margin_when_given():
     # Real margin is HIGHER than notional (leveraged ETF) -> scales more.
     targets = [Target(ticker="TBT", weight=Decimal("1.0"))]
     p = build_preview(
-        targets=targets, positions={},
-        nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("100000"),
+        targets=targets,
+        positions={},
+        nav=Decimal("100000"),
+        cash=Decimal("100000"),
+        buying_power=Decimal("100000"),
         quotes={"TBT": Decimal("40")},
     )
     # notional ~ $100k fits BP $100k; but real margin $150k does NOT -> scales.
@@ -284,8 +317,11 @@ def test_sub_dollar_delta_is_dust_skipped():
     positions = {"SPY": Position(ticker="SPY", quantity=Decimal("100"), price=Decimal("250.00"))}
     # current = 25000, target = 0.5*50000.50 = 25000.25 -> delta $0.25 < $1
     p = build_preview(
-        targets=targets, positions=positions,
-        nav=Decimal("50000.50"), cash=Decimal("25000"), buying_power=Decimal("25000"),
+        targets=targets,
+        positions=positions,
+        nav=Decimal("50000.50"),
+        cash=Decimal("25000"),
+        buying_power=Decimal("25000"),
         quotes={"SPY": Decimal("250.00")},
         drift_threshold=Decimal("0"),  # disable drift gate so we reach the dust check
         rebalance_scope="per-ticker",  # dust gate is a per-line concept
@@ -302,8 +338,11 @@ def test_apply_margin_aware_notes_fit_via_sells():
     targets = [Target(ticker="SPY", weight=Decimal("1.0"))]
     positions = {"GLD": Position(ticker="GLD", quantity=Decimal("450"), price=Decimal("200"))}  # $90k sell
     p = build_preview(
-        targets=targets, positions=positions,
-        nav=Decimal("100000"), cash=Decimal("20000"), buying_power=Decimal("20000"),
+        targets=targets,
+        positions=positions,
+        nav=Decimal("100000"),
+        cash=Decimal("20000"),
+        buying_power=Decimal("20000"),
         quotes={"SPY": Decimal("500"), "GLD": Decimal("200")},
     )
     # BP 20k + $90k sell proceeds -> available ~106k >= $100k buys -> fits
@@ -322,8 +361,11 @@ def test_fully_invested_book_not_trimmed_on_cash_account():
     # was wrongly applied to the fit check.)
     targets = [Target(ticker="SPY", weight=Decimal("0.6")), Target(ticker="SHV", weight=Decimal("0.4"))]
     p = build_preview(
-        targets=targets, positions={},
-        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        targets=targets,
+        positions={},
+        nav=Decimal("50000"),
+        cash=Decimal("50000"),
+        buying_power=Decimal("50000"),
         quotes={"SPY": Decimal("500"), "SHV": Decimal("110")},
     )
     scaled = apply_margin_aware(p, buying_power=Decimal("50000"))
@@ -340,8 +382,11 @@ def test_over_bp_book_scaled_with_safety_cushion():
     # market fill with mild slippage still clears.
     targets = [Target(ticker="SPY", weight=Decimal("1.2"))]
     p = build_preview(
-        targets=targets, positions={},
-        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        targets=targets,
+        positions={},
+        nav=Decimal("50000"),
+        cash=Decimal("50000"),
+        buying_power=Decimal("50000"),
         quotes={"SPY": Decimal("500")},
     )
     apply_margin_aware(p, buying_power=Decimal("50000"))
@@ -356,8 +401,11 @@ def test_margin_aware_handles_zero_buy_book():
     targets = [Target(ticker="SHV", weight=Decimal("0"))]
     positions = {"SPY": Position(ticker="SPY", quantity=Decimal("100"), price=Decimal("500"))}
     p = build_preview(
-        targets=targets, positions=positions,
-        nav=Decimal("50000"), cash=Decimal("0"), buying_power=Decimal("0"),
+        targets=targets,
+        positions=positions,
+        nav=Decimal("50000"),
+        cash=Decimal("0"),
+        buying_power=Decimal("0"),
         quotes={"SPY": Decimal("500"), "SHV": Decimal("110")},
     )
     scale = apply_margin_aware(p, buying_power=Decimal("0"))  # no crash
@@ -370,8 +418,11 @@ def test_apply_margin_aware_noop_when_fits():
 
     targets = [Target(ticker="SPY", weight=Decimal("0.5"))]
     p = build_preview(
-        targets=targets, positions={},
-        nav=Decimal("100000"), cash=Decimal("100000"), buying_power=Decimal("100000"),
+        targets=targets,
+        positions={},
+        nav=Decimal("100000"),
+        cash=Decimal("100000"),
+        buying_power=Decimal("100000"),
         quotes={"SPY": Decimal("500")},
     )
     before = [(o.ticker, o.quantity) for o in p.orders]
@@ -390,8 +441,11 @@ def test_short_position_not_in_targets_is_left_untouched():
         "QQQ": Position(ticker="QQQ", quantity=Decimal("-10"), price=Decimal("400")),  # short
     }
     p = build_preview(
-        targets=targets, positions=positions,
-        nav=Decimal("50000"), cash=Decimal("0"), buying_power=Decimal("0"),
+        targets=targets,
+        positions=positions,
+        nav=Decimal("50000"),
+        cash=Decimal("0"),
+        buying_power=Decimal("0"),
         quotes={"SPY": Decimal("500"), "QQQ": Decimal("400")},
     )
     assert not any(o.ticker == "QQQ" for o in p.orders)
@@ -404,8 +458,11 @@ def test_qty_rounding_to_zero_is_skipped():
     # 10% of 50k = $5000 target; price $700,000 => 0.007 -> quantize(0.01) = 0.01... actually rounds up.
     # Use a price that makes qty round to exactly 0.00.
     p = build_preview(
-        targets=targets, positions={},
-        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        targets=targets,
+        positions={},
+        nav=Decimal("50000"),
+        cash=Decimal("50000"),
+        buying_power=Decimal("50000"),
         quotes={"BRKA": Decimal("200000000")},  # $5000 / 200M = 0.000025 -> 0.00
     )
     assert all(o.ticker != "BRKA" or o.quantity > 0 for o in p.orders)
@@ -414,18 +471,22 @@ def test_qty_rounding_to_zero_is_skipped():
 
 # ----- min_weight -----
 
+
 def test_min_weight_drops_tiny_target_without_touching_position():
     # 0.005 < min_weight 0.01: no buy for the flat ticker, no sell for the
     # held one — "ignore" means neither side trades.
     targets = [
         Target(ticker="SPY", weight=Decimal("0.50")),
-        Target(ticker="TINY", weight=Decimal("0.005")),   # flat, would be a buy
+        Target(ticker="TINY", weight=Decimal("0.005")),  # flat, would be a buy
         Target(ticker="DUSTY", weight=Decimal("0.005")),  # held, must NOT be exit-swept
     ]
     positions = {"DUSTY": Position(ticker="DUSTY", quantity=Decimal("100"), price=Decimal("50"))}
     p = build_preview(
-        targets=targets, positions=positions,
-        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        targets=targets,
+        positions=positions,
+        nav=Decimal("50000"),
+        cash=Decimal("50000"),
+        buying_power=Decimal("50000"),
         quotes={"SPY": Decimal("500"), "TINY": Decimal("10"), "DUSTY": Decimal("50")},
         min_weight=Decimal("0.01"),
     )
@@ -437,8 +498,11 @@ def test_min_weight_drops_tiny_target_without_touching_position():
 def test_min_weight_none_keeps_all_targets():
     targets = [Target(ticker="TINY", weight=Decimal("0.005"))]
     p = build_preview(
-        targets=targets, positions={},
-        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        targets=targets,
+        positions={},
+        nav=Decimal("50000"),
+        cash=Decimal("50000"),
+        buying_power=Decimal("50000"),
         quotes={"TINY": Decimal("10")},
         drift_threshold=Decimal("0.001"),
     )
@@ -451,8 +515,11 @@ def test_min_weight_keeps_explicit_zero_exit_semantics():
     targets = [Target(ticker="OUT", weight=Decimal("0"))]
     positions = {"OUT": Position(ticker="OUT", quantity=Decimal("100"), price=Decimal("50"))}
     p = build_preview(
-        targets=targets, positions=positions,
-        nav=Decimal("50000"), cash=Decimal("0"), buying_power=Decimal("0"),
+        targets=targets,
+        positions=positions,
+        nav=Decimal("50000"),
+        cash=Decimal("0"),
+        buying_power=Decimal("0"),
         quotes={"OUT": Decimal("50")},
         min_weight=Decimal("0.01"),
     )
@@ -462,12 +529,16 @@ def test_min_weight_keeps_explicit_zero_exit_semantics():
 
 # ----- allocation (sub-portfolio sizing) -----
 
+
 def test_allocation_sizes_against_dollar_base_not_nav():
     # $200k account, weights apply to a $50k sleeve: 50% SPY = $25k = 50 sh.
     targets = [Target(ticker="SPY", weight=Decimal("0.50"))]
     p = build_preview(
-        targets=targets, positions={},
-        nav=Decimal("200000"), cash=Decimal("200000"), buying_power=Decimal("200000"),
+        targets=targets,
+        positions={},
+        nav=Decimal("200000"),
+        cash=Decimal("200000"),
+        buying_power=Decimal("200000"),
         quotes={"SPY": Decimal("500")},
         allocation=Decimal("50000"),
     )
@@ -485,8 +556,11 @@ def test_allocation_drift_relative_to_allocation():
     targets = [Target(ticker="SPY", weight=Decimal("0.50"))]
     positions = {"SPY": Position(ticker="SPY", quantity=Decimal("44"), price=Decimal("500"))}  # 22k vs 25k = 6% of 50k
     p = build_preview(
-        targets=targets, positions=positions,
-        nav=Decimal("200000"), cash=Decimal("178000"), buying_power=Decimal("178000"),
+        targets=targets,
+        positions=positions,
+        nav=Decimal("200000"),
+        cash=Decimal("178000"),
+        buying_power=Decimal("178000"),
         quotes={"SPY": Decimal("500")},
         allocation=Decimal("50000"),
     )
@@ -496,8 +570,11 @@ def test_allocation_drift_relative_to_allocation():
 def test_allocation_above_nav_falls_back_to_nav():
     targets = [Target(ticker="SPY", weight=Decimal("0.50"))]
     p = build_preview(
-        targets=targets, positions={},
-        nav=Decimal("50000"), cash=Decimal("50000"), buying_power=Decimal("50000"),
+        targets=targets,
+        positions={},
+        nav=Decimal("50000"),
+        cash=Decimal("50000"),
+        buying_power=Decimal("50000"),
         quotes={"SPY": Decimal("500")},
         allocation=Decimal("999999"),
     )
@@ -508,23 +585,33 @@ def test_allocation_above_nav_falls_back_to_nav():
 
 # ----- whole-share mode (IBKR/accounts without fractional-API permission) -----
 
+
 def test_whole_shares_rounds_buy_down(basic_targets, empty_positions, basic_quotes):
     # SHV 0.50 * 50k = 25k @ 110 = 227.27 sh -> 227 whole shares (rounds DOWN)
     p = build_preview(
-        targets=basic_targets, positions=empty_positions, nav=_nav(),
-        cash=_nav(), buying_power=_nav(), quotes=basic_quotes, whole_shares=True,
+        targets=basic_targets,
+        positions=empty_positions,
+        nav=_nav(),
+        cash=_nav(),
+        buying_power=_nav(),
+        quotes=basic_quotes,
+        whole_shares=True,
     )
     by_t = {o.ticker: o for o in p.orders}
-    assert by_t["SPY"].quantity == Decimal("50")     # already whole
-    assert by_t["SHV"].quantity == Decimal("227")    # 227.27 truncated
+    assert by_t["SPY"].quantity == Decimal("50")  # already whole
+    assert by_t["SHV"].quantity == Decimal("227")  # 227.27 truncated
     # every order quantity is integral
     assert all(o.quantity == o.quantity.to_integral_value() for o in p.orders)
 
 
 def test_whole_shares_off_keeps_fraction(basic_targets, empty_positions, basic_quotes):
     p = build_preview(
-        targets=basic_targets, positions=empty_positions, nav=_nav(),
-        cash=_nav(), buying_power=_nav(), quotes=basic_quotes,  # default: fractional allowed
+        targets=basic_targets,
+        positions=empty_positions,
+        nav=_nav(),
+        cash=_nav(),
+        buying_power=_nav(),
+        quotes=basic_quotes,  # default: fractional allowed
     )
     by_t = {o.ticker: o for o in p.orders}
     assert by_t["SHV"].quantity == Decimal("227.27")
@@ -539,9 +626,13 @@ def test_whole_shares_rounds_exit_down():
         "GLD": Position(ticker="GLD", quantity=Decimal("5.6"), price=Decimal("200")),  # exit
     }
     p = build_preview(
-        targets=targets, positions=positions, nav=Decimal("50000"),
-        cash=Decimal("0"), buying_power=Decimal("0"),
-        quotes={"SPY": Decimal("500"), "GLD": Decimal("200")}, whole_shares=True,
+        targets=targets,
+        positions=positions,
+        nav=Decimal("50000"),
+        cash=Decimal("0"),
+        buying_power=Decimal("0"),
+        quotes={"SPY": Decimal("500"), "GLD": Decimal("200")},
+        whole_shares=True,
     )
     gld = next(o for o in p.orders if o.ticker == "GLD")
     assert gld.side == Side.SELL and gld.quantity == Decimal("5")  # 5.6 -> 5
@@ -552,14 +643,21 @@ def test_whole_shares_rounds_exit_down():
 _SWEEP_TGTS = [Target("SPY", Decimal("1.0"))]
 _SWEEP_POS = {
     "SPY": Position("SPY", Decimal("100"), Decimal("500")),  # $50k == target, no trade
-    "GLD": Position("GLD", Decimal("10"), Decimal("200")),   # $2k, not in targets
+    "GLD": Position("GLD", Decimal("10"), Decimal("200")),  # $2k, not in targets
 }
 _SWEEP_Q = {"SPY": Decimal("500"), "GLD": Decimal("200")}
 
 
 def _sweep_preview(**kw):
-    return build_preview(targets=_SWEEP_TGTS, positions=_SWEEP_POS, nav=Decimal("50000"),
-                         cash=Decimal("0"), buying_power=Decimal("0"), quotes=_SWEEP_Q, **kw)
+    return build_preview(
+        targets=_SWEEP_TGTS,
+        positions=_SWEEP_POS,
+        nav=Decimal("50000"),
+        cash=Decimal("0"),
+        buying_power=Decimal("0"),
+        quotes=_SWEEP_Q,
+        **kw,
+    )
 
 
 def test_default_sweeps_unlisted_position():
@@ -570,17 +668,24 @@ def test_default_sweeps_unlisted_position():
 
 def test_no_sweep_leaves_unlisted_position_untouched():
     p = _sweep_preview(sweep=False)
-    assert p.orders == []                                     # nothing traded
+    assert p.orders == []  # nothing traded
     gld_row = next(r for r in p.rows if r.ticker == "GLD")
-    assert gld_row.order is None                              # surfaced, but no order
+    assert gld_row.order is None  # surfaced, but no order
     assert "kept" in gld_row.note and "not in targets" in gld_row.note
 
 
 def test_no_sweep_still_exits_explicit_weight_zero():
     # Under --no-sweep, a rotated-out name is closed by listing it with weight 0.
     targets = [Target("SPY", Decimal("1.0")), Target("GLD", Decimal("0"))]
-    p = build_preview(targets=targets, positions=_SWEEP_POS, nav=Decimal("50000"),
-                      cash=Decimal("0"), buying_power=Decimal("0"), quotes=_SWEEP_Q, sweep=False)
+    p = build_preview(
+        targets=targets,
+        positions=_SWEEP_POS,
+        nav=Decimal("50000"),
+        cash=Decimal("0"),
+        buying_power=Decimal("0"),
+        quotes=_SWEEP_Q,
+        sweep=False,
+    )
     gld = next(o for o in p.orders if o.ticker == "GLD")
     assert gld.side == Side.SELL and gld.quantity == Decimal("10")
 
@@ -591,8 +696,11 @@ def test_whole_shares_buy_rounding_to_zero_is_skipped():
     # whole-share note (not a fractional 0.83-share order IBKR would reject).
     targets = [Target(ticker="BRKA", weight=Decimal("0.05"))]  # 0.05 * 50k = $2500
     p = build_preview(
-        targets=targets, positions={}, nav=Decimal("50000"),
-        cash=Decimal("50000"), buying_power=Decimal("50000"),
+        targets=targets,
+        positions={},
+        nav=Decimal("50000"),
+        cash=Decimal("50000"),
+        buying_power=Decimal("50000"),
         quotes={"BRKA": Decimal("3000")},  # $2500 / 3000 = 0.83 sh -> 0 whole
         whole_shares=True,
     )
@@ -602,12 +710,73 @@ def test_whole_shares_buy_rounding_to_zero_is_skipped():
 
 def test_whole_shares_margin_aware_rerounds_to_integer():
     from msts_trader.diff import apply_margin_aware
+
     targets = [Target(ticker="SPY", weight=Decimal("1.0"))]
     p = build_preview(
-        targets=targets, positions={}, nav=Decimal("100000"),
-        cash=Decimal("100000"), buying_power=Decimal("60000"),  # can't afford full 200 sh
-        quotes={"SPY": Decimal("500")}, whole_shares=True,
+        targets=targets,
+        positions={},
+        nav=Decimal("100000"),
+        cash=Decimal("100000"),
+        buying_power=Decimal("60000"),  # can't afford full 200 sh
+        quotes={"SPY": Decimal("500")},
+        whole_shares=True,
     )
     apply_margin_aware(p, buying_power=Decimal("60000"), whole_shares=True)
     spy = next(o for o in p.orders if o.ticker == "SPY")
     assert spy.quantity == spy.quantity.to_integral_value()  # scaling kept it whole
+
+
+# ---- 0.26.0 regressions: exit rounding + live-quote repricing --------------
+def test_fractional_exit_never_rounds_up_past_held_quantity():
+    # Held 10.456789 (Alpaca notional buys/DRIP report up to 9 decimals).
+    # HALF_EVEN used to produce SELL 10.46 — more than is held: the broker
+    # rejects the oversell and the sweep exit never completes.
+    p = build_preview(
+        targets=[Target(ticker="SPY", weight=Decimal("1.0"))],
+        positions={"OLD": Position(ticker="OLD", quantity=Decimal("10.456789"), price=Decimal("100"))},
+        nav=Decimal("50000"),
+        cash=Decimal("50000"),
+        buying_power=Decimal("50000"),
+        quotes={"SPY": Decimal("500"), "OLD": Decimal("100")},
+    )
+    old = next(o for o in p.orders if o.ticker == "OLD")
+    assert old.side == Side.SELL
+    assert old.quantity == Decimal("10.45")  # rounded DOWN
+    assert old.quantity <= Decimal("10.456789")
+
+
+def test_current_value_uses_live_quote_not_stale_position_price():
+    # Tradier/IBKR report Position.price as average COST; a holding that
+    # doubled since purchase must read at its true (live) weight, or the diff
+    # buys more of an already-overweight name.
+    # NAV 100k, held 100 sh bought @ 500 (cost 50k) now quoted 1000 (live 100k
+    # = 100% weight); target 50% → must SELL, not stand pat or buy.
+    p = build_preview(
+        targets=[Target(ticker="SPY", weight=Decimal("0.5")), Target(ticker="SHV", weight=Decimal("0.5"))],
+        positions={"SPY": Position(ticker="SPY", quantity=Decimal("100"), price=Decimal("500"))},
+        nav=Decimal("100000"),
+        cash=Decimal("0"),
+        buying_power=Decimal("100000"),
+        quotes={"SPY": Decimal("1000"), "SHV": Decimal("110")},
+    )
+    spy = next(o for o in p.orders if o.ticker == "SPY")
+    assert spy.side == Side.SELL  # overweight at LIVE price
+    assert spy.quantity == Decimal("50")  # sell $50k / $1000 = 50 sh
+    spy_row = next(r for r in p.rows if r.ticker == "SPY")
+    assert spy_row.current_pct == Decimal("1")  # 100% at live value, not 50% at cost
+
+
+def test_sweep_exit_prices_at_live_quote():
+    # The not-in-targets sweep must value and price the exit at the live
+    # quote, not the stale position price.
+    p = build_preview(
+        targets=[Target(ticker="SPY", weight=Decimal("1.0"))],
+        positions={"OLD": Position(ticker="OLD", quantity=Decimal("10"), price=Decimal("100"))},
+        nav=Decimal("50000"),
+        cash=Decimal("50000"),
+        buying_power=Decimal("50000"),
+        quotes={"SPY": Decimal("500"), "OLD": Decimal("250")},
+    )
+    old = next(o for o in p.orders if o.ticker == "OLD")
+    assert old.estimated_price == Decimal("250")  # live quote
+    assert old.notional == Decimal("2500")  # valued at live quote

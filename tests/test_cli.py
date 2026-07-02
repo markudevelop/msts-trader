@@ -159,9 +159,7 @@ def test_moc_refused_too_close_to_the_close(monkeypatch):
         cli, "market_status", lambda: type("MS", (), {"status": "open", "next_open": None, "minutes_to_close": 5})()
     )
     # NOT --dry-run: the cutoff guard intentionally applies only to a live run.
-    r = CliRunner().invoke(
-        main, ["--broker", "paper", "rebalance", "--moc", "--yes"], input="ticker,weight\nSPY,1.0\n"
-    )
+    r = CliRunner().invoke(main, ["--broker", "paper", "rebalance", "--moc", "--yes"], input="ticker,weight\nSPY,1.0\n")
     assert r.exit_code != 0
     assert "moc" in r.output.lower() and "close" in r.output.lower()
 

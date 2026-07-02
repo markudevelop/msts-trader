@@ -21,7 +21,7 @@ from tastytrade.order import (
 )
 
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError
+from .base import Balances, BrokerError, status_str
 
 
 class Tastytrade:
@@ -192,9 +192,9 @@ class Tastytrade:
 
         order_obj = getattr(resp, "order", None)
         order_id = getattr(order_obj, "id", None) or getattr(resp, "id", None)
-        status = getattr(order_obj, "status", None) or getattr(resp, "status", None) or "submitted"
+        status = getattr(order_obj, "status", None) or getattr(resp, "status", None)
         return {
-            "status": str(status),
+            "status": status_str(status),
             "ticker": order.ticker,
             "side": order.side.value,
             "quantity": float(qty),
@@ -227,9 +227,9 @@ class Tastytrade:
             return {"status": "error", "reason": str(e), "ticker": order.ticker}
         order_obj = getattr(resp, "order", None)
         order_id = getattr(order_obj, "id", None) or getattr(resp, "id", None)
-        status = getattr(order_obj, "status", None) or getattr(resp, "status", None) or "submitted"
+        status = getattr(order_obj, "status", None) or getattr(resp, "status", None)
         return {
-            "status": str(status),
+            "status": status_str(status),
             "ticker": order.ticker,
             "side": order.side.value,
             "quantity": float(qty),
@@ -303,7 +303,7 @@ class Tastytrade:
             return {"status": "error", "reason": str(e), "ticker": ticker}
         order_obj = getattr(resp, "order", None)
         return {
-            "status": str(getattr(order_obj, "status", None) or "submitted"),
+            "status": status_str(getattr(order_obj, "status", None)),
             "ticker": ticker,
             "order_id": getattr(order_obj, "id", None),
             "quantity": float(qty),

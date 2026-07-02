@@ -1,4 +1,5 @@
 """Stops support + position-relative drift mode."""
+
 from decimal import Decimal
 
 import pytest
@@ -22,6 +23,7 @@ def _preview(targets, positions=None, nav="100000", quotes=None, **kw):
 
 # ---------------------------------------------------------------- CSV ----
 
+
 def test_csv_stop_pct_parsed():
     t = parse_csv("ticker,weight,stop_pct\nSPY,0.5,\nWGMI,0.018,0.015\n")
     by = {x.ticker: x for x in t}
@@ -43,6 +45,7 @@ def test_csv_without_stop_column_unchanged():
 
 # ------------------------------------------------------------ drift mode ----
 
+
 def test_nav_mode_freezes_small_lines():
     # 1.8% line, no position: delta = 1.8% of NAV < 4% threshold -> frozen
     p = _preview([Target("WGMI", Decimal("0.018"))], quotes={"WGMI": Decimal("10")})
@@ -51,8 +54,7 @@ def test_nav_mode_freezes_small_lines():
 
 
 def test_position_mode_trades_small_lines():
-    p = _preview([Target("WGMI", Decimal("0.018"))], quotes={"WGMI": Decimal("10")},
-                 drift_mode="position")
+    p = _preview([Target("WGMI", Decimal("0.018"))], quotes={"WGMI": Decimal("10")}, drift_mode="position")
     assert len(p.orders) == 1
     o = p.orders[0]
     assert o.side == Side.BUY
@@ -62,8 +64,9 @@ def test_position_mode_trades_small_lines():
 def test_position_mode_respects_threshold_on_small_drift():
     # held 1.80%, target 1.83% -> drift 1.7% of the LINE < 4% -> skip
     pos = {"WGMI": Position("WGMI", Decimal("180"), Decimal("10"))}
-    p = _preview([Target("WGMI", Decimal("0.0183"))], positions=pos,
-                 quotes={"WGMI": Decimal("10")}, drift_mode="position")
+    p = _preview(
+        [Target("WGMI", Decimal("0.0183"))], positions=pos, quotes={"WGMI": Decimal("10")}, drift_mode="position"
+    )
     assert p.orders == []
 
 
@@ -89,8 +92,7 @@ def test_whole_book_snaps_all_when_one_breaches():
 
 def test_per_ticker_trades_only_breaching():
     # per-ticker: only SPY trades; AGG stays within drift
-    p = _preview(_SCOPE_TGTS, positions=_SCOPE_POS, quotes=_SCOPE_QUOTES,
-                 rebalance_scope="per-ticker")
+    p = _preview(_SCOPE_TGTS, positions=_SCOPE_POS, quotes=_SCOPE_QUOTES, rebalance_scope="per-ticker")
     assert [o.ticker for o in p.orders] == ["SPY"]
     agg = next(r for r in p.rows if r.ticker == "AGG")
     assert agg.order is None and "within drift" in agg.note
@@ -111,58 +113,68 @@ def test_exit_triggers_whole_book_snap():
     # In-target SPY is within drift, but a stray held name (not in targets) makes
     # the book live -> whole-book snaps SPY too AND exits the stray.
     pos = {
-        "SPY": Position("SPY", Decimal("490"), Decimal("100")),   # within drift (1% off)
-        "AGG": Position("AGG", Decimal("490"), Decimal("100")),   # within drift (1% off)
-        "TLT": Position("TLT", Decimal("100"), Decimal("100")),   # $10k, not in targets
+        "SPY": Position("SPY", Decimal("490"), Decimal("100")),  # within drift (1% off)
+        "AGG": Position("AGG", Decimal("490"), Decimal("100")),  # within drift (1% off)
+        "TLT": Position("TLT", Decimal("100"), Decimal("100")),  # $10k, not in targets
     }
-    whole = _preview(_SCOPE_TGTS, positions=pos,
-                     quotes={**_SCOPE_QUOTES, "TLT": Decimal("100")})
+    whole = _preview(_SCOPE_TGTS, positions=pos, quotes={**_SCOPE_QUOTES, "TLT": Decimal("100")})
     by = {o.ticker: o.side for o in whole.orders}
-    assert by.get("TLT") == Side.SELL          # stray exited
-    assert by.get("SPY") == Side.BUY            # within-drift line snapped too
+    assert by.get("TLT") == Side.SELL  # stray exited
+    assert by.get("SPY") == Side.BUY  # within-drift line snapped too
     # per-ticker: SPY stays put, only the stray exits
-    per = _preview(_SCOPE_TGTS, positions=pos,
-                   quotes={**_SCOPE_QUOTES, "TLT": Decimal("100")},
-                   rebalance_scope="per-ticker")
+    per = _preview(
+        _SCOPE_TGTS, positions=pos, quotes={**_SCOPE_QUOTES, "TLT": Decimal("100")}, rebalance_scope="per-ticker"
+    )
     assert [o.ticker for o in per.orders] == ["TLT"]
 
 
 # ------------------------------------------------------------- stop carry ----
 
+
 def test_weight_zero_exits_small_position_like_missing_row():
     """Explicit weight 0 must fully exit even a sub-drift (<4% NAV) holding —
     identical to dropping the row — not freeze it as 'within drift'."""
-    pos = {"AAA": Position("AAA", Decimal("10"), Decimal("100"))}   # $1000 = 1% of $100k NAV
+    pos = {"AAA": Position("AAA", Decimal("10"), Decimal("100"))}  # $1000 = 1% of $100k NAV
     # weight 0 (explicit) -> full exit
     p0 = _preview([Target("AAA", Decimal("0"))], positions=pos, quotes={"AAA": Decimal("100")})
     assert len(p0.orders) == 1
     assert p0.orders[0].side == Side.SELL
     assert p0.orders[0].quantity == Decimal("10")
     # dropping the row entirely -> same full exit (the exit-all sweep)
-    pmiss = _preview([Target("BBB", Decimal("1.0"))], positions=pos,
-                     quotes={"AAA": Decimal("100"), "BBB": Decimal("50")})
+    pmiss = _preview(
+        [Target("BBB", Decimal("1.0"))], positions=pos, quotes={"AAA": Decimal("100"), "BBB": Decimal("50")}
+    )
     aaa = [o for o in pmiss.orders if o.ticker == "AAA"]
     assert len(aaa) == 1 and aaa[0].side == Side.SELL and aaa[0].quantity == Decimal("10")
 
 
 def test_buy_order_carries_stop_pct():
-    p = _preview([Target("WGMI", Decimal("0.018"), stop_pct=Decimal("0.015"))],
-                 quotes={"WGMI": Decimal("10")}, drift_mode="position")
+    p = _preview(
+        [Target("WGMI", Decimal("0.018"), stop_pct=Decimal("0.015"))],
+        quotes={"WGMI": Decimal("10")},
+        drift_mode="position",
+    )
     assert p.orders[0].stop_pct == Decimal("0.015")
 
 
 def test_sell_order_does_not_carry_stop_pct():
     pos = {"WGMI": Position("WGMI", Decimal("500"), Decimal("10"))}
-    p = _preview([Target("WGMI", Decimal("0.01"), stop_pct=Decimal("0.015"))],
-                 positions=pos, quotes={"WGMI": Decimal("10")}, drift_mode="position")
+    p = _preview(
+        [Target("WGMI", Decimal("0.01"), stop_pct=Decimal("0.015"))],
+        positions=pos,
+        quotes={"WGMI": Decimal("10")},
+        drift_mode="position",
+    )
     assert p.orders[0].side == Side.SELL
     assert p.orders[0].stop_pct is None
 
 
 # ------------------------------------------------------------ paper stops ----
 
+
 def test_paper_stop_lifecycle(tmp_path, monkeypatch):
     import msts_trader.brokers.paper as paper_mod
+
     monkeypatch.setattr(paper_mod, "STATE_PATH", tmp_path / "paper.json")
     b = paper_mod.Paper()
     assert b.supports_stops
@@ -177,6 +189,7 @@ def test_paper_stop_lifecycle(tmp_path, monkeypatch):
 
 def test_paper_stop_dry_run(tmp_path, monkeypatch):
     import msts_trader.brokers.paper as paper_mod
+
     monkeypatch.setattr(paper_mod, "STATE_PATH", tmp_path / "paper.json")
     b = paper_mod.Paper()
     res = b.place_stop("WGMI", Decimal("10"), Decimal("9.85"), dry_run=True)
@@ -186,8 +199,10 @@ def test_paper_stop_dry_run(tmp_path, monkeypatch):
 
 # --------------------------------------------------- reconcile edge cases ----
 
+
 def _mk_cli_env(tmp_path, monkeypatch):
     import msts_trader.brokers.paper as paper_mod
+
     monkeypatch.setattr(paper_mod, "STATE_PATH", tmp_path / "paper.json")
     return paper_mod.Paper()
 
@@ -196,13 +211,13 @@ def test_partial_reduce_replaces_stop_for_remainder(tmp_path, monkeypatch):
     """Trim 100 -> 60 shares: old stop cancelled, NEW stop covers the 60."""
     from msts_trader.__main__ import _reconcile_stops
     from msts_trader.models import Order, Preview, Side
+
     b = _mk_cli_env(tmp_path, monkeypatch)
     b.set_quote("WGMI", Decimal("50"))
     b.place_market(Order("WGMI", Side.BUY, Decimal("100"), Decimal("50")))
     b.place_stop("WGMI", Decimal("100"), Decimal("49.25"))
     sell = Order("WGMI", Side.SELL, Decimal("40"), Decimal("50"), stop_pct=None)
-    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0),
-                      rows=[], orders=[sell])
+    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[sell])
     # the target still wants a stop on WGMI (stop_pct comes from targets via orders)
     sell2 = Order("WGMI", Side.SELL, Decimal("40"), Decimal("50"))
     sell2.stop_pct = Decimal("0.015")
@@ -218,13 +233,13 @@ def test_addon_buy_protects_whole_position(tmp_path, monkeypatch):
     """Hold 100 (stopped), buy 50 more: new stop covers all 150."""
     from msts_trader.__main__ import _reconcile_stops
     from msts_trader.models import Order, Preview, Side
+
     b = _mk_cli_env(tmp_path, monkeypatch)
     b.set_quote("WGMI", Decimal("50"))
     b.place_market(Order("WGMI", Side.BUY, Decimal("100"), Decimal("50")))
     b.place_stop("WGMI", Decimal("100"), Decimal("49.25"))
     buy = Order("WGMI", Side.BUY, Decimal("50"), Decimal("52"), stop_pct=Decimal("0.015"))
-    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0),
-                      rows=[], orders=[buy])
+    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[buy])
     res = b.place_market(buy)
     _reconcile_stops(b, preview, [res])
     stops = b.open_stops()
@@ -239,13 +254,15 @@ def test_reconcile_backfills_stop_on_held_within_drift_no_orders(tmp_path, monke
     early-returns (previously stops were only touched on days the book traded)."""
     from msts_trader.__main__ import _reconcile_stops
     from msts_trader.models import Order, Preview, Side, Target
+
     b = _mk_cli_env(tmp_path, monkeypatch)
     b.set_quote("WGMI", Decimal("50"))
     b.place_market(Order("WGMI", Side.BUY, Decimal("100"), Decimal("50")))  # held, NO stop placed
-    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0),
-                      rows=[], orders=[])                                    # within drift: no orders
-    targets = [Target("WGMI", Decimal("0.05"), stop_pct=Decimal("0.015"))]   # target wants protection
-    _reconcile_stops(b, preview, [], targets=targets)                        # results empty, no trade
+    preview = Preview(
+        nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[]
+    )  # within drift: no orders
+    targets = [Target("WGMI", Decimal("0.05"), stop_pct=Decimal("0.015"))]  # target wants protection
+    _reconcile_stops(b, preview, [], targets=targets)  # results empty, no trade
     stops = b.open_stops()
     assert "WGMI" in stops, "held-but-not-traded name left unprotected on a no-trade day"
     assert stops["WGMI"][0]["quantity"] == Decimal("100")
@@ -254,20 +271,21 @@ def test_reconcile_backfills_stop_on_held_within_drift_no_orders(tmp_path, monke
 def test_full_exit_cancels_without_replacing(tmp_path, monkeypatch):
     from msts_trader.__main__ import _reconcile_stops
     from msts_trader.models import Order, Preview, Side
+
     b = _mk_cli_env(tmp_path, monkeypatch)
     b.set_quote("WGMI", Decimal("50"))
     b.place_market(Order("WGMI", Side.BUY, Decimal("100"), Decimal("50")))
     b.place_stop("WGMI", Decimal("100"), Decimal("49.25"))
     sell = Order("WGMI", Side.SELL, Decimal("100"), Decimal("50"))
     sell.stop_pct = Decimal("0.015")
-    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0),
-                      rows=[], orders=[sell])
+    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[sell])
     res = b.place_market(sell)
     _reconcile_stops(b, preview, [res])
     assert b.open_stops() == {}, "full exit must not leave or re-place stops"
 
 
 # ----------------------------------------- concern 1: no naked stops ----
+
 
 def test_no_stop_when_buy_fill_unconfirmed(tmp_path, monkeypatch):
     """A broker that accepts a BUY but whose positions() does not (yet) show the
@@ -306,13 +324,15 @@ def test_no_stop_when_buy_fill_unconfirmed(tmp_path, monkeypatch):
 
 # --------------------------------- concern 2: orphan + missing-stop sweep ----
 
+
 def test_orphan_stop_cancelled_when_no_position(tmp_path, monkeypatch):
     """A resting stop with no live position (manual exit / leftover) is cancelled
     even though the ticker isn't traded this run."""
     from msts_trader.__main__ import _reconcile_stops
     from msts_trader.models import Preview
+
     b = _mk_cli_env(tmp_path, monkeypatch)
-    b.place_stop("WGMI", Decimal("100"), Decimal("49.25"))   # stop, but no position
+    b.place_stop("WGMI", Decimal("100"), Decimal("49.25"))  # stop, but no position
     assert "WGMI" in b.open_stops()
     preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[])
     _reconcile_stops(b, preview, [], targets=[])
@@ -321,14 +341,19 @@ def test_orphan_stop_cancelled_when_no_position(tmp_path, monkeypatch):
 
 def test_is_clean_send_excludes_resting():
     from msts_trader.__main__ import _is_clean_send
+
     assert _is_clean_send("submitted") is True
     assert _is_clean_send("FILLED") is True
     assert _is_clean_send("ok") is True
-    # error / skipped / resting are NOT clean completions
+    # error / skipped / resting / rejected are NOT clean completions
     assert _is_clean_send("error") is False
     assert _is_clean_send("skipped") is False
-    assert _is_clean_send("resting") is False   # placed but unfilled (HL thin book)
+    assert _is_clean_send("resting") is False  # placed but unfilled (HL thin book)
     assert _is_clean_send("RESTING") is False
+    # adapters now report bare enum values, so a sync rejection surfaces as
+    # "rejected"/"Rejected" — it never executed and must not count as sent
+    assert _is_clean_send("rejected") is False
+    assert _is_clean_send("Rejected") is False
 
 
 def test_backfill_stop_anchors_on_live_quote_not_cost():
@@ -361,8 +386,7 @@ def test_backfill_stop_anchors_on_live_quote_not_cost():
             return {"status": "CANCELLED"}
 
     b = _CostBasisBroker()
-    preview = Preview(nav=Decimal("100000"), buying_power=Decimal("0"), cash=Decimal("0"),
-                      rows=[], orders=[])
+    preview = Preview(nav=Decimal("100000"), buying_power=Decimal("0"), cash=Decimal("0"), rows=[], orders=[])
     _reconcile_stops(b, preview, [], targets=[Target("WGMI", Decimal("0.5"), stop_pct=Decimal("0.02"))])
     assert len(b.placed) == 1
     _, _, stop_price = b.placed[0]
@@ -374,6 +398,7 @@ def test_missing_stop_backfilled_for_held_untraded_name(tmp_path, monkeypatch):
     this run, gets a stop backfilled from the target book."""
     from msts_trader.__main__ import _reconcile_stops
     from msts_trader.models import Order, Preview, Side, Target
+
     b = _mk_cli_env(tmp_path, monkeypatch)
     b.set_quote("WGMI", Decimal("50"))
     b.place_market(Order("WGMI", Side.BUY, Decimal("100"), Decimal("50")))  # held, no stop
@@ -393,9 +418,9 @@ def test_apply_default_stop_backfills_blanks_only():
     from msts_trader.models import Target
 
     ts = [
-        Target("AAA", Decimal("0.5")),                                  # no stop -> default
-        Target("BBB", Decimal("0.3"), stop_pct=Decimal("0.01")),       # explicit -> kept
-        Target("CCC", Decimal("0")),                                    # exit -> untouched
+        Target("AAA", Decimal("0.5")),  # no stop -> default
+        Target("BBB", Decimal("0.3"), stop_pct=Decimal("0.01")),  # explicit -> kept
+        Target("CCC", Decimal("0")),  # exit -> untouched
     ]
     out = {t.ticker: t.stop_pct for t in _apply_default_stop(ts, Decimal("0.02"))}
     assert out == {"AAA": Decimal("0.02"), "BBB": Decimal("0.01"), "CCC": None}
@@ -422,8 +447,13 @@ def test_stop_anchors_on_order_status_fill_price(tmp_path, monkeypatch):
 
         def place_market(self, o, dry_run=False):
             # async ack: confirms nothing, carries no fill price
-            return {"status": "accepted", "ticker": o.ticker, "side": o.side.value,
-                    "quantity": float(o.quantity), "order_id": "o1"}
+            return {
+                "status": "accepted",
+                "ticker": o.ticker,
+                "side": o.side.value,
+                "quantity": float(o.quantity),
+                "order_id": "o1",
+            }
 
         def positions(self):
             # position shows up (qty + a stale avg price of 500)
@@ -453,6 +483,7 @@ def test_existing_correct_stop_not_churned(tmp_path, monkeypatch):
     untouched (no cancel/replace churn that would re-anchor the stop daily)."""
     from msts_trader.__main__ import _reconcile_stops
     from msts_trader.models import Order, Preview, Side, Target
+
     b = _mk_cli_env(tmp_path, monkeypatch)
     b.set_quote("WGMI", Decimal("50"))
     b.place_market(Order("WGMI", Side.BUY, Decimal("100"), Decimal("50")))
@@ -470,12 +501,12 @@ def test_no_stop_pct_anywhere_places_no_stops(tmp_path, monkeypatch):
     account with ZERO stops. Held-forever positions stay unstopped."""
     from msts_trader.__main__ import _reconcile_stops
     from msts_trader.models import Order, Preview, Side, Target
+
     b = _mk_cli_env(tmp_path, monkeypatch)
     b.set_quote("AAA", Decimal("50"))
     buy = Order("AAA", Side.BUY, Decimal("100"), Decimal("50"))  # no stop_pct
     res = b.place_market(buy)
-    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0),
-                      rows=[], orders=[buy])
+    preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[buy])
     _reconcile_stops(b, preview, [res], targets=[Target("AAA", Decimal("0.5"))])  # target: no stop_pct
     assert b.open_stops() == {}, "stop placed despite no stop_pct anywhere"
 
@@ -485,11 +516,13 @@ def test_held_stop_survives_when_feed_has_no_stop_pct(tmp_path, monkeypatch):
     (only orphan stops with no position are cancelled)."""
     from msts_trader.__main__ import _reconcile_stops
     from msts_trader.models import Order, Preview, Side, Target
+
     b = _mk_cli_env(tmp_path, monkeypatch)
     b.set_quote("AAA", Decimal("50"))
     b.place_market(Order("AAA", Side.BUY, Decimal("100"), Decimal("50")))
     b.place_stop("AAA", Decimal("100"), Decimal("49.25"))  # pre-existing stop
     preview = Preview(nav=Decimal(100000), buying_power=Decimal(0), cash=Decimal(0), rows=[], orders=[])
     _reconcile_stops(b, preview, [], targets=[Target("AAA", Decimal("0.5"))])  # no stop_pct in feed
-    assert "AAA" in b.open_stops() and len(b.open_stops()["AAA"]) == 1, \
+    assert "AAA" in b.open_stops() and len(b.open_stops()["AAA"]) == 1, (
         "held position's existing stop was wrongly stripped"
+    )

@@ -1,4 +1,5 @@
 """IBKR margin_requirement via a faked ib_insync socket (no live connection)."""
+
 from __future__ import annotations
 
 import pytest

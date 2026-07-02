@@ -4,6 +4,7 @@ A market order is not idempotent — retrying after a transient error that
 occurred *after* the broker accepted the order would double the fill.
 This pins that place_market is called exactly once per order.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -28,10 +29,17 @@ class _CountingBroker:
 def test_place_market_not_retried_on_transient_error(monkeypatch):
     monkeypatch.setattr(m, "_QUIET", True)
     broker = _CountingBroker()
-    o = Order(ticker="SPY", side=Side.BUY, quantity=Decimal("1"), estimated_price=Decimal("500"), notional=Decimal("500"))
+    o = Order(
+        ticker="SPY", side=Side.BUY, quantity=Decimal("1"), estimated_price=Decimal("500"), notional=Decimal("500")
+    )
     preview = Preview(
-        nav=Decimal("1000"), buying_power=Decimal("1000"), cash=Decimal("1000"),
-        rows=[], orders=[o], warnings=[], blockers=[],
+        nav=Decimal("1000"),
+        buying_power=Decimal("1000"),
+        cash=Decimal("1000"),
+        rows=[],
+        orders=[o],
+        warnings=[],
+        blockers=[],
     )
     sent, failed, results = m._execute(broker, preview)
     assert broker.calls == 1  # exactly one submission attempt — no retry
@@ -42,6 +50,7 @@ def test_place_market_not_retried_on_transient_error(monkeypatch):
 class _StopBroker:
     """Minimal stop-capable broker (broker-agnostic surface: supports_stops + open_stops +
     cancel_order + place_market + positions). Records the ORDER of broker actions."""
+
     name = "fake"
     account_id = "X"
     supports_stops = True
@@ -72,10 +81,17 @@ def test_pre_cancels_resting_stop_before_sell_broker_agnostic(monkeypatch):
     ANY supports_stops broker — not just tastytrade."""
     monkeypatch.setattr(m, "_QUIET", True)
     broker = _StopBroker()
-    o = Order(ticker="AAPL", side=Side.SELL, quantity=Decimal("10"), estimated_price=Decimal("100"), notional=Decimal("1000"))
+    o = Order(
+        ticker="AAPL", side=Side.SELL, quantity=Decimal("10"), estimated_price=Decimal("100"), notional=Decimal("1000")
+    )
     preview = Preview(
-        nav=Decimal("1000"), buying_power=Decimal("1000"), cash=Decimal("1000"),
-        rows=[], orders=[o], warnings=[], blockers=[],
+        nav=Decimal("1000"),
+        buying_power=Decimal("1000"),
+        cash=Decimal("1000"),
+        rows=[],
+        orders=[o],
+        warnings=[],
+        blockers=[],
     )
     m._execute(broker, preview)
     assert ("cancel", "s1") in broker.events, "resting stop was never cancelled"

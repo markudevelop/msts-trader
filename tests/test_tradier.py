@@ -3,6 +3,7 @@
 Exercises the response-shape handling (single-object vs list, "null"
 positions, buying-power fallbacks) that is the likeliest place for a bug.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -37,12 +38,18 @@ def _broker(monkeypatch, routes):
 
 
 def test_balances(monkeypatch):
-    b = _broker(monkeypatch, {
-        "/v1/accounts/VA123/balances": {"balances": {
-            "total_equity": 17000, "total_cash": 5000,
-            "margin": {"stock_buying_power": 34000},
-        }},
-    })
+    b = _broker(
+        monkeypatch,
+        {
+            "/v1/accounts/VA123/balances": {
+                "balances": {
+                    "total_equity": 17000,
+                    "total_cash": 5000,
+                    "margin": {"stock_buying_power": 34000},
+                }
+            },
+        },
+    )
     bal = b.balances()
     assert bal.nav == Decimal("17000")
     assert bal.cash == Decimal("5000")
@@ -50,22 +57,35 @@ def test_balances(monkeypatch):
 
 
 def test_balances_cash_account_bp_fallback(monkeypatch):
-    b = _broker(monkeypatch, {
-        "/v1/accounts/VA123/balances": {"balances": {
-            "total_equity": 10000, "total_cash": 8000,
-            "cash": {"cash_available": 8000},
-        }},
-    })
+    b = _broker(
+        monkeypatch,
+        {
+            "/v1/accounts/VA123/balances": {
+                "balances": {
+                    "total_equity": 10000,
+                    "total_cash": 8000,
+                    "cash": {"cash_available": 8000},
+                }
+            },
+        },
+    )
     assert b.balances().buying_power == Decimal("8000")
 
 
 def test_positions_list(monkeypatch):
-    b = _broker(monkeypatch, {
-        "/v1/accounts/VA123/positions": {"positions": {"position": [
-            {"symbol": "SPY", "quantity": 10, "cost_basis": 5000},
-            {"symbol": "QQQ", "quantity": 5, "cost_basis": 2000},
-        ]}},
-    })
+    b = _broker(
+        monkeypatch,
+        {
+            "/v1/accounts/VA123/positions": {
+                "positions": {
+                    "position": [
+                        {"symbol": "SPY", "quantity": 10, "cost_basis": 5000},
+                        {"symbol": "QQQ", "quantity": 5, "cost_basis": 2000},
+                    ]
+                }
+            },
+        },
+    )
     pos = b.positions()
     assert set(pos) == {"SPY", "QQQ"}
     assert pos["SPY"].quantity == Decimal("10")
@@ -74,9 +94,14 @@ def test_positions_list(monkeypatch):
 
 def test_positions_single_object(monkeypatch):
     # Tradier returns a bare object (not a list) when there's exactly one.
-    b = _broker(monkeypatch, {
-        "/v1/accounts/VA123/positions": {"positions": {"position": {"symbol": "SPY", "quantity": 3, "cost_basis": 1500}}},
-    })
+    b = _broker(
+        monkeypatch,
+        {
+            "/v1/accounts/VA123/positions": {
+                "positions": {"position": {"symbol": "SPY", "quantity": 3, "cost_basis": 1500}}
+            },
+        },
+    )
     pos = b.positions()
     assert list(pos) == ["SPY"]
     assert pos["SPY"].quantity == Decimal("3")
@@ -88,20 +113,30 @@ def test_positions_null(monkeypatch):
 
 
 def test_quote_list_and_single(monkeypatch):
-    b = _broker(monkeypatch, {
-        "/v1/markets/quotes": {"quotes": {"quote": [
-            {"symbol": "SPY", "last": 500.1},
-            {"symbol": "QQQ", "last": 0},  # zero -> skipped
-        ]}},
-    })
+    b = _broker(
+        monkeypatch,
+        {
+            "/v1/markets/quotes": {
+                "quotes": {
+                    "quote": [
+                        {"symbol": "SPY", "last": 500.1},
+                        {"symbol": "QQQ", "last": 0},  # zero -> skipped
+                    ]
+                }
+            },
+        },
+    )
     out = b.quote(["SPY", "QQQ"])
     assert out == {"SPY": Decimal("500.1")}
 
 
 def test_quote_single_object(monkeypatch):
-    b = _broker(monkeypatch, {
-        "/v1/markets/quotes": {"quotes": {"quote": {"symbol": "SPY", "last": 499}}},
-    })
+    b = _broker(
+        monkeypatch,
+        {
+            "/v1/markets/quotes": {"quotes": {"quote": {"symbol": "SPY", "last": 499}}},
+        },
+    )
     assert b.quote(["SPY"]) == {"SPY": Decimal("499")}
 
 
@@ -128,7 +163,9 @@ def test_place_market_live(monkeypatch):
 
 
 def test_place_market_rejected(monkeypatch):
-    b = _broker(monkeypatch, {("POST", "/v1/accounts/VA123/orders"): {"order": {"status": "rejected", "reason": "no funds"}}})
+    b = _broker(
+        monkeypatch, {("POST", "/v1/accounts/VA123/orders"): {"order": {"status": "rejected", "reason": "no funds"}}}
+    )
     r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10")), dry_run=False)
     assert r["status"] == "error"
 
@@ -179,17 +216,24 @@ def test_requires_token():
 def test_balances_zero_margin_bp_is_honored(monkeypatch):
     # stock_buying_power of 0 (maxed-out margin account) must be reported
     # as 0, not fall through to cash_available / total_cash as phantom BP.
-    b = _broker(monkeypatch, {
-        "/v1/accounts/VA123/balances": {"balances": {
-            "total_equity": 10000, "total_cash": 5000,
-            "margin": {"stock_buying_power": 0},
-            "cash": {"cash_available": 5000},
-        }},
-    })
+    b = _broker(
+        monkeypatch,
+        {
+            "/v1/accounts/VA123/balances": {
+                "balances": {
+                    "total_equity": 10000,
+                    "total_cash": 5000,
+                    "margin": {"stock_buying_power": 0},
+                    "cash": {"cash_available": 5000},
+                }
+            },
+        },
+    )
     assert b.balances().buying_power == Decimal("0")
 
 
 # ----- protective stops (regression: keep these methods bound + correct) -----
+
 
 def test_place_stop_posts_gtc_stop(monkeypatch):
     captured = {}
@@ -217,11 +261,22 @@ def test_place_stop_sub_share_skips(monkeypatch):
 
 
 def test_open_stops_filters_type_and_status(monkeypatch):
-    orders = {"orders": {"order": [
-        {"id": 1, "type": "stop", "status": "open", "symbol": "SPY", "quantity": 10, "stop_price": 475},
-        {"id": 2, "type": "market", "status": "open", "symbol": "QQQ", "quantity": 5},          # not a stop
-        {"id": 3, "type": "stop", "status": "filled", "symbol": "IWM", "quantity": 3, "stop_price": 200},  # not open
-    ]}}
+    orders = {
+        "orders": {
+            "order": [
+                {"id": 1, "type": "stop", "status": "open", "symbol": "SPY", "quantity": 10, "stop_price": 475},
+                {"id": 2, "type": "market", "status": "open", "symbol": "QQQ", "quantity": 5},  # not a stop
+                {
+                    "id": 3,
+                    "type": "stop",
+                    "status": "filled",
+                    "symbol": "IWM",
+                    "quantity": 3,
+                    "stop_price": 200,
+                },  # not open
+            ]
+        }
+    }
     b = _broker(monkeypatch, {("GET", "/v1/accounts/VA123/orders"): orders})
     out = b.open_stops()
     assert set(out) == {"SPY"}
@@ -229,8 +284,11 @@ def test_open_stops_filters_type_and_status(monkeypatch):
 
 
 def test_open_stops_single_object_and_null(monkeypatch):
-    one = {"orders": {"order": {"id": 9, "type": "stop", "status": "pending",
-                                "symbol": "SPY", "quantity": 2, "stop_price": 1}}}
+    one = {
+        "orders": {
+            "order": {"id": 9, "type": "stop", "status": "pending", "symbol": "SPY", "quantity": 2, "stop_price": 1}
+        }
+    }
     b = _broker(monkeypatch, {("GET", "/v1/accounts/VA123/orders"): one})
     assert set(b.open_stops()) == {"SPY"}  # single dict normalised to a list
     b2 = _broker(monkeypatch, {("GET", "/v1/accounts/VA123/orders"): {"orders": "null"}})

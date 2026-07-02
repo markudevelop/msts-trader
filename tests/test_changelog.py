@@ -4,6 +4,7 @@ Guards the bug that made every GitHub release fall back to a generic note: the
 old inline awk treated the version heading `## [0.25.0]` as a regex (brackets =
 character class) so it never matched. These lock in literal-heading extraction.
 """
+
 from __future__ import annotations
 
 from msts_trader.changelog import FALLBACK, release_notes

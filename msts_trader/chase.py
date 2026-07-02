@@ -37,6 +37,10 @@ UNKNOWN = "unknown"
 
 _TICK = Decimal("0.01")
 _PLACE_FAILED = ("error", "skipped", "rejected")
+# How many status polls to spend confirming a cancelled rung actually reached a
+# terminal state before its remainder is re-placed (cancel is an async REQUEST
+# at most brokers — a fill can land inside the cancel window).
+_CANCEL_CONFIRM_POLLS = 5
 
 
 @dataclass(frozen=True)
@@ -143,7 +147,7 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
             res = broker.cancel_order(oid)
         except Exception:
             return False
-        if isinstance(res, dict) and res.get("status") in ("error", "rejected"):
+        if isinstance(res, dict) and str(res.get("status") or "").lower() in ("error", "rejected"):
             return False
         return True
 
@@ -156,7 +160,46 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
                 f"chase: cancel FAILED for {oid} ({order.ticker}); aborting before reprice to avoid a double-fill"
             ),
             "filled_quantity": float(filled_qty),
+            # A live order may remain at the broker — self-heal must NOT
+            # re-trade this leg (a second order on top would double-fill).
+            "order_live": True,
         }
+
+    def _final_fill_after_cancel(oid, prev_filled, prev_avg):
+        """After a cancel request, poll until the rung reaches a terminal state
+        (FILLED/CANCELLED/REJECTED) so its true fill is known before any
+        remainder is re-placed. A fill landing inside the cancel window is
+        captured here instead of being re-traded. Returns (terminal, filled,
+        avg); terminal=False means the order never confirmed dead — the caller
+        must abort rather than risk a double-fill."""
+        filled, avg = prev_filled, prev_avg
+        unknown_streak = 0
+        for _ in range(_CANCEL_CONFIRM_POLLS):
+            try:
+                st = broker.order_status(oid)
+            except Exception:
+                # Client-side failure, not an authoritative read — keep polling;
+                # if it never recovers the loop exhausts and the caller aborts.
+                sleep(cfg.poll_interval)
+                continue
+            ff = Decimal(str(st.get("filled_qty") or 0))
+            if ff > filled:
+                filled, avg = ff, st.get("filled_avg_price") or avg
+            status = st.get("status")
+            if status in (FILLED, CANCELLED, REJECTED):
+                return True, filled, avg
+            if status == UNKNOWN:
+                # Some adapters can't see an order once it leaves the open set
+                # (e.g. IBKR queries open trades only). After an ACCEPTED cancel,
+                # two consecutive UNKNOWNs mean it's gone — one alone could be a
+                # transient read failure racing a fill.
+                unknown_streak += 1
+                if unknown_streak >= 2:
+                    return True, filled, avg
+            else:
+                unknown_streak = 0
+            sleep(cfg.poll_interval)
+        return False, filled, avg
 
     for attempt in range(1, cfg.retries + 1):
         rem = _remaining()
@@ -191,7 +234,7 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
                 "reason": f"chase: place_limit failed: {e}",
                 "filled_quantity": float(filled_qty),
             }
-        if placed.get("status") in _PLACE_FAILED:
+        if str(placed.get("status") or "").lower() in _PLACE_FAILED:
             say(
                 f"  chase {order.ticker}: place_limit {placed.get('status')} "
                 f"({placed.get('reason', '')}) — falling through to market"
@@ -211,6 +254,7 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
                     "live but unmanageable; aborting (check the broker manually)"
                 ),
                 "filled_quantity": float(filled_qty),
+                "order_live": True,
             }
         say(f"  chase {order.ticker} {attempt}/{cfg.retries} {side.value} {rem} @ {limit}  id={last_oid}")
 
@@ -236,21 +280,30 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
             last_oid = None
             break
 
-        # not (fully) filled — cancel the rung, then capture its final fill once
+        # not (fully) filled — cancel the rung, then confirm it actually died
+        # and capture its final fill BEFORE any remainder is re-placed
         if last_oid is not None:
-            ok = _cancel(last_oid)
-            final_filled, final_avg = rung_filled, rung_avg
-            try:
-                st = broker.order_status(last_oid)
-                ff = Decimal(str(st.get("filled_qty") or 0))
-                if ff > final_filled:
-                    final_filled, final_avg = ff, st.get("filled_avg_price") or final_avg
-            except Exception:
-                pass
-            _record(final_filled, final_avg, last_oid)
-            last_oid = None
+            oid = last_oid
+            ok = _cancel(oid)
             if not ok:
-                return _abort_double_fill(filled_oid)
+                _record(rung_filled, rung_avg, oid)
+                last_oid = None
+                return _abort_double_fill(oid)
+            terminal, final_filled, final_avg = _final_fill_after_cancel(oid, rung_filled, rung_avg)
+            _record(final_filled, final_avg, oid)
+            last_oid = None
+            if not terminal:
+                return {
+                    "status": "error",
+                    "ticker": order.ticker,
+                    "side": side.value,
+                    "reason": (
+                        f"chase: cancel of {oid} ({order.ticker}) never confirmed terminal — "
+                        "aborting before reprice to avoid a double-fill (check the broker manually)"
+                    ),
+                    "filled_quantity": float(filled_qty),
+                    "order_live": True,
+                }
             if _remaining() <= 0:
                 break
 

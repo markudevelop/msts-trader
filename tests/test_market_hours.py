@@ -133,3 +133,26 @@ def test_2028_early_closes(d):
 
 def test_2028_christmas_eve_sunday_not_early_close():
     assert close_time_for(date(2028, 12, 24)).hour == 16
+
+
+def test_next_open_reports_same_day_open_before_930():
+    # 3:00 AM ET on a regular trading Monday: next open is TODAY 9:30, not
+    # tomorrow (used in the market-closed error message).
+    from datetime import datetime
+
+    from msts_trader.market_hours import ET, _next_open
+
+    monday_3am = datetime(2026, 6, 22, 3, 0, tzinfo=ET)  # a regular Monday
+    nxt = _next_open(monday_3am)
+    assert nxt.date() == monday_3am.date()
+    assert (nxt.hour, nxt.minute) == (9, 30)
+
+
+def test_next_open_after_close_is_next_trading_day():
+    from datetime import datetime
+
+    from msts_trader.market_hours import ET, _next_open
+
+    monday_9pm = datetime(2026, 6, 22, 21, 0, tzinfo=ET)
+    nxt = _next_open(monday_9pm)
+    assert nxt.date().isoformat() == "2026-06-23"

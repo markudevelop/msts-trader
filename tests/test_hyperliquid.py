@@ -1,4 +1,5 @@
 """Hyperliquid adapter parsing — mock the Info client (no network)."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -28,11 +29,13 @@ def test_balances():
 
 
 def test_positions_filters_flat_and_reads_szi():
-    st = {"assetPositions": [
-        {"position": {"coin": "BTC", "szi": "0.5", "entryPx": "60000"}},
-        {"position": {"coin": "ETH", "szi": "0"}},     # flat -> skipped
-        {"position": {"coin": "SOL", "szi": "-10", "entryPx": "150"}},  # short kept
-    ]}
+    st = {
+        "assetPositions": [
+            {"position": {"coin": "BTC", "szi": "0.5", "entryPx": "60000"}},
+            {"position": {"coin": "ETH", "szi": "0"}},  # flat -> skipped
+            {"position": {"coin": "SOL", "szi": "-10", "entryPx": "150"}},  # short kept
+        ]
+    }
     out = _broker(user_state=st).positions()
     assert set(out) == {"BTC", "SOL"}
     assert out["BTC"].quantity == Decimal("0.5")
@@ -62,6 +65,7 @@ def test_coin_normalisation():
 
 # ----- place_market -----
 
+
 def _exec_broker(market_open):
     b = Hyperliquid.__new__(Hyperliquid)
     b._meta = {"BTC": {"name": "BTC", "szDecimals": 3}}  # avoid meta() network call
@@ -71,6 +75,7 @@ def _exec_broker(market_open):
 
 def test_place_market_filled():
     from msts_trader.models import Order, Side
+
     resp = {"response": {"data": {"statuses": [{"filled": {"oid": 777, "totalSz": "0.5"}}]}}}
     b = _exec_broker(lambda coin, is_buy, sz: resp)
     r = b.place_market(Order(ticker="BTC-USD", side=Side.BUY, quantity=Decimal("0.5")))
@@ -79,6 +84,7 @@ def test_place_market_filled():
 
 def test_place_market_resting():
     from msts_trader.models import Order, Side
+
     resp = {"response": {"data": {"statuses": [{"resting": {"oid": 888}}]}}}
     r = _exec_broker(lambda c, b, s: resp).place_market(Order(ticker="BTC", side=Side.BUY, quantity=Decimal("0.5")))
     assert r["status"] == "resting" and r["order_id"] == "888"
@@ -86,6 +92,7 @@ def test_place_market_resting():
 
 def test_place_market_error_status():
     from msts_trader.models import Order, Side
+
     resp = {"response": {"data": {"statuses": [{"error": "insufficient margin"}]}}}
     r = _exec_broker(lambda c, b, s: resp).place_market(Order(ticker="BTC", side=Side.BUY, quantity=Decimal("0.5")))
     assert r["status"] == "error" and "insufficient" in r["reason"]
@@ -93,12 +100,100 @@ def test_place_market_error_status():
 
 def test_place_market_dry_run():
     from msts_trader.models import Order, Side
-    r = _exec_broker(lambda c, b, s: {}).place_market(Order(ticker="BTC", side=Side.BUY, quantity=Decimal("0.5")), dry_run=True)
+
+    r = _exec_broker(lambda c, b, s: {}).place_market(
+        Order(ticker="BTC", side=Side.BUY, quantity=Decimal("0.5")), dry_run=True
+    )
     assert r["status"] == "dry-run" and r["dry_run"] is True
 
 
 def test_place_market_exchange_exception():
     from msts_trader.models import Order, Side
+
     b = _exec_broker(lambda c, bb, s: (_ for _ in ()).throw(RuntimeError("ws down")))
     r = b.place_market(Order(ticker="BTC", side=Side.BUY, quantity=Decimal("0.5")))
     assert r["status"] == "error" and "ws down" in r["reason"]
+
+
+# ---- symbol normalization must be end-to-end (0.26.0) -----------------------
+def test_normalize_symbol_exposed_on_class():
+    from msts_trader.brokers.hyperliquid import Hyperliquid
+
+    assert Hyperliquid.normalize_symbol("BTC-USD") == "BTC"
+    assert Hyperliquid.normalize_symbol("eth-perp") == "ETH"
+    assert Hyperliquid.normalize_symbol("SOL") == "SOL"
+
+
+def test_rebalance_one_normalizes_targets_no_churn():
+    """A BTC-USD CSV against a broker holding BTC (positions() keys are bare
+    coins) used to sweep-sell BTC and rebuy BTC-USD every run. With the
+    normalize_symbol hook the book is already at target -> nothing to do."""
+    from decimal import Decimal
+
+    from msts_trader import __main__ as m
+    from msts_trader.brokers.base import Balances
+    from msts_trader.models import Position, Target
+
+    class HLish:
+        name = "fake-hl"
+        account_id = "0xabc"
+        supports_fractional = True
+
+        @staticmethod
+        def normalize_symbol(t):
+            return t.upper().removesuffix("-USD")
+
+        def balances(self):
+            return Balances(nav=Decimal("100000"), cash=Decimal("0"), buying_power=Decimal("100000"))
+
+        def positions(self):
+            return {"BTC": Position(ticker="BTC", quantity=Decimal("1"), price=Decimal("100000"))}
+
+        def quote(self, tickers):
+            return {"BTC": Decimal("100000")}
+
+    r = m._rebalance_one(
+        HLish(),
+        [Target(ticker="BTC-USD", weight=Decimal("1.0"))],
+        threshold=0.04,
+        max_notional=None,
+        dry_run=True,
+        force=True,
+    )
+    assert r["status"] == "nothing-to-do"
+    assert r["orders"] == 0
+
+
+def test_normalize_targets_rejects_post_normalization_collision():
+    from decimal import Decimal
+
+    import pytest
+
+    from msts_trader import __main__ as m
+    from msts_trader.csv_parser import CSVParseError
+    from msts_trader.models import Target
+
+    class B:
+        name = "fake-hl"
+
+        @staticmethod
+        def normalize_symbol(t):
+            return t.upper().removesuffix("-USD")
+
+    with pytest.raises(CSVParseError):
+        m._normalize_targets(
+            B(), [Target(ticker="BTC", weight=Decimal("0.5")), Target(ticker="BTC-USD", weight=Decimal("0.5"))]
+        )
+
+
+def test_normalize_targets_noop_without_hook():
+    from decimal import Decimal
+
+    from msts_trader import __main__ as m
+    from msts_trader.models import Target
+
+    class Plain:
+        name = "alpaca"
+
+    targets = [Target(ticker="SPY", weight=Decimal("1.0"))]
+    assert m._normalize_targets(Plain(), targets) is targets
