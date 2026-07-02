@@ -10,6 +10,25 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-07-02
+
+### Fixed
+- **Self-heal could stack a second order on top of one still LIVE at the broker.** `_is_clean_send` classifies a RESTING market order (e.g. a Hyperliquid remainder resting on a thin book) as not-clean, so the heal loop re-executed that leg at full size — without ever cancelling the live order. The chase engine's abort paths ("cancel FAILED", "no order_id") deliberately leave a live order behind to avoid a double-fill, and self-heal then fired a market order right on top of it. Same bug class as the 0.25.1 position-lag guard, opposite direction. Self-heal now never re-trades a leg whose original order may still be live (RESTING status, or a chase abort flagged `order_live`); those legs reconcile on the next run instead of being doubled this one.
+- **A fill landing inside the chase's cancel window was re-traded.** `cancel_order` is an async *request* at most brokers, but the engine took a single immediate post-cancel status read as the rung's final fill — and on a status-read exception silently kept the stale pre-cancel count — then re-placed the "remainder". The engine now polls until the cancelled rung confirms terminal (FILLED / CANCELLED / REJECTED, or twice-gone from the broker's order set) before sizing the remainder, and aborts without re-placing when the cancel never confirms.
+- **Fractional sweep exits could sell more than is held.** The not-in-targets exit path quantized with banker's rounding, so a held 10.456789 generated `SELL 10.46` — the broker rejects the oversell and the exit never completes (or a lenient broker opens a fractional short). Exits now always round DOWN, matching every other quantity path in the engine.
+- **Rebalance math now values positions at LIVE quotes.** Tradier and IBKR report position price as average *cost*, Tastytrade as previous close; drift, deltas, current-% and sell sizing were all computed on those fictitious dollars — a holding that doubled since purchase read at half its true weight, so the diff bought more of an already-overweight name, and verify/self-heal confirmed the error with the same numbers. `build_preview` now sizes current value from the live quote whenever one is available (the position price stays the fallback when a quote is missing).
+- **Alpaca/Tastytrade order statuses are no longer stringified enums.** `place_market`/`place_limit`/`place_stop` returned `str(status)` of an SDK enum (`"OrderStatus.REJECTED"`), which defeated the chase engine's rejected-check — a synchronously rejected limit was treated as live, and the chase aborted with a spurious "cancel FAILED … avoid a double-fill" instead of falling back to a market order. Adapters now report the enum's bare value (`status_str` in `brokers/base.py`), the chase compares statuses case-insensitively, and a rejected leg no longer counts as a clean send in `_is_clean_send` (it never executed, so it must not be excluded from self-heal or counted as sent).
+- **Hyperliquid symbol normalization is now end-to-end.** `quote()`/`place_market()`/`place_limit()` normalized `BTC-USD` → `BTC`, but `positions()` returns bare coins and the diff compared raw CSV tickers — a `BTC-USD` CSV sweep-sold `BTC` and rebought `BTC-USD` every run (the same coin, churned), and the chase's quote lookup silently missed and degraded to market orders. Adapters can now expose `normalize_symbol`; the rebalance/verify flows translate target tickers through it before diffing. Targets that collide after normalization (e.g. `BTC` and `BTC-USD` both listed) are refused with a clear error.
+- **A corrupt `# asof:` stamp no longer disables the staleness guard.** With a max-stale-hours limit set, an unparseable timestamp was treated like "no stamp" — the safety gate failed OPEN on exactly the producer-side bug it exists to catch. A present-but-unreadable stamp now fails CLOSED with a fix-it message.
+- **"Next open" reported tomorrow when today's open was still ahead.** `market_hours._next_open` skipped the same-day 9:30 open, so at 3 AM Monday the market-closed message said Tuesday.
+
+### Tests / robustness
+- Structural protocol guard for the **limit-chase surface**, mirroring the stop-methods guard: `supports_limit_chase` must be a bool on every adapter and implies `place_limit`/`order_status`/`cancel_order` are defined on the class; `dry_run` is checked on `place_limit`/`place_stop` too. (Hyperliquid's chase surface — including `cancel_order` — previously had zero structural coverage.)
+- 43 new regression tests across the chase engine (fill-during-cancel captured not re-traded, status blackout aborts, zombie cancel aborts, enum-status rejection falls back to market), self-heal (live-order legs never re-heal), the diff engine (exit rounding, live-quote repricing, sweep exit pricing), Hyperliquid normalization (no-churn end-to-end, collision refusal, no-op without the hook), the stale-CSV guard, and market hours.
+
+### CI
+- `ruff` pinned to the 0.15 series in the dev extras. The unpinned `ruff>=0.5` let formatter releases break `ruff format --check` on CI without any code change; the tree is now formatted with 0.15.x.
+
 ## [0.25.4] — 2026-06-29
 
 ### Fixed
@@ -1174,7 +1193,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.25.4...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/markudevelop/msts-trader/compare/v0.25.4...v0.26.0
 [0.25.4]: https://github.com/markudevelop/msts-trader/compare/v0.25.3...v0.25.4
 [0.25.3]: https://github.com/markudevelop/msts-trader/compare/v0.25.2...v0.25.3
 [0.25.2]: https://github.com/markudevelop/msts-trader/compare/v0.25.1...v0.25.2
