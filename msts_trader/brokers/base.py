@@ -70,11 +70,7 @@ def resolve_linked_account(accounts: list[LinkedAccount], identifier: str) -> Li
 
     # Suffix / last-4: only when the identifier is short enough to be a
     # partial selector (full numbers already handled above).
-    suffix = [
-        a
-        for a in accounts
-        if a.id.endswith(ident) or (a.number is not None and a.number.endswith(ident))
-    ]
+    suffix = [a for a in accounts if a.id.endswith(ident) or (a.number is not None and a.number.endswith(ident))]
     if len(suffix) == 1:
         return suffix[0]
     if len(suffix) > 1:

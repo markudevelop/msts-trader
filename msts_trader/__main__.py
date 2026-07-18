@@ -308,10 +308,7 @@ def _apply_account_selector(broker, identifier: str | None) -> None:
         return
     use = getattr(broker, "use_account", None)
     if not callable(use):
-        _fail(
-            f"{getattr(broker, 'name', 'broker')} does not support --account / account "
-            "selection (no use_account)."
-        )
+        _fail(f"{getattr(broker, 'name', 'broker')} does not support --account / account selection (no use_account).")
     try:
         use(str(identifier).strip())
     except BrokerError as e:
@@ -321,10 +318,7 @@ def _apply_account_selector(broker, identifier: str | None) -> None:
 def _list_linked_or_fail(broker) -> list[LinkedAccount]:
     list_fn = getattr(broker, "list_linked_accounts", None)
     if not callable(list_fn):
-        _fail(
-            f"{getattr(broker, 'name', 'broker')} does not support --all-accounts "
-            "(no list_linked_accounts)."
-        )
+        _fail(f"{getattr(broker, 'name', 'broker')} does not support --all-accounts (no list_linked_accounts).")
     try:
         return list(list_fn())
     except BrokerError as e:
@@ -440,6 +434,7 @@ def _finalize_login_account(broker, *, preselected: str | None = None) -> str:
 
     Returns the canonical id to write into keychain (Schwab hash, else account number).
     """
+
     def _fallback_id() -> str:
         h = getattr(broker, "account_hash", None)
         return str(h or getattr(broker, "account_id", "") or "")
@@ -762,9 +757,7 @@ def _login_schwab() -> None:
     # Prefer CLI --account / SCHWAB_ACCOUNT_ID / SCHWAB_ACCOUNT_HASH, else the
     # previously stored keychain default. First-time login (nothing set) offers
     # an interactive picker when multiple linked accounts exist.
-    account_sel = _account_preselect("SCHWAB_ACCOUNT_ID", "SCHWAB_ACCOUNT_HASH") or stored.get(
-        "account_hash"
-    )
+    account_sel = _account_preselect("SCHWAB_ACCOUNT_ID", "SCHWAB_ACCOUNT_HASH") or stored.get("account_hash")
     if (app_key and app_secret) and (not env_app_key or not env_app_secret):
         c.print("[dim]using stored Schwab app credentials from the OS keychain.[/dim]")
     if not app_key:
