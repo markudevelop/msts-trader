@@ -6,7 +6,7 @@ last-used default stored in the keychain).
 
 from __future__ import annotations
 
-from .base import Balances, Broker, BrokerError
+from .base import Balances, Broker, BrokerError, LinkedAccount, resolve_linked_account
 
 SUPPORTED = ("tastytrade", "alpaca", "tradier", "ibkr", "schwab", "hyperliquid", "paper")
 
@@ -45,4 +45,12 @@ def make(name: str, **creds) -> Broker:
     raise BrokerError(f"unknown broker {name!r} — supported: {SUPPORTED}")
 
 
-__all__ = ["Balances", "Broker", "BrokerError", "make", "SUPPORTED"]
+__all__ = [
+    "Balances",
+    "Broker",
+    "BrokerError",
+    "LinkedAccount",
+    "make",
+    "resolve_linked_account",
+    "SUPPORTED",
+]

@@ -10,6 +10,32 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-07-18
+
+### Added
+- **Same-login multi-account** across every broker: `list_linked_accounts()` /
+  `use_account()` on adapters, CLI `--account` (full id/number or unique last-4)
+  on `status` / `rebalance` / `liquidate` / `doctor` / `login`,
+  `status --all-accounts`, rebalance config `account_id`, and per-`[[account]]`
+  `account` / `account_id` for `multi`. Schwab also accepts human account
+  numbers via `SCHWAB_ACCOUNT_ID` (or a number/last-4 in `SCHWAB_ACCOUNT_HASH`).
+  Shared matching helpers live in `brokers/base.py` (`LinkedAccount`,
+  `resolve_linked_account`).
+- **Login account picker:** when a session has multiple linked books and no
+  account was preselected (CLI/env/keychain), interactive `login` lists them and
+  stores the chosen id as the default. Non-interactive multi-account login keeps
+  the first book and prints a dim notice. Change the stored default later with
+  `login --account …`.
+
+### Docs
+- README multi-account section rewritten (same-login vs multi-login / `multi`).
+- Examples: shared-OAuth Schwab rows in `multi-account.toml`;
+  `SCHWAB_ACCOUNT_ID` / `SCHWAB_ACCOUNT_HASH` in `creds.example.json`.
+
+### Tests
+- `tests/test_linked_accounts.py` plus CLI/env coverage for `--account`,
+  `--all-accounts`, login picker, and Schwab number→hash resolution.
+
 ## [0.26.0] — 2026-07-02
 
 ### Fixed
@@ -1193,7 +1219,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/markudevelop/msts-trader/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/markudevelop/msts-trader/compare/v0.25.4...v0.26.0
 [0.25.4]: https://github.com/markudevelop/msts-trader/compare/v0.25.3...v0.25.4
 [0.25.3]: https://github.com/markudevelop/msts-trader/compare/v0.25.2...v0.25.3

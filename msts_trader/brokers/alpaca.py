@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError, status_str
+from .base import Balances, BrokerError, LinkedAccount, resolve_linked_account, status_str
 
 try:
     from alpaca.data.historical import StockHistoricalDataClient
@@ -47,6 +47,14 @@ class Alpaca:
         self._data = StockHistoricalDataClient(api_key=api_key, secret_key=secret_key)
         acct = self._client.get_account()
         self.account_id = acct.account_number
+
+    def list_linked_accounts(self) -> list[LinkedAccount]:
+        """Alpaca API keys map to a single account — always one entry."""
+        return [LinkedAccount(id=self.account_id, number=self.account_id)]
+
+    def use_account(self, identifier: str) -> None:
+        """Validate selector against the only account this key can see."""
+        resolve_linked_account(self.list_linked_accounts(), identifier)
 
     def balances(self) -> Balances:
         a = self._client.get_account()

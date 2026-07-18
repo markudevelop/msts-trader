@@ -21,7 +21,7 @@ from tastytrade.order import (
 )
 
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError, status_str
+from .base import Balances, BrokerError, LinkedAccount, resolve_linked_account, status_str
 
 
 class Tastytrade:
@@ -38,19 +38,40 @@ class Tastytrade:
         # cert-issued OAuth keys are rejected by production and vice versa.
         self.is_test = is_test
         self._sess = Session(provider_secret, refresh_token, is_test=is_test)
-
+        self._acct_objs = self._fetch_account_objects()
         if account_id:
-            self._acct = Account.get(self._sess, account_id)
-            self.account_id = account_id
+            self.use_account(account_id)
         else:
-            accts = Account.get(self._sess)
-            if isinstance(accts, list):
-                if not accts:
-                    raise BrokerError("no accounts on this Tastytrade session")
-                self._acct = accts[0]
-            else:
-                self._acct = accts
-            self.account_id = self._acct.account_number
+            self._apply_account_obj(self._acct_objs[0])
+
+    def _fetch_account_objects(self) -> list:
+        accts = Account.get(self._sess)
+        if isinstance(accts, list):
+            if not accts:
+                raise BrokerError("no accounts on this Tastytrade session")
+            return list(accts)
+        if accts is None:
+            raise BrokerError("no accounts on this Tastytrade session")
+        return [accts]
+
+    def _apply_account_obj(self, acct) -> None:
+        self._acct = acct
+        self.account_id = str(acct.account_number)
+
+    def list_linked_accounts(self) -> list[LinkedAccount]:
+        """Every account on this Tastytrade session."""
+        return [LinkedAccount(id=str(a.account_number), number=str(a.account_number)) for a in self._acct_objs]
+
+    def use_account(self, identifier: str) -> None:
+        """Point this client at one linked account (full number or unique last-4)."""
+        linked = self.list_linked_accounts()
+        chosen = resolve_linked_account(linked, identifier)
+        for a in self._acct_objs:
+            if str(a.account_number) == chosen.id:
+                self._apply_account_obj(a)
+                return
+        # Fall back to a fresh get by number if the in-memory list is stale.
+        self._apply_account_obj(Account.get(self._sess, chosen.id))
 
     def balances(self) -> Balances:
         b = self._acct.get_balances(self._sess)

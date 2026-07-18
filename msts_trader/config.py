@@ -58,6 +58,7 @@ _KNOWN = {
     "sweep",  # liquidate held tickers not in the CSV (default true); false = only touch listed tickers
     "allocation",  # dollar base the weights apply to (default: full NAV)
     "account",  # array of [[account]] tables for the `multi` command
+    "account_id",  # same-login multi-account selector for single rebalance (full id/number or last-4)
 }
 
 

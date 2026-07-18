@@ -24,7 +24,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError
+from .base import Balances, BrokerError, LinkedAccount, resolve_linked_account
 
 try:
     import eth_account  # type: ignore
@@ -74,6 +74,14 @@ class Hyperliquid:
         self.account_id = self._address[:6] + "…" + self._address[-4:]
         self._meta = None  # lazy szDecimals lookup
         self._oid_coin: dict[str, str] = {}  # oid -> coin, so cancel_order can resolve the market
+
+    def list_linked_accounts(self) -> list[LinkedAccount]:
+        """One wallet address per login."""
+        return [LinkedAccount(id=self._address, number=self._address)]
+
+    def use_account(self, identifier: str) -> None:
+        """Validate selector against the wallet (full address or unique last-4)."""
+        resolve_linked_account(self.list_linked_accounts(), identifier)
 
     # ----- Broker protocol -----
 

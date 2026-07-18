@@ -27,7 +27,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError, first_present
+from .base import Balances, BrokerError, LinkedAccount, first_present, resolve_linked_account
 
 
 def _ensure_event_loop() -> None:
@@ -98,13 +98,15 @@ class IBKR:
         if not accounts:
             self._ib.disconnect()
             raise BrokerError("IBKR session has no managed accounts; check login")
-        if account_id and account_id in accounts:
-            self.account_id = account_id
-        else:
+        self._managed = [str(a) for a in accounts]
+        try:
             if account_id:
-                self._ib.disconnect()
-                raise BrokerError(f"account {account_id!r} not in IBKR session (have: {accounts})")
-            self.account_id = accounts[0]
+                self.account_id = resolve_linked_account(self.list_linked_accounts(), account_id).id
+            else:
+                self.account_id = self._managed[0]
+        except BrokerError:
+            self._ib.disconnect()
+            raise
 
     def __del__(self):
         try:
@@ -113,6 +115,14 @@ class IBKR:
                 ib.disconnect()
         except Exception:
             pass
+
+    def list_linked_accounts(self) -> list[LinkedAccount]:
+        """Every managed account on this TWS / Gateway session."""
+        return [LinkedAccount(id=a, number=a) for a in self._managed]
+
+    def use_account(self, identifier: str) -> None:
+        """Point this client at one managed account (full id or unique last-4)."""
+        self.account_id = resolve_linked_account(self.list_linked_accounts(), identifier).id
 
     # ----- Broker protocol -----
 

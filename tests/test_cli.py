@@ -275,6 +275,179 @@ def test_status_json_paper(tmp_path, monkeypatch):
     assert payload["positions"] == []
 
 
+def test_status_all_accounts_prints_each_account(monkeypatch):
+    """--all-accounts loops list_linked_accounts and renders one block per book."""
+    import json as _json
+    from decimal import Decimal
+
+    import msts_trader.__main__ as cli
+    from msts_trader.brokers.base import Balances, LinkedAccount
+
+    calls: list[str] = []
+
+    class _Multi:
+        name = "schwab"
+        account_id = "…"
+
+        def list_linked_accounts(self):
+            return [
+                LinkedAccount(id="H1", number="11112222"),
+                LinkedAccount(id="H2", number="33334444"),
+            ]
+
+        def use_account(self, ident):
+            calls.append(ident)
+            self.account_id = "…" + ident[-4:] if len(ident) > 4 else ident
+
+        def balances(self):
+            return Balances(nav=Decimal("1000"), cash=Decimal("100"), buying_power=Decimal("1000"))
+
+        def positions(self):
+            return {}
+
+    monkeypatch.setattr(cli, "_load_broker", lambda name: _Multi())
+    monkeypatch.setattr(
+        cli, "market_status", lambda: type("MS", (), {"status": "open", "next_open": None, "minutes_to_close": 60})()
+    )
+    r = CliRunner().invoke(main, ["--broker", "schwab", "status", "--all-accounts", "--json"])
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.output.strip().splitlines()[-1])
+    assert len(payload) == 2
+    assert calls == ["H1", "H2"]
+
+
+def test_finalize_login_account_picks_by_index(monkeypatch):
+    """Interactive multi-account login stores the chosen book, not always the first."""
+    import msts_trader.__main__ as cli
+    from msts_trader.brokers.base import LinkedAccount
+
+    class _B:
+        name = "tastytrade"
+        account_id = "5W1111"
+
+        def list_linked_accounts(self):
+            return [
+                LinkedAccount(id="5W1111", number="5W1111"),
+                LinkedAccount(id="5W2222", number="5W2222"),
+            ]
+
+        def use_account(self, ident):
+            self.account_id = ident
+
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr(cli, "ask_text", lambda *a, **k: "2")
+    b = _B()
+    chosen = cli._finalize_login_account(b, preselected=None)
+    assert chosen == "5W2222"
+    assert b.account_id == "5W2222"
+
+
+def test_finalize_login_account_respects_preselect(monkeypatch):
+    import msts_trader.__main__ as cli
+    from msts_trader.brokers.base import LinkedAccount
+
+    class _B:
+        name = "tastytrade"
+        account_id = "5W2222"
+        account_hash = None
+
+        def list_linked_accounts(self):
+            return [
+                LinkedAccount(id="5W1111", number="5W1111"),
+                LinkedAccount(id="5W2222", number="5W2222"),
+            ]
+
+        def use_account(self, ident):
+            raise AssertionError("preselected should not re-prompt / re-select")
+
+    monkeypatch.setattr(cli, "is_interactive", lambda: True)
+    monkeypatch.setattr(cli, "ask_text", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no prompt")))
+    chosen = cli._finalize_login_account(_B(), preselected="5W2222")
+    assert chosen == "5W2222"
+
+
+def test_finalize_login_account_noninteractive_keeps_first(monkeypatch):
+    import msts_trader.__main__ as cli
+    from msts_trader.brokers.base import LinkedAccount
+
+    class _B:
+        name = "schwab"
+        account_id = "…1111"
+        account_hash = "H1"
+
+        def list_linked_accounts(self):
+            return [
+                LinkedAccount(id="H1", number="11112222"),
+                LinkedAccount(id="H2", number="33334444"),
+            ]
+
+    monkeypatch.setattr(cli, "is_interactive", lambda: False)
+    chosen = cli._finalize_login_account(_B(), preselected=None)
+    assert chosen == "H1"
+
+
+def test_login_account_flag_sets_preselect(monkeypatch):
+    """login --account flows into _LOGIN_ACCOUNT_SEL for the duration of the flow."""
+    import msts_trader.__main__ as cli
+
+    seen = {}
+
+    def fake_flow():
+        seen["sel"] = cli._account_preselect("TT_ACCOUNT_ID")
+
+    monkeypatch.setitem(cli._LOGIN_FLOWS, "paper", fake_flow)
+    # paper flow is replaced; invoke login --broker paper --account XYZ
+    r = CliRunner().invoke(main, ["login", "--broker", "paper", "--account", "XYZ"])
+    assert r.exit_code == 0, r.output
+    assert seen["sel"] == "XYZ"
+    # cleared after flow
+    assert cli._LOGIN_ACCOUNT_SEL is None
+
+
+def test_rebalance_account_option_selects_broker_before_preview(monkeypatch, tmp_path):
+    """--account must call use_account before the preview is built."""
+    from decimal import Decimal
+
+    import msts_trader.__main__ as cli
+    from msts_trader.brokers.base import Balances
+
+    selected: list[str] = []
+
+    class _B:
+        name = "tastytrade"
+        account_id = "5W1111"
+        supports_fractional = True
+        supports_moc = False
+        supports_stops = False
+        supports_limit_chase = False
+
+        def use_account(self, ident):
+            selected.append(ident)
+            self.account_id = ident
+
+        def balances(self):
+            return Balances(nav=Decimal("10000"), cash=Decimal("10000"), buying_power=Decimal("10000"))
+
+        def positions(self):
+            return {}
+
+        def quote(self, tickers):
+            return {t: Decimal("100") for t in tickers}
+
+    monkeypatch.setattr(cli, "_load_broker", lambda name: _B())
+    monkeypatch.setattr(
+        cli, "market_status", lambda: type("MS", (), {"status": "open", "next_open": None, "minutes_to_close": 120})()
+    )
+    csv = tmp_path / "t.csv"
+    csv.write_text("ticker,weight\nSPY,1.0\n")
+    r = CliRunner().invoke(
+        main,
+        ["--broker", "tastytrade", "rebalance", "--account", "5W2222", "--csv-file", str(csv), "--dry-run"],
+    )
+    assert r.exit_code == 0, r.output
+    assert selected == ["5W2222"]
+
+
 def test_multi_dry_run_two_paper_accounts(tmp_path, monkeypatch):
     import json as _json
     from decimal import Decimal

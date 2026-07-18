@@ -17,5 +17,7 @@
 
   "SCHWAB_APP_KEY": "your-schwab-app-key",
   "SCHWAB_APP_SECRET": "your-schwab-app-secret",
-  "SCHWAB_CALLBACK_URL": "https://127.0.0.1:8182"
+  "SCHWAB_CALLBACK_URL": "https://127.0.0.1:8182",
+  "SCHWAB_ACCOUNT_HASH": "optional-opaque-hash-or-omit",
+  "SCHWAB_ACCOUNT_ID": "optional-account-number-or-last4"
 }

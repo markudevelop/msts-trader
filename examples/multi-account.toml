@@ -16,6 +16,11 @@ notify_url = "https://discord.com/api/webhooks/..."
 # Each account names a broker and a creds file (same JSON / KEY=VALUE
 # format as --creds-file). Accounts run sequentially; a combined summary
 # is printed at the end.
+#
+# Same-login multi-account (one OAuth / session, several books): set
+# `account` (or `account_id`) to the full number/id or a unique last-4.
+# Several [[account]] rows may share one creds_file and differ only by
+# `account` — useful for Schwab / Tastytrade / Tradier / IBKR.
 
 [[account]]
 name = "tasty-main"
@@ -31,3 +36,15 @@ creds_file = "~/.msts-trader/alpaca.json"
 # name = "ibkr-local"
 # broker = "ibkr"
 # creds_file = "~/.msts-trader/ibkr.env"
+
+# [[account]]
+# name = "schwab-taxable"
+# broker = "schwab"
+# creds_file = "~/.msts-trader/schwab.json"
+# account = "1234"          # last-4 (or full number / hash)
+
+# [[account]]
+# name = "schwab-ira"
+# broker = "schwab"
+# creds_file = "~/.msts-trader/schwab.json"   # same OAuth login
+# account = "5678"

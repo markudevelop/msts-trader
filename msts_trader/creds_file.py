@@ -39,6 +39,8 @@ _ALIASES = {
     "app_secret": "SCHWAB_APP_SECRET",
     "callback_url": "SCHWAB_CALLBACK_URL",
     "account_hash": "SCHWAB_ACCOUNT_HASH",
+    # Human-friendly Schwab selector (full account number or last-4); resolved at broker init.
+    "schwab_account_id": "SCHWAB_ACCOUNT_ID",
     "host": "IBKR_HOST",
     "port": "IBKR_PORT",
     "client_id": "IBKR_CLIENT_ID",
@@ -139,7 +141,9 @@ def broker_kwargs(broker: str, get) -> dict | None:
                 "app_secret": s,
                 "callback_url": e("SCHWAB_CALLBACK_URL") or "https://127.0.0.1:8182",
             }
-            ah = e("SCHWAB_ACCOUNT_HASH")
+            # account_hash (opaque) or SCHWAB_ACCOUNT_ID (number / last-4) — both
+            # resolve via Schwab.use_account matching at init.
+            ah = e("SCHWAB_ACCOUNT_HASH") or e("SCHWAB_ACCOUNT_ID")
             if ah:
                 out["account_hash"] = ah
             return out

@@ -25,13 +25,14 @@ from rich.table import Table
 
 from . import __version__, config, fill_log, keychain, notifications, retry, runstate, safety
 from .brokers import SUPPORTED, BrokerError, make
+from .brokers.base import LinkedAccount, resolve_linked_account
 from .creds_file import CredsFileError, broker_kwargs_from_env, load_into_env
 from .csv_parser import CSVParseError, parse_csv
 from .diff import DRIFT_THRESHOLD, apply_margin_aware, build_preview
 from .login_errors import explain_login_error
 from .market_hours import market_status
 from .models import Side
-from .prompts import ask_secret, ask_text, ask_yes_no, env_value
+from .prompts import ask_secret, ask_text, ask_yes_no, env_value, is_interactive
 from .verify import check_convergence, converged_within_buying_power
 
 
@@ -297,6 +298,211 @@ def _load_broker(name: str):
         sys.exit(1)
 
 
+def _apply_account_selector(broker, identifier: str | None) -> None:
+    """Point a broker at one same-login account when --account / config says so.
+
+    Selectors match full account number/id or a unique last-4 suffix. Brokers
+    without multi-account APIs fail clearly rather than ignoring the flag.
+    """
+    if not identifier:
+        return
+    use = getattr(broker, "use_account", None)
+    if not callable(use):
+        _fail(
+            f"{getattr(broker, 'name', 'broker')} does not support --account / account "
+            "selection (no use_account)."
+        )
+    try:
+        use(str(identifier).strip())
+    except BrokerError as e:
+        _fail(str(e))
+
+
+def _list_linked_or_fail(broker) -> list[LinkedAccount]:
+    list_fn = getattr(broker, "list_linked_accounts", None)
+    if not callable(list_fn):
+        _fail(
+            f"{getattr(broker, 'name', 'broker')} does not support --all-accounts "
+            "(no list_linked_accounts)."
+        )
+    try:
+        return list(list_fn())
+    except BrokerError as e:
+        _fail(str(e))
+
+
+def _status_payload(broker, bal, pos, ms) -> dict:
+    return {
+        "broker": broker.name,
+        "account_id": broker.account_id,
+        "nav": str(bal.nav),
+        "cash": str(bal.cash),
+        "buying_power": str(bal.buying_power),
+        "market": ms.status,
+        "minutes_to_close": ms.minutes_to_close,
+        "positions": [
+            {
+                "ticker": p.ticker,
+                "quantity": str(p.quantity),
+                "price": str(p.price),
+                "market_value": str(p.market_value),
+                "pct_nav": str(p.market_value / bal.nav) if bal.nav else "0",
+            }
+            for p in sorted(pos.values(), key=lambda x: -x.market_value)
+        ],
+    }
+
+
+def _render_status_block(broker, bal, pos, ms, *, json_out: bool) -> dict | None:
+    """Render one account's status; return JSON payload when json_out else None."""
+    if json_out:
+        return _status_payload(broker, bal, pos, ms)
+
+    c.print(
+        f"\n[bold]{broker.name}[/bold]  ·  account [bold]{broker.account_id}[/bold]  ·  "
+        f"NAV [green]${bal.nav:,.2f}[/green]  ·  "
+        f"cash ${bal.cash:,.2f}  ·  BP ${bal.buying_power:,.2f}"
+    )
+    c.print(
+        f"Market: [bold]{ms.status}[/bold]"
+        + (f"  ·  closes in {ms.minutes_to_close} min" if ms.minutes_to_close is not None else "")
+    )
+
+    if not pos:
+        c.print("[yellow]No open positions.[/yellow]")
+        return None
+
+    table = Table(show_header=True, header_style="bold", box=None)
+    table.add_column("Symbol")
+    table.add_column("Qty", justify="right")
+    table.add_column("Price", justify="right")
+    table.add_column("Value", justify="right")
+    table.add_column("% NAV", justify="right")
+    for p in sorted(pos.values(), key=lambda x: -x.market_value):
+        pct = (p.market_value / bal.nav * 100) if bal.nav else Decimal(0)
+        table.add_row(p.ticker, f"{p.quantity:.2f}", f"${p.price:,.2f}", f"${p.market_value:,.0f}", f"{pct:.1f}%")
+    c.print(table)
+    return None
+
+
+# Shared Click options for same-login multi-account selection.
+_ACCOUNT_OPT = click.option(
+    "--account",
+    "account_sel",
+    default=None,
+    help="Select one linked account under the current login (full number/id or unique last-4).",
+)
+_ALL_ACCOUNTS_OPT = click.option(
+    "--all-accounts",
+    is_flag=True,
+    help="Show every linked account under the current login (status only).",
+)
+
+# Set by `login --account` for the duration of a login flow (env vars still win
+# inside each flow when present — see _account_preselect).
+_LOGIN_ACCOUNT_SEL: str | None = None
+
+
+def _account_preselect(*env_names: str) -> str | None:
+    """CLI --account, then the first non-empty env var among env_names."""
+    if _LOGIN_ACCOUNT_SEL and str(_LOGIN_ACCOUNT_SEL).strip():
+        return str(_LOGIN_ACCOUNT_SEL).strip()
+    for name in env_names:
+        v = env_value(name)
+        if v:
+            return v
+    return None
+
+
+def _canonical_linked_id(broker, linked: list[LinkedAccount]) -> str:
+    """Map the broker's current selection back to LinkedAccount.id for storage."""
+    h = getattr(broker, "account_hash", None)
+    if h:
+        for a in linked:
+            if a.id == h:
+                return a.id
+        return str(h)
+    cur = str(getattr(broker, "account_id", "") or "")
+    for a in linked:
+        if a.id == cur or a.masked == cur or (a.number and a.number == cur):
+            return a.id
+    return linked[0].id if linked else cur
+
+
+def _finalize_login_account(broker, *, preselected: str | None = None) -> str:
+    """Resolve which linked account to store as the login default.
+
+    - preselected (CLI/env/stored): already applied at make(); return its
+      canonical id for keychain persistence.
+    - single linked account: return that id.
+    - multiple + interactive: numbered picker (accepts index or id/last-4).
+    - multiple + non-interactive: keep first, print a dim notice.
+
+    Returns the canonical id to write into keychain (Schwab hash, else account number).
+    """
+    def _fallback_id() -> str:
+        h = getattr(broker, "account_hash", None)
+        return str(h or getattr(broker, "account_id", "") or "")
+
+    list_fn = getattr(broker, "list_linked_accounts", None)
+    if not callable(list_fn):
+        return _fallback_id()
+
+    try:
+        linked = list(list_fn())
+    except Exception as e:
+        c.print(f"[dim]could not list linked accounts: {escape(str(e))}[/dim]")
+        return _fallback_id()
+
+    if not linked:
+        return _fallback_id()
+
+    if preselected:
+        return _canonical_linked_id(broker, linked)
+
+    if len(linked) == 1:
+        return linked[0].id
+
+    if not is_interactive():
+        chosen = linked[0]
+        opts = ", ".join(a.masked for a in linked)
+        c.print(
+            f"[dim]{len(linked)} linked accounts ({opts}); defaulting to [bold]{chosen.masked}[/bold]. "
+            f"Re-run with [bold]--account[/bold] or set the account env var to choose.[/dim]"
+        )
+        return chosen.id
+
+    c.print(f"\n[bold]{len(linked)} linked accounts[/bold] — pick the default for this login:")
+    for i, a in enumerate(linked, 1):
+        if a.number and a.number != a.id:
+            c.print(f"  [bold]{i}.[/bold] {a.masked}  [dim]{a.number}[/dim]")
+        else:
+            c.print(f"  [bold]{i}.[/bold] {a.masked}  [dim]{a.id}[/dim]")
+
+    while True:
+        raw = ask_text(f"account 1-{len(linked)} (or number/id)", default="1").strip()
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(linked):
+                chosen = linked[idx - 1]
+                break
+            c.print(f"[red]pick a number between 1 and {len(linked)}[/red]")
+            continue
+        try:
+            chosen = resolve_linked_account(linked, raw)
+            break
+        except BrokerError as e:
+            c.print(f"[red]{escape(str(e))}[/red]")
+
+    try:
+        broker.use_account(chosen.id)
+    except BrokerError as e:
+        c.print(f"[red]✗ {escape(str(e))}[/red]")
+        sys.exit(1)
+    c.print(f"[dim]using account {chosen.masked}[/dim]")
+    return chosen.id
+
+
 @click.group(invoke_without_command=True)
 @click.version_option(__version__, prog_name="msts-trader")
 @click.option("--broker", default=None, help=f"Broker name. Supported: {', '.join(SUPPORTED)}")
@@ -330,9 +536,22 @@ def main(ctx: click.Context, broker: str | None) -> None:
     "the browser authorization so the 7-day refresh token restarts — run this on "
     "a weekend to guarantee auth through the trading week.",
 )
+@_ACCOUNT_OPT
 @click.pass_context
-def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None, reauth: bool) -> None:
-    """Store broker creds in OS keychain."""
+def login(
+    ctx: click.Context,
+    broker_opt: str | None,
+    creds_file: str | None,
+    reauth: bool,
+    account_sel: str | None,
+) -> None:
+    """Store broker creds in OS keychain.
+
+    Same-login multi-account: pass --account (or the broker's account env var)
+    to set the default book. Interactively, login lists linked accounts and
+    prompts when more than one is available and none was preselected.
+    """
+    global _LOGIN_ACCOUNT_SEL
     if creds_file:
         _load_creds_file_or_exit(creds_file)
 
@@ -356,7 +575,11 @@ def login(ctx: click.Context, broker_opt: str | None, creds_file: str | None, re
             c.print(f"[yellow]cleared cached Schwab token ({location}) - the browser flow will run fresh.[/yellow]")
         else:
             c.print("[dim]no cached Schwab token — the browser flow runs anyway.[/dim]")
-    flow()
+    _LOGIN_ACCOUNT_SEL = account_sel
+    try:
+        flow()
+    finally:
+        _LOGIN_ACCOUNT_SEL = None
 
 
 def _login_tastytrade() -> None:
@@ -366,8 +589,8 @@ def _login_tastytrade() -> None:
             "1. Sign in at [cyan]https://developer.tastytrade.com[/cyan]\n"
             "2. Create an OAuth application → copy [bold]provider secret[/bold]\n"
             "3. Run their authorization flow → copy [bold]refresh token[/bold]\n"
-            "4. Find your [bold]account number[/bold] in Tastytrade dashboard "
-            "(or leave blank to auto-pick first account)\n\n"
+            "4. Multiple accounts? Pass [bold]--account[/bold] / TT_ACCOUNT_ID, or\n"
+            "   pick interactively after connect.\n\n"
             "[dim]Avoid typing: put TT_PROVIDER_SECRET / TT_REFRESH_TOKEN / "
             "TT_ACCOUNT_ID in a file and run with --creds-file, or export them "
             "as environment variables first. Using certification (sandbox) "
@@ -377,8 +600,7 @@ def _login_tastytrade() -> None:
     )
     provider_secret = ask_secret("provider secret", env_var="TT_PROVIDER_SECRET")
     refresh_token = ask_secret("refresh token", env_var="TT_REFRESH_TOKEN")
-    account_id = env_value("TT_ACCOUNT_ID") or ask_text("account id (optional)", default="", allow_blank=True)
-    account_id = account_id.strip() or None
+    account_id = _account_preselect("TT_ACCOUNT_ID")
     raw_test = env_value("TT_TEST")
     is_test = raw_test is not None and raw_test.lower() in {"1", "true", "yes", "test", "sandbox", "cert"}
 
@@ -390,6 +612,7 @@ def _login_tastytrade() -> None:
             account_id=account_id,
             is_test=is_test,
         )
+        chosen = _finalize_login_account(b, preselected=account_id)
         bal = b.balances()
     except Exception as e:
         c.print(f"[red]✗ {escape(explain_login_error('tastytrade', e))}[/red]")
@@ -402,7 +625,7 @@ def _login_tastytrade() -> None:
         {
             "provider_secret": provider_secret,
             "refresh_token": refresh_token,
-            "account_id": account_id or b.account_id,
+            "account_id": chosen,
             "is_test": is_test,
         },
     )
@@ -453,7 +676,8 @@ def _login_tradier() -> None:
             "[bold]Tradier setup[/bold]\n\n"
             "1. Get an access token at [cyan]https://developer.tradier.com[/cyan]\n"
             "   (a free [bold]sandbox[/bold] token is great for testing)\n"
-            "2. Your [bold]account number[/bold] is optional — auto-discovered\n"
+            "2. Multiple accounts? Pass [bold]--account[/bold] / TRADIER_ACCOUNT_ID,\n"
+            "   or pick interactively after connect\n"
             "3. Choose sandbox or production\n\n"
             "[dim]Headless: TRADIER_ACCESS_TOKEN / TRADIER_ACCOUNT_ID / "
             "TRADIER_SANDBOX via --creds-file or env.[/dim]",
@@ -461,9 +685,7 @@ def _login_tradier() -> None:
         )
     )
     access_token = ask_secret("access token", env_var="TRADIER_ACCESS_TOKEN")
-    account_id = (
-        env_value("TRADIER_ACCOUNT_ID") or ask_text("account number (optional)", default="", allow_blank=True)
-    ).strip() or None
+    account_id = _account_preselect("TRADIER_ACCOUNT_ID")
     raw = env_value("TRADIER_SANDBOX")
     sandbox = (
         raw.lower() in {"1", "true", "yes", "sandbox"} if raw is not None else ask_yes_no("sandbox?", default=True)
@@ -471,14 +693,13 @@ def _login_tradier() -> None:
 
     try:
         b = make("tradier", access_token=access_token, account_id=account_id, sandbox=sandbox)
+        chosen = _finalize_login_account(b, preselected=account_id)
         bal = b.balances()
     except Exception as e:
         c.print(f"[red]✗ {escape(explain_login_error('tradier', e))}[/red]")
         sys.exit(1)
 
-    keychain.save(
-        "tradier", {"access_token": access_token, "account_id": account_id or b.account_id, "sandbox": sandbox}
-    )
+    keychain.save("tradier", {"access_token": access_token, "account_id": chosen, "sandbox": sandbox})
     keychain.set_default("tradier")
     c.print(
         f"[green]✓ stored.[/green] tradier {'(sandbox)' if sandbox else '(production)'} account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}"
@@ -501,20 +722,17 @@ def _login_ibkr() -> None:
     host = env_value("IBKR_HOST") or ask_text("host", default="127.0.0.1")
     port = int(env_value("IBKR_PORT") or ask_text("port", default="4002"))
     client_id = int(env_value("IBKR_CLIENT_ID") or ask_text("client id (any free int)", default="17"))
-    account_id = (
-        env_value("IBKR_ACCOUNT_ID") or ask_text("account id (optional)", default="", allow_blank=True)
-    ).strip() or None
+    account_id = _account_preselect("IBKR_ACCOUNT_ID")
 
     try:
         b = make("ibkr", host=host, port=port, client_id=client_id, account_id=account_id)
+        chosen = _finalize_login_account(b, preselected=account_id)
         bal = b.balances()
     except Exception as e:
         c.print(f"[red]✗ {escape(explain_login_error('ibkr', e))}[/red]")
         sys.exit(1)
 
-    keychain.save(
-        "ibkr", {"host": host, "port": port, "client_id": client_id, "account_id": account_id or b.account_id}
-    )
+    keychain.save("ibkr", {"host": host, "port": port, "client_id": client_id, "account_id": chosen})
     keychain.set_default("ibkr")
     c.print(f"[green]✓ stored.[/green] ibkr account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
 
@@ -541,7 +759,12 @@ def _login_schwab() -> None:
     app_key = ask_secret("app key", env_var="SCHWAB_APP_KEY") if env_app_key else stored.get("app_key")
     app_secret = ask_secret("app secret", env_var="SCHWAB_APP_SECRET") if env_app_secret else stored.get("app_secret")
     callback_url = env_value("SCHWAB_CALLBACK_URL") or stored.get("callback_url")
-    account_hash = env_value("SCHWAB_ACCOUNT_HASH") or stored.get("account_hash")
+    # Prefer CLI --account / SCHWAB_ACCOUNT_ID / SCHWAB_ACCOUNT_HASH, else the
+    # previously stored keychain default. First-time login (nothing set) offers
+    # an interactive picker when multiple linked accounts exist.
+    account_sel = _account_preselect("SCHWAB_ACCOUNT_ID", "SCHWAB_ACCOUNT_HASH") or stored.get(
+        "account_hash"
+    )
     if (app_key and app_secret) and (not env_app_key or not env_app_secret):
         c.print("[dim]using stored Schwab app credentials from the OS keychain.[/dim]")
     if not app_key:
@@ -559,8 +782,9 @@ def _login_schwab() -> None:
             app_key=app_key,
             app_secret=app_secret,
             callback_url=callback_url,
-            account_hash=account_hash,
+            account_hash=account_sel,
         )
+        chosen_hash = _finalize_login_account(b, preselected=account_sel)
         bal = b.balances()
     except Exception as e:
         c.print(f"[red]✗ {escape(explain_login_error('schwab', e))}[/red]")
@@ -568,7 +792,12 @@ def _login_schwab() -> None:
 
     keychain.save(
         "schwab",
-        {"app_key": app_key, "app_secret": app_secret, "callback_url": callback_url, "account_hash": b.account_hash},
+        {
+            "app_key": app_key,
+            "app_secret": app_secret,
+            "callback_url": callback_url,
+            "account_hash": chosen_hash,
+        },
     )
     keychain.set_default("schwab")
     c.print(f"[green]✓ stored.[/green] schwab account [bold]{b.account_id}[/bold] · NAV ${bal.nav:,.2f}")
@@ -708,65 +937,67 @@ def paper_reset() -> None:
     default=None,
     help="Load credentials from a JSON or KEY=VALUE file (headless).",
 )
+@_ACCOUNT_OPT
+@_ALL_ACCOUNTS_OPT
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON (NAV, balances, positions).")
 @click.pass_context
-def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, json_out: bool) -> None:
-    """Show account NAV, positions, market status. No orders."""
+def status(
+    ctx: click.Context,
+    broker_opt: str | None,
+    creds_file: str | None,
+    account_sel: str | None,
+    all_accounts: bool,
+    json_out: bool,
+) -> None:
+    """Show account NAV, positions, market status. No orders.
+
+    Use --all-accounts to print every linked account under one login, or
+    --account to target one (full number/id or unique last-4).
+    """
     if creds_file:
         _load_creds_file_or_exit(creds_file)
+    if account_sel and all_accounts:
+        _fail("pass only one of --account / --all-accounts.")
     broker = _resolve_broker_name(ctx, broker_opt)
     b = _load_broker(broker)
-    bal = b.balances()
-    pos = b.positions()
     ms = market_status()
 
-    if json_out:
-        payload = {
-            "broker": b.name,
-            "account_id": b.account_id,
-            "nav": str(bal.nav),
-            "cash": str(bal.cash),
-            "buying_power": str(bal.buying_power),
-            "market": ms.status,
-            "minutes_to_close": ms.minutes_to_close,
-            "positions": [
-                {
-                    "ticker": p.ticker,
-                    "quantity": str(p.quantity),
-                    "price": str(p.price),
-                    "market_value": str(p.market_value),
-                    "pct_nav": str(p.market_value / bal.nav) if bal.nav else "0",
-                }
-                for p in sorted(pos.values(), key=lambda x: -x.market_value)
-            ],
-        }
+    if all_accounts:
+        linked = _list_linked_or_fail(b)
+        payloads: list[dict] = []
+        for acct in linked:
+            try:
+                b.use_account(acct.id)
+                bal = b.balances()
+                pos = b.positions()
+            except Exception as e:
+                if json_out:
+                    payloads.append(
+                        {
+                            "broker": b.name,
+                            "account_id": acct.masked,
+                            "error": str(e),
+                        }
+                    )
+                else:
+                    c.print(
+                        f"\n[bold]{b.name}[/bold]  ·  account [bold]{acct.masked}[/bold]  ·  "
+                        f"[yellow]skipped:[/yellow] {escape(str(e))}"
+                    )
+                continue
+            payload = _render_status_block(b, bal, pos, ms, json_out=json_out)
+            if payload is not None:
+                payloads.append(payload)
+        if json_out:
+            print(json.dumps(payloads, default=str))
+        return
+
+    _apply_account_selector(b, account_sel)
+    bal = b.balances()
+    pos = b.positions()
+    payload = _render_status_block(b, bal, pos, ms, json_out=json_out)
+    if json_out and payload is not None:
         print(json.dumps(payload, default=str))
-        return
-
-    c.print(
-        f"\n[bold]{b.name}[/bold]  ·  account [bold]{b.account_id}[/bold]  ·  "
-        f"NAV [green]${bal.nav:,.2f}[/green]  ·  "
-        f"cash ${bal.cash:,.2f}  ·  BP ${bal.buying_power:,.2f}"
-    )
-    c.print(
-        f"Market: [bold]{ms.status}[/bold]"
-        + (f"  ·  closes in {ms.minutes_to_close} min" if ms.minutes_to_close is not None else "")
-    )
-
-    if not pos:
-        c.print("[yellow]No open positions.[/yellow]")
-        return
-
-    table = Table(show_header=True, header_style="bold", box=None)
-    table.add_column("Symbol")
-    table.add_column("Qty", justify="right")
-    table.add_column("Price", justify="right")
-    table.add_column("Value", justify="right")
-    table.add_column("% NAV", justify="right")
-    for p in sorted(pos.values(), key=lambda x: -x.market_value):
-        pct = (p.market_value / bal.nav * 100) if bal.nav else Decimal(0)
-        table.add_row(p.ticker, f"{p.quantity:.2f}", f"${p.price:,.2f}", f"${p.market_value:,.0f}", f"{pct:.1f}%")
-    c.print(table)
 
 
 @main.command()
@@ -803,6 +1034,7 @@ def status(ctx: click.Context, broker_opt: str | None, creds_file: str | None, j
     is_flag=True,
     help="Do NOT market mop-up the unfilled/fractional remainder (may leave dust unsold).",
 )
+@_ACCOUNT_OPT
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON result.")
 @click.pass_context
 def liquidate(
@@ -818,6 +1050,7 @@ def liquidate(
     interval: float,
     pace: float,
     no_fallback: bool,
+    account_sel: str | None,
     json_out: bool,
 ) -> None:
     """Flatten the account — sell every position to cash via the patient limit-chase.
@@ -839,6 +1072,7 @@ def liquidate(
         _load_creds_file_or_exit(creds_file)
     broker_name = _resolve_broker_name(ctx, broker_opt)
     broker = _load_broker(broker_name)
+    _apply_account_selector(broker, account_sel)
 
     try:
         positions = broker.positions()
@@ -1092,6 +1326,7 @@ def liquidate(
     show_default=True,
     help="Max self-heal re-execution passes when the book hasn't converged.",
 )
+@_ACCOUNT_OPT
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON instead of tables.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output (for cron logs).")
 @click.pass_context
@@ -1127,6 +1362,7 @@ def rebalance(
     no_verify: bool,
     no_self_heal: bool,
     heal_passes: int,
+    account_sel: str | None,
     json_out: bool,
     quiet: bool,
 ) -> None:
@@ -1135,6 +1371,7 @@ def rebalance(
     Manual: run with no flags, paste the CSV, confirm with y.
     Headless: --broker NAME --creds-file creds.json --csv-file targets.csv --yes
     (or use --csv-url and exported env vars). No prompts, no keychain needed.
+    Same-login multi-account: --account NUMBER (or last-4) / config account_id.
     """
     cfg = _load_config_or_exit(config_path)
     threshold = float(config.pick(threshold, cfg, "threshold", 0.04))
@@ -1149,6 +1386,8 @@ def rebalance(
     csv_file = config.pick(csv_file, cfg, "csv_file")
     csv_url = config.pick(csv_url, cfg, "csv_url")
     creds_file = config.pick(creds_file, cfg, "creds_file")
+    # account_id (config) — not `account`, which is reserved for multi's [[account]] array.
+    account_sel = config.pick(account_sel, cfg, "account_id")
     max_notional = config.pick(max_notional, cfg, "max_notional")
     max_stale_hours = config.pick(max_stale_hours, cfg, "max_stale_hours")
     notify_url = config.pick(notify_url, cfg, "notify_url")
@@ -1220,6 +1459,7 @@ def rebalance(
     say(f"[green]✓ loaded {len(targets)} targets.[/green]")
 
     b = _load_broker(broker)
+    _apply_account_selector(b, account_sel)
     # Brokers that can't place fractional equity orders (Schwab, Tradier)
     # already truncate to whole shares at submit — so force whole-share sizing
     # in the preview too, otherwise the preview / notional / --max-notional cap
@@ -2209,11 +2449,19 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
             if kwargs is None:
                 raise BrokerError("no credentials resolved (check creds_file / env)")
             b = make(broker, **kwargs)
+            # Same-login multi-account: optional per-[[account]] selector.
+            # Prefer `account`, then `account_id` (mirrors rebalance config).
+            sel = acct.get("account") or acct.get("account_id")
+            if sel:
+                use = getattr(b, "use_account", None)
+                if not callable(use):
+                    raise BrokerError(f"{broker} does not support account selection")
+                use(str(sel).strip())
         except Exception as e:
             results.append({"name": label, "broker": broker, "status": "error", "reason": str(e)})
             continue
 
-        say(f"\n[bold cyan]━━ {label} ({broker}) ━━[/bold cyan]")
+        say(f"\n[bold cyan]━━ {label} ({broker} · {b.account_id}) ━━[/bold cyan]")
         try:
             # per-account `allocation`, `order_type`, `stop_pct` win over top-level.
             acct_order_type = str(acct.get("order_type", order_type))
@@ -2292,8 +2540,9 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
     default=None,
     help="Load credentials from a file first.",
 )
+@_ACCOUNT_OPT
 @click.pass_context
-def doctor(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -> None:
+def doctor(ctx: click.Context, broker_opt: str | None, creds_file: str | None, account_sel: str | None) -> None:
     """Health check: credentials, connectivity, market status, a sample quote."""
     if creds_file:
         _load_creds_file_or_exit(creds_file)
@@ -2309,6 +2558,7 @@ def doctor(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -
 
     table = Table(show_header=True, header_style="bold", title="Broker health")
     table.add_column("Broker")
+    table.add_column("Account")
     table.add_column("Creds")
     table.add_column("Connect")
     table.add_column("NAV", justify="right")
@@ -2318,11 +2568,27 @@ def doctor(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -
     for name in names:
         has_creds = broker_kwargs_from_env(name) is not None or name in set(keychain.list_brokers())
         creds_cell = "[green]✓[/green]" if has_creds else "[dim]—[/dim]"
-        conn = nav = npos = q = "[dim]—[/dim]"
+        conn = nav = npos = q = acct_cell = "[dim]—[/dim]"
         if has_creds:
             try:
                 b = _build_broker_quiet(name)
+                if account_sel:
+                    use = getattr(b, "use_account", None)
+                    if not callable(use):
+                        raise BrokerError(f"{name} does not support --account")
+                    use(str(account_sel).strip())
                 conn = "[green]✓[/green]"
+                acct_cell = str(getattr(b, "account_id", "—"))
+                # When no selector, list how many linked accounts exist.
+                if not account_sel:
+                    list_fn = getattr(b, "list_linked_accounts", None)
+                    if callable(list_fn):
+                        try:
+                            n = len(list_fn())
+                            if n > 1:
+                                acct_cell = f"{b.account_id} (+{n - 1} more)"
+                        except Exception:
+                            pass
                 try:
                     nav = f"${b.balances().nav:,.0f}"
                 except Exception as e:
@@ -2338,7 +2604,7 @@ def doctor(ctx: click.Context, broker_opt: str | None, creds_file: str | None) -
                     q = "[red]err[/red]"
             except Exception as e:
                 conn = f"[red]✗[/red] {str(e)[:40]}"
-        table.add_row(name, creds_cell, conn, nav, npos, q)
+        table.add_row(name, acct_cell, creds_cell, conn, nav, npos, q)
     c.print(table)
 
 

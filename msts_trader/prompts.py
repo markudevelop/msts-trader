@@ -55,6 +55,11 @@ def _is_interactive() -> bool:
         return False
 
 
+def is_interactive() -> bool:
+    """True when both stdin and stdout are TTYs (safe to prompt)."""
+    return _is_interactive()
+
+
 def _read_line() -> str:
     return sys.stdin.readline().rstrip("\n").rstrip("\r")
 

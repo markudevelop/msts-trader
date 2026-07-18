@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError, first_present
+from .base import Balances, BrokerError, LinkedAccount, first_present, resolve_linked_account
 
 PROD_BASE = "https://api.tradier.com"
 SANDBOX_BASE = "https://sandbox.tradier.com"
@@ -40,7 +40,11 @@ class Tradier:
         self._token = access_token
         self._base = SANDBOX_BASE if sandbox else PROD_BASE
         self._timeout = float(timeout)
-        self.account_id = account_id or self._discover_account_id()
+        linked = self._load_linked_accounts()
+        if account_id:
+            self.account_id = resolve_linked_account(linked, account_id).id
+        else:
+            self.account_id = linked[0].id
 
     # ----- HTTP -----
 
@@ -64,16 +68,33 @@ class Tradier:
             raise BrokerError(f"Tradier request failed: {e}") from e
         return json.loads(body) if body.strip() else {}
 
-    def _discover_account_id(self) -> str:
+    def _load_linked_accounts(self) -> list[LinkedAccount]:
         prof = self._request("GET", "/v1/user/profile").get("profile") or {}
         acct = prof.get("account")
+        rows: list = []
         if isinstance(acct, list):
-            if not acct:
-                raise BrokerError("Tradier profile has no accounts")
-            return str(acct[0]["account_number"])
-        if isinstance(acct, dict):
-            return str(acct["account_number"])
-        raise BrokerError("could not resolve a Tradier account number")
+            rows = acct
+        elif isinstance(acct, dict):
+            rows = [acct]
+        out: list[LinkedAccount] = []
+        for a in rows:
+            num = a.get("account_number")
+            if num is None:
+                continue
+            s = str(num).strip()
+            if s:
+                out.append(LinkedAccount(id=s, number=s))
+        if not out:
+            raise BrokerError("Tradier profile has no accounts")
+        return out
+
+    def list_linked_accounts(self) -> list[LinkedAccount]:
+        """Every account on this Tradier user profile."""
+        return self._load_linked_accounts()
+
+    def use_account(self, identifier: str) -> None:
+        """Point this client at one linked account (full number or unique last-4)."""
+        self.account_id = resolve_linked_account(self._load_linked_accounts(), identifier).id
 
     # ----- Broker protocol -----
 

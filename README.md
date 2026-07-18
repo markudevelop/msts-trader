@@ -235,6 +235,16 @@ delete the original `--creds-file`; future `login --broker schwab --reauth`
 runs reuse those stored app credentials and only refresh the Schwab OAuth
 token.
 
+**Multiple linked Schwab accounts under one OAuth login:** first-time
+`login` lists linked books and lets you pick a default (stored as
+`account_hash` in the keychain). Change it later with
+`msts-trader login --broker schwab --account 6789`. List books any time with
+`msts-trader status --broker schwab --all-accounts`. Target a non-default
+book per command with `--account` (full number, unique last-4, or hash) —
+same selector works on `rebalance` / `liquidate` / `doctor`, config
+`account_id = "…"`, env `SCHWAB_ACCOUNT_ID` / `SCHWAB_ACCOUNT_HASH`, or
+`account = "…"` on a `multi` `[[account]]` row.
+
 ### Paper (offline simulator)
 
 ```bash
@@ -517,9 +527,48 @@ For scripting, `rebalance` / `multi` use:
 
 ## Multiple accounts
 
+There are two multi-account models:
+
+### Same login, several linked books
+
+One OAuth / API session that can see more than one brokerage account
+(Schwab linked accounts, Tastytrade, Tradier, IBKR managed accounts).
+Every broker implements `list_linked_accounts` / `use_account`; single-account
+brokers (Alpaca key, paper, Hyperliquid wallet) return one entry.
+
+```bash
+# At login: pick a default when several books are linked (interactive),
+# or set it explicitly (also works headless)
+msts-trader login --broker schwab --account 6789
+msts-trader login --broker tastytrade --account 5W12345
+
+# See every linked account under the current login
+msts-trader status --broker schwab --all-accounts
+
+# Target one book for a single command (full number/id or unique last-4)
+msts-trader status --broker schwab --account 6789
+msts-trader rebalance --broker schwab --account 6789 --dry-run
+msts-trader liquidate --broker tastytrade --account 5W… --dry-run
+```
+
+Config / env alternatives for a single run:
+
+| Surface | Example |
+|---------|---------|
+| CLI | `--account 6789` |
+| rebalance config | `account_id = "6789"` |
+| Schwab env | `SCHWAB_ACCOUNT_ID=6789` or `SCHWAB_ACCOUNT_HASH=…` |
+| Tasty / Tradier / IBKR env | `TT_ACCOUNT_ID` / `TRADIER_ACCOUNT_ID` / `IBKR_ACCOUNT_ID` |
+
+Ambiguous last-4 matches fail with the list of masked accounts — nothing
+executes against the wrong book.
+
+### Several logins / brokers (`multi`)
+
 Run the same target weights across several accounts in one pass with the
 `multi` command and a TOML config that lists each account's broker and
-creds file:
+creds file. Rows may also share one creds file and differ only by
+`account` (same-login multi-account):
 
 ```toml
 # multi-account.toml
@@ -536,6 +585,18 @@ creds_file = "~/.msts-trader/tasty.json"
 name = "alpaca-live"
 broker = "alpaca"
 creds_file = "~/.msts-trader/alpaca.json"
+
+[[account]]
+name = "schwab-taxable"
+broker = "schwab"
+creds_file = "~/.msts-trader/schwab.json"
+account = "1234"   # last-4 or full number
+
+[[account]]
+name = "schwab-ira"
+broker = "schwab"
+creds_file = "~/.msts-trader/schwab.json"   # same OAuth login
+account = "5678"
 ```
 
 ```bash

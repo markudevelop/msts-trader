@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 from ..models import Order, Position, Side
-from .base import Balances
+from .base import Balances, LinkedAccount, resolve_linked_account
 
 STATE_PATH = Path(os.path.expanduser("~/.msts-trader/paper_state.json"))
 STARTING_CASH = Decimal("100000")
@@ -40,6 +40,14 @@ class Paper:
                 )
             )
         self.account_id = "PAPER"
+
+    def list_linked_accounts(self) -> list[LinkedAccount]:
+        """Paper is a single local book."""
+        return [LinkedAccount(id=self.account_id, number=self.account_id)]
+
+    def use_account(self, identifier: str) -> None:
+        """Validate selector against the paper book id."""
+        resolve_linked_account(self.list_linked_accounts(), identifier)
 
     def _load(self) -> dict:
         return json.loads(STATE_PATH.read_text())

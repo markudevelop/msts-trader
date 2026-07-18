@@ -37,7 +37,7 @@ from typing import Iterable
 
 from .. import keychain
 from ..models import Order, Position, Side
-from .base import Balances, BrokerError, first_present
+from .base import Balances, BrokerError, LinkedAccount, first_present, resolve_linked_account
 
 try:
     from schwab.auth import client_from_access_functions, client_from_login_flow  # type: ignore
@@ -71,7 +71,12 @@ class Schwab:
     DEFAULT_CALLBACK_URL = "https://127.0.0.1:8182"
 
     def __init__(
-        self, app_key: str, app_secret: str, callback_url: str = DEFAULT_CALLBACK_URL, account_hash: str | None = None
+        self,
+        app_key: str,
+        app_secret: str,
+        callback_url: str = DEFAULT_CALLBACK_URL,
+        account_hash: str | None = None,
+        account_id: str | None = None,
     ):
         if not _SCHWAB_OK:
             raise BrokerError("schwab-py not installed. Run: pip install schwab-py")
@@ -95,17 +100,48 @@ class Schwab:
             _delete_legacy_token_file()
         else:
             self._client = client
-        self._account_hash = account_hash or self._discover_account_hash()
-        self.account_hash = self._account_hash  # stable public attr for login / creds reuse
-        self.account_id = self._account_hash[:8] + "…"  # display-safe truncation
+        # Prefer explicit account_hash (creds/keychain), then account_id alias,
+        # else the first linked account. Selectors may be the opaque hash, the
+        # full account number, or a unique last-4 suffix.
+        selector = account_hash or account_id
+        linked = self._load_linked_accounts()
+        if selector:
+            chosen = resolve_linked_account(linked, selector)
+        else:
+            chosen = linked[0]
+        self._apply_linked(chosen)
 
-    def _discover_account_hash(self) -> str:
+    def _load_linked_accounts(self) -> list[LinkedAccount]:
         resp = self._client.get_account_numbers()
         resp.raise_for_status()
         accts = resp.json()
         if not accts:
             raise BrokerError("Schwab session has no accounts; check login")
-        return accts[0]["hashValue"]
+        out: list[LinkedAccount] = []
+        for a in accts:
+            h = str(a.get("hashValue") or "").strip()
+            if not h:
+                continue
+            num = a.get("accountNumber")
+            number = str(num).strip() if num is not None and str(num).strip() else None
+            out.append(LinkedAccount(id=h, number=number))
+        if not out:
+            raise BrokerError("Schwab session has no accounts; check login")
+        return out
+
+    def _apply_linked(self, acct: LinkedAccount) -> None:
+        self._account_hash = acct.id
+        self.account_hash = acct.id  # stable public attr for login / creds reuse
+        # Prefer masked account number when known; fall back to hash prefix.
+        self.account_id = acct.masked if acct.number else (acct.id[:8] + "…")
+
+    def list_linked_accounts(self) -> list[LinkedAccount]:
+        """Every brokerage account under this Schwab OAuth login."""
+        return self._load_linked_accounts()
+
+    def use_account(self, identifier: str) -> None:
+        """Point this client at one linked account (number, last-4, or hash)."""
+        self._apply_linked(resolve_linked_account(self._load_linked_accounts(), identifier))
 
     # ----- Broker protocol -----
 
