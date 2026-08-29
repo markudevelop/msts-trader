@@ -23,6 +23,10 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
   account and scaling in by raising the allocation. Spells out the disjoint-
   ticker rule (stops are sized to the full account holding) and how to retire
   a sleeve when nothing is swept.
+- `docs/design-strategy-sleeves.md` — draft design for native per-strategy
+  share tallies (order tagging + local fill-driven ledger, `Σ tallies ≤
+  account position` invariant, fail-closed reconciliation). Discussion doc;
+  nothing implemented yet.
 
 ### Examples
 - `examples/merge_sleeves.py` — merge N strategy sleeves (dollar allocation +
