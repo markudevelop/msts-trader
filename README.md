@@ -638,7 +638,8 @@ python examples/merge_sleeves.py 50000 momo.csv 30000 carry.csv > combined.csv
 msts-trader rebalance --csv-file combined.csv --dry-run
 ```
 
-- Keep the default `--sweep`: the merged CSV **is** the complete book.
+- Keep the default `--sweep` only while the merged CSV **is** the complete
+  book — sharing the account with anything else needs the next section.
 - Drift is measured on the *combined* book, so a small sleeve may never breach
   4% of total NAV. Add `--threshold-mode position` (or a lower `--threshold`)
   if you want small sleeves to trade.
@@ -647,6 +648,39 @@ msts-trader rebalance --csv-file combined.csv --dry-run
 - One run rebalances everything at once. If one sleeve is daily and another
   monthly, run the merge daily anyway — the monthly sleeve simply won't move
   until its weights change.
+
+### Alongside your own manual trades
+
+Running the algo book inside the account you also trade by hand — keeping one
+cross-margined book instead of splitting off a second PM account — is the same
+merge with a fence around it:
+
+```bash
+python examples/merge_sleeves.py 50000 momo.csv 30000 carry.csv > combined.csv
+msts-trader rebalance --csv-file combined.csv     --allocation 80000 --no-sweep --threshold-mode position --dry-run
+```
+
+- `--allocation 80000` pins the algo book to its own dollars, so manual P&L
+  moving account NAV never resizes it. **Scaling in is this one number.**
+- `--no-sweep` stops msts-trader liquidating everything it didn't put there.
+- `--threshold-mode position` gates drift per line — an $80k book's lines
+  rarely move 4% of a $200k NAV.
+- Margin-aware sizing still reads account-wide buying power, so algo buys
+  compete with your manual positions for BP. Usually what you want in a
+  cross-margined account; `--no-margin-aware` opts out.
+
+The one rule: **the algo tickers must stay disjoint from the ones you trade by
+hand.** msts-trader reads the *account's* position in a ticker, so a sleeve
+holding SPY would resize the SPY you bought yourself — and a `stop_pct` on that
+line would put a stop across your manual shares too, since stops are sized to
+the full holding. Where they collide, use a second symbol for the same
+exposure: SPY vs VOO/IVV, GLD vs IAU, QQQ vs QQQM.
+
+Retiring a sleeve under `--no-sweep` takes one extra step, because an unlisted
+ticker is *left alone*: zero its weights and run once to close the positions
+before dropping it from the merge command. `merge_sleeves.py` emits an explicit
+`0` row for anything that nets to zero, so keep weight-0 exits in the sleeve
+CSVs rather than deleting the row.
 
 ### Separate brokerage accounts (no bookkeeping at all)
 
@@ -664,8 +698,9 @@ different book per account, use one `rebalance --account …` per strategy.)
 
 ### Disjoint tickers per sleeve (`--allocation` + `--no-sweep`)
 
-Separate runs against the *same* account already work when no two sleeves touch
-the same symbol:
+If you'd rather not merge — each strategy on its own schedule, its own cron
+line — separate runs against the *same* account also work, as long as no two
+sleeves touch the same symbol:
 
 ```bash
 msts-trader rebalance --csv-file momo.csv  --allocation 50000 --no-sweep --threshold-mode position

@@ -17,11 +17,20 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
   documented ways around it: merge the sleeves into one book, give each
   strategy its own brokerage account, or keep the sleeves' tickers disjoint
   with `--allocation` + `--no-sweep`. Also listed under "What it does NOT do".
+- **Running alongside your own manual trades** — README recipe for fencing an
+  algo book off inside an account you also trade by hand (`--allocation` +
+  `--no-sweep` + `--threshold-mode position`), keeping one cross-margined
+  account and scaling in by raising the allocation. Spells out the disjoint-
+  ticker rule (stops are sized to the full account holding) and how to retire
+  a sleeve when nothing is swept.
 
 ### Examples
 - `examples/merge_sleeves.py` — merge N strategy sleeves (dollar allocation +
   weights CSV each) into one combined target CSV, summing any ticker more than
   one sleeve holds so a single rebalance lands the exact combined book.
+  Emits an explicit weight-`0` row for any ticker that nets to zero, so the
+  merged book still closes rotated-out names under `--no-sweep` (where an
+  unlisted ticker is left alone).
 
 ## [0.27.0] — 2026-07-18
 

@@ -15,8 +15,25 @@ single rebalance then lands the account on exactly the combined target.
     python merge_sleeves.py 50000 momo.csv 30000 carry.csv > combined.csv
     msts-trader rebalance --csv-file combined.csv --dry-run
 
+Sharing the account with your own manual trades? Fence the algo book off with
+an explicit dollar base and no sweep, so msts-trader never touches anything it
+did not put there -- and scale in later by raising one number:
+
+    msts-trader rebalance --csv-file combined.csv \
+        --allocation 80000 --no-sweep --threshold-mode position
+
+That only holds while the algo tickers stay disjoint from the ones you trade by
+hand: msts-trader reads the ACCOUNT's position in a ticker, so a sleeve holding
+SPY would resize (and stop out) the SPY you bought yourself.
+
 Notes:
-  - Keep the default --sweep: the merged CSV *is* the complete book.
+  - Keep the default --sweep only when the merged CSV *is* the complete book.
+    Sharing the account with anything else means --no-sweep + --allocation.
+  - Under --no-sweep, a sleeve retires a name by listing it with weight 0, not
+    by dropping the row -- an unlisted ticker is left alone. This script emits
+    a `0` row for anything that nets to zero, so keep those rows in the sleeve
+    CSVs too. Retire a whole sleeve by zeroing its weights, running once, then
+    removing it from the command.
   - Drift is measured on the combined book, so a small sleeve may never breach
     4% of total NAV. Add --threshold-mode position (or a lower --threshold) if
     you want small sleeves to trade.
@@ -88,9 +105,12 @@ def main(argv: list[str]) -> None:
     for ticker in sorted(weights):
         # Round DOWN so the merged book never sizes above the sleeves' intent.
         weight = weights[ticker].quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
-        if weight <= 0:
-            continue  # nobody wants it — the default sweep closes any held position
-        out.writerow([ticker, weight] + ([stops.get(ticker, "")] if stops else []))
+        # A ticker that nets to zero is emitted as an explicit `0` row, not
+        # dropped: under --no-sweep (running alongside positions msts-trader
+        # must not touch) an unlisted ticker is LEFT ALONE, so a dropped row
+        # would strand the position forever. Weight 0 always means "sell it
+        # all", in both sweep modes.
+        out.writerow([ticker, weight] + ([stops.get(ticker, "") if weight else ""] if stops else []))
 
 
 if __name__ == "__main__":
