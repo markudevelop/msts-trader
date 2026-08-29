@@ -150,3 +150,17 @@ def test_place_limit_and_place_stop_signatures_accept_dry_run(name):
     if cls.supports_stops:
         sig = inspect.signature(cls.place_stop)
         assert "dry_run" in sig.parameters, f"{name}.place_stop must accept dry_run"
+
+
+@pytest.mark.parametrize("name", SUPPORTED)
+def test_every_adapter_answers_order_status_for_sleeve_settlement(name):
+    """The sleeve ledger (msts_trader.sleeves) settles fills EXCLUSIVELY
+    through order_status — on EVERY adapter, unconditionally. Unlike the
+    chase engine (gated on supports_limit_chase), a sleeve run can target any
+    broker, so a missing or mis-indented order_status would silently freeze
+    that broker's sleeve tallies at zero: orders would pend forever and the
+    residual gate would refuse the next run. Same class-shape guard as
+    CHASE_METHODS, but never skipped."""
+    cls = _broker_classes()[name]
+    assert "order_status" in vars(cls), f"{name}.order_status missing — sleeve fills cannot settle"
+    assert callable(cls.order_status), f"{name}.order_status not callable"

@@ -499,3 +499,150 @@ def test_sleeve_fingerprint_is_distinct_per_sleeve(paper_env, tmp_path):
     assert "already executed today" not in r2.output
     led = sleeves.load("paper", "PAPER")
     assert led.tally("a", "SPY") == Decimal("20") and led.tally("b", "SPY") == Decimal("20")
+
+
+# ------------------------------------------------ __main__ sleeve plumbing ---
+
+
+class _PlumbBroker:
+    """Broker stub for the __main__-level helpers: order_status + the
+    balances/positions/quote surface _verify_once fetches."""
+
+    name = "paper"
+    account_id = "PAPER"
+    supports_stops = False
+
+    def __init__(self, statuses=None, positions=None, nav="100000"):
+        self.statuses = statuses or {}
+        self._positions = positions or {}
+        self._nav = Decimal(nav)
+
+    def order_status(self, oid):
+        st = self.statuses[oid]
+        if isinstance(st, Exception):
+            raise st
+        return {"status": st[0], "filled_qty": st[1], "filled_avg_price": None}
+
+    def balances(self):
+        from msts_trader.brokers.base import Balances
+
+        return Balances(nav=self._nav, cash=Decimal("0"), buying_power=self._nav)
+
+    def positions(self):
+        return dict(self._positions)
+
+    def quote(self, tickers):
+        return {t: Decimal("500") for t in tickers}
+
+
+def test_record_sleeve_fills_records_only_placed_orders_and_settles():
+    """The executor hand-off: results without an order_id (never reached the
+    broker) leave no trace; filled orders land in the tally; a resting order
+    stays pending with its partial fill recorded; and the ledger is saved."""
+    from msts_trader import __main__ as m
+    from msts_trader.models import Order, Side
+
+    led = sleeves.Ledger(broker="paper", account="PAPER")
+    orders = [
+        Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10")),
+        Order(ticker="GLD", side=Side.BUY, quantity=Decimal("5")),
+        Order(ticker="SHV", side=Side.BUY, quantity=Decimal("3")),
+    ]
+    results = [
+        {"order_id": "a1", "status": "FILLED", "ticker": "SPY"},
+        {"status": "error", "reason": "no price", "ticker": "GLD"},  # no id
+        {"order_id": "a3", "status": "resting", "ticker": "SHV"},
+    ]
+    b = _PlumbBroker(statuses={"a1": ("filled", 10.0), "a3": ("working", 1.0)})
+
+    m._record_sleeve_fills(b, led, "momo", orders, results)
+
+    assert led.tally("momo", "SPY") == Decimal("10")
+    assert led.tally("momo", "GLD") == Decimal("0")  # errored -> no entry at all
+    assert led.tally("momo", "SHV") == Decimal("1")  # partial applied
+    assert [e["order_id"] for e in led.pending] == ["a3"]  # resting -> next run
+    # Persisted, not just in memory.
+    assert sleeves.load("paper", "PAPER").tally("momo", "SPY") == Decimal("10")
+
+
+def test_verify_once_scopes_convergence_to_the_sleeve():
+    """Account holds 60 SPY (40 sleeve + 20 manual). Sleeve targets $20k SPY
+    at $500 = 40 shares: sleeve-scoped verify converges; the same verify
+    WITHOUT the sleeve view sees all 60 and reports a residual sell — proving
+    the sleeve param changes the outcome, not just the plumbing."""
+    from msts_trader import __main__ as m
+    from msts_trader.models import Target
+
+    led = sleeves.Ledger(broker="paper", account="PAPER")
+    sleeves.apply_fill(led, "momo", "SPY", "BUY", Decimal("40"))
+    b = _PlumbBroker(positions={"SPY": Position("SPY", Decimal("60"), Decimal("500"))})
+    targets = [Target(ticker="SPY", weight=Decimal("1.0"))]
+
+    res_sleeve, post = m._verify_once(
+        b,
+        targets,
+        threshold=0.04,
+        min_weight=None,
+        allocation=Decimal("20000"),
+        whole_shares=False,
+        threshold_mode="nav",
+        sleeve="momo",
+        ledger=led,
+    )
+    assert res_sleeve.ok, [r.ticker for r in res_sleeve.residual]
+    assert post.orders == []
+
+    res_account, post_account = m._verify_once(
+        b,
+        targets,
+        threshold=0.04,
+        min_weight=None,
+        allocation=Decimal("20000"),
+        whole_shares=False,
+        threshold_mode="nav",
+    )
+    assert not res_account.ok  # sees the manual shares as overweight
+    assert any(o.side.value == "SELL" for o in post_account.orders)
+
+
+def test_self_heal_records_healed_fills_into_the_ledger(monkeypatch):
+    """A heal pass goes through _execute like any trade — its fills MUST land
+    in the tally, or the next verify double-counts the residual."""
+    import types
+
+    from msts_trader import __main__ as m
+    from msts_trader.models import Order, Side
+
+    led = sleeves.Ledger(broker="paper", account="PAPER")
+    b = _PlumbBroker(statuses={"h1": ("filled", 7.0)})
+    heal_order = Order(ticker="SPY", side=Side.BUY, quantity=Decimal("7"))
+
+    class _Res:
+        def __init__(self, ok):
+            self.ok = ok
+            self.residual = [] if ok else [object()]
+
+        def summary(self):
+            return "x"
+
+    seq = [(_Res(False), types.SimpleNamespace(orders=[heal_order])), (_Res(True), types.SimpleNamespace(orders=[]))]
+    calls = {"n": 0}
+
+    def fake_verify(*a, **k):
+        r = seq[min(calls["n"], 1)]
+        calls["n"] += 1
+        return r
+
+    monkeypatch.setattr(m, "_verify_once", fake_verify)
+    monkeypatch.setattr(m, "market_status", lambda: types.SimpleNamespace(status="open"))
+    monkeypatch.setattr(
+        m, "_execute", lambda *a, **k: (1, 0, [{"order_id": "h1", "status": "FILLED", "ticker": "SPY"}])
+    )
+    monkeypatch.setattr(m, "_do_notify", lambda *a, **k: None)
+    monkeypatch.setattr(m, "say", lambda *a, **k: None)
+
+    res = m._post_trade_verify(b, [], settle_seconds=0, self_heal=True, heal_passes=1, sleeve="momo", ledger=led)
+
+    assert res.ok is True
+    assert led.tally("momo", "SPY") == Decimal("7")
+    assert sleeves.load("paper", "PAPER").tally("momo", "SPY") == Decimal("7")

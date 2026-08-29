@@ -10,6 +10,15 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Tests
+- Sleeve plumbing units in `__main__`: `_record_sleeve_fills` (records only
+  broker-accepted orders, settles fills, keeps resting orders pending,
+  persists), `_verify_once` sleeve scoping (the same book converges
+  sleeve-scoped and fails account-scoped), and self-heal fills landing in the
+  tally — each mutation-checked. Protocol guard: every adapter must define
+  `order_status` unconditionally (sleeve settlement depends on it on every
+  broker, unlike limit-chase which is gated on `supports_limit_chase`).
+
 ## [0.28.0] — 2026-08-29
 
 ### Added
