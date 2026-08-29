@@ -32,6 +32,14 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
   merged book still closes rotated-out names under `--no-sweep` (where an
   unlisted ticker is left alone).
 
+### Tests
+- `tests/test_merge_sleeves_example.py` — sleeve merging (shared tickers
+  summed, allocation weighting, leverage preserved), the weight-`0` exit rows
+  `--no-sweep` depends on, order-independent tightest-stop resolution, argv
+  refusals, and a round-trip that drives the merged CSV through `parse_csv`
+  and `build_preview` to prove an allocated book leaves manually-traded
+  positions untouched.
+
 ## [0.27.0] — 2026-07-18
 
 ### Added
