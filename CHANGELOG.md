@@ -10,6 +10,33 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Strategy sleeves — run multiple strategies (and your own manual trades)
+  in ONE account** (`rebalance --sleeve NAME`, config `sleeve`). Every order
+  sent under a sleeve is recorded in a local ledger
+  (`~/.msts-trader/sleeves/`) and its CONFIRMED fills (`order_status`
+  `filled_qty` — never the ordered quantity) accumulate into a per-ticker
+  share tally; the rebalance then sizes against only that sleeve's tally, so
+  two strategies can hold the same ticker and manually-traded shares are
+  structurally untouchable (invariant: sum of tallies <= account position;
+  the gap is unassigned). Resting/MOC orders settle idempotently on later
+  runs via a recorded-fill cursor. Fail-closed gates: a ledger claiming more
+  than the account holds refuses to trade (manual sell of sleeve shares →
+  `sleeve reconcile`/`sleeve adjust`), an account-level rebalance or `multi`
+  run on a ledgered account is refused, and sleeve runs are market-order
+  only with no protective stops in v1 (stops are sized account-wide). New
+  `sleeve` command group: `list`, `show`, `adopt` (bootstrap already-held
+  shares, bounded by unassigned), `release`, `adjust`, `reconcile`.
+  Post-trade verify + self-heal are sleeve-scoped; the idempotency
+  fingerprint includes the sleeve. Design: docs/design-strategy-sleeves.md.
+
+### Fixed
+- **Paper broker: `order_status` now answers for market orders** (previously
+  only limit orders — a market order id returned UNKNOWN/0 forever, violating
+  the Broker Protocol), and paper market order ids are now unique
+  (`paper-SPY-<seq>` instead of a quantity-derived id two orders could
+  share).
+
 ### Docs
 - **Multiple strategies in one account** — new README section. msts-trader
   has no per-strategy position ledger (positions are read at the *account*

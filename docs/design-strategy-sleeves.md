@@ -1,9 +1,11 @@
 # Design: strategy sleeves (per-strategy share tally in one account)
 
-Status: **draft — not scheduled**. Discussion doc for a requested feature; no
-code in this repo implements it yet. The zero-code workarounds live in the
-README under *Multiple strategies in one account* and remain the recommended
-path until this ships.
+Status: **P1 implemented** (`rebalance --sleeve`, the ledger in
+`msts_trader/sleeves.py`, the `sleeve` command group, fill-driven settlement,
+the residual gate, sleeve-scoped verify/self-heal). P2 (sleeve-scoped stops,
+`liquidate --sleeve`) and P3 (broker-side tags, `multi` integration) are not
+built; sleeve runs are market-order-only and refuse stops. The zero-code
+workarounds in the README remain valid alternatives.
 
 ## Problem
 

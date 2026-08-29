@@ -144,6 +144,16 @@ class Paper:
         last_prices = dict(s.get("last_prices", {}))
         last_prices[tkr] = str(px)
         s["last_prices"] = last_prices
+        # Record the (instantly-filled) market order under a UNIQUE id so
+        # order_status can answer for it — the Broker Protocol promises
+        # order_status for ANY order id, and callers like the sleeve ledger
+        # settle their fills exclusively through it.
+        seq = int(s.get("order_seq", 0)) + 1
+        s["order_seq"] = seq
+        oid = f"paper-{tkr}-{seq}"
+        mkt = dict(s.get("market_orders", {}))
+        mkt[oid] = {"quantity": str(qty), "filled": str(qty), "fill_price": str(px), "side": order.side.value}
+        s["market_orders"] = mkt
         self._save(s)
 
         return {
@@ -152,7 +162,7 @@ class Paper:
             "side": order.side.value,
             "quantity": float(qty),
             "moc": order.moc,
-            "order_id": f"paper-{tkr}-{int(qty * 100)}",
+            "order_id": oid,
             "fill_price": float(px),
             "dry_run": False,
         }
@@ -254,6 +264,13 @@ class Paper:
 
         self._try_fill_limit(order_id)  # re-evaluate against the current mid
         s = self._load()
+        mkt = s.get("market_orders", {}).get(order_id)
+        if mkt:  # market orders fill instantly and completely
+            return {
+                "status": FILLED,
+                "filled_qty": float(Decimal(mkt["filled"])),
+                "filled_avg_price": float(mkt["fill_price"]) if mkt.get("fill_price") else None,
+            }
         rec = s.get("limit_orders", {}).get(order_id)
         if not rec:
             return {"status": UNKNOWN, "filled_qty": 0.0, "filled_avg_price": None}

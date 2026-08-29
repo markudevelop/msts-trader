@@ -618,7 +618,49 @@ position in a ticker and sizes against that. Run two strategies as two separate
 rebalances and they will fight over any ticker they share: each sees the other's
 shares as its own drift and trades them away.
 
-Three ways to run several strategies against one login, simplest first.
+Four ways to run several strategies against one login. Native sleeves are
+the most capable; the others need no state at all.
+
+### Native sleeves: `--sleeve` (order tally per strategy)
+
+The direct answer to "multiple strategies in one account, alongside my manual
+trades": every order sent under `--sleeve NAME` is recorded in a local ledger
+(`~/.msts-trader/sleeves/`), and the sleeve's **confirmed fills** accumulate
+into a per-ticker share tally. A sleeve run sizes against ONLY its own tally —
+other sleeves' shares and anything you traded by hand are invisible to it, so
+two strategies can hold the SAME ticker and nobody sells anyone else's shares:
+
+```bash
+msts-trader rebalance --sleeve momo  --allocation 50000 --csv-file momo.csv  --yes
+msts-trader rebalance --sleeve carry --allocation 30000 --csv-file carry.csv --yes
+
+msts-trader sleeve list                  # every sleeve, tallies, pending orders
+msts-trader sleeve adopt momo SPY 100    # assign already-held shares (bootstrap)
+msts-trader sleeve reconcile             # tallies vs account, per ticker
+```
+
+How it stays safe (details in
+[docs/design-strategy-sleeves.md](docs/design-strategy-sleeves.md)):
+
+- **The invariant is `Σ sleeve tallies ≤ account position`** — the gap is
+  *unassigned* (your manual book, by construction). The tool structurally
+  cannot touch shares it didn't buy: the sweep only exits *tally-owned*
+  positions, and sells clamp to the tally.
+- **Tallies move only on confirmed fills** (`order_status`'s `filled_qty`),
+  never on ordered quantity. Partial fills and resting/MOC orders settle
+  idempotently on later runs.
+- **Fail-closed reconciliation:** if tallies ever claim more than the account
+  holds (you manually sold sleeve shares, a corporate action), the run refuses
+  and `sleeve reconcile` / `sleeve adjust` is the explicit fix — the tool never
+  guesses whose shares vanished.
+- An account-level `rebalance` (no `--sleeve`) on a ledgered account is
+  refused — its sweep would sell every sleeve's holdings.
+
+v1 limits: market orders only (no `--order-type limit-chase`), no protective
+stops under `--sleeve` (stops are sized account-wide today), and `multi` has no
+sleeve support yet — run one `rebalance --sleeve` per strategy. Give each
+sleeve `--allocation` (else weights size against full account NAV) and
+`--threshold-mode position` if the sleeve is small relative to the account.
 
 ### Merge the sleeves into one book (works on every broker)
 
@@ -811,11 +853,9 @@ Two things to know for a **fresh account**:
   09:30–16:00 ET (crypto via Hyperliquid trades 24/7).
 - Shorting. Negative weights are rejected.
 - Options or futures.
-- Per-strategy position tracking inside one account (no virtual
-  subaccounts). Positions are read at the *account* level, so two
-  strategies sharing a ticker would trade against each other. Merge the
-  books or keep the sleeves disjoint instead — see [Multiple strategies in
-  one account](#multiple-strategies-in-one-account).
+- Protective stops or limit-chase under `--sleeve` (sleeve runs are
+  market-order only in v1) — see [Multiple strategies in one
+  account](#multiple-strategies-in-one-account).
 - Active stop *management* (Hydra/Fusion-style trailing watchers). Static
   protective stops **are** supported via the `stop_pct` CSV column — see
   [Protective stops](#protective-stops).

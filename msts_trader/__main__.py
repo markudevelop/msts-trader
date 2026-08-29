@@ -13,6 +13,7 @@ Subcommands:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from decimal import Decimal
 
@@ -23,7 +24,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm  # used for the post-preview Y/N (works fine in all terminals)
 from rich.table import Table
 
-from . import __version__, config, fill_log, keychain, notifications, retry, runstate, safety
+from . import __version__, config, fill_log, keychain, notifications, retry, runstate, safety, sleeves
 from .brokers import SUPPORTED, BrokerError, make
 from .brokers.base import LinkedAccount, resolve_linked_account
 from .creds_file import CredsFileError, broker_kwargs_from_env, load_into_env
@@ -103,11 +104,12 @@ def _do_notify(text, *, notify_url, tg_token, tg_chat) -> None:
         say(f"[yellow]notify failed (check URL/token, see channel): {', '.join(failed)}[/yellow]")
 
 
-def _emit_json(broker, preview, *, dry_run: bool, duplicate: bool) -> None:
+def _emit_json(broker, preview, *, dry_run: bool, duplicate: bool, sleeve: str | None = None) -> None:
     gross = sum((row.target_pct for row in preview.rows), Decimal(0))
     payload = {
         "broker": broker.name,
         "account_id": broker.account_id,
+        "sleeve": sleeve,
         "nav": str(preview.nav),
         "cash": str(preview.cash),
         "buying_power": str(preview.buying_power),
@@ -1223,6 +1225,14 @@ def liquidate(
     help="Dollar amount the weights apply to (run a sub-portfolio inside a bigger account). Default: full NAV.",
 )
 @click.option(
+    "--sleeve",
+    "sleeve_opt",
+    default=None,
+    help="Per-strategy share tally: size against ONLY the shares this named sleeve owns (a local ledger of "
+    "this sleeve's confirmed fills), leaving other sleeves' and manually-traded shares untouched. "
+    "Market orders only; stops not yet supported. See `msts-trader sleeve --help`.",
+)
+@click.option(
     "--csv-file",
     type=click.Path(exists=True, dir_okay=False),
     default=None,
@@ -1335,6 +1345,7 @@ def rebalance(
     rebalance_scope: str | None,
     sweep: bool | None,
     allocation: float | None,
+    sleeve_opt: str | None,
     csv_file: str | None,
     csv_url: str | None,
     creds_file: str | None,
@@ -1376,6 +1387,11 @@ def rebalance(
     rebalance_scope = config.pick(rebalance_scope, cfg, "rebalance_scope", "whole-book")
     sweep = bool(config.pick(sweep, cfg, "sweep", True))
     allocation = config.pick(allocation, cfg, "allocation")
+    sleeve_name = config.pick(sleeve_opt, cfg, "sleeve")
+    if sleeve_name is not None:
+        sleeve_name = str(sleeve_name).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", sleeve_name):
+            _fail(f"invalid sleeve name {sleeve_name!r} — use letters, digits, - and _ (max 40 chars).")
     csv_file = config.pick(csv_file, cfg, "csv_file")
     csv_url = config.pick(csv_url, cfg, "csv_url")
     creds_file = config.pick(creds_file, cfg, "creds_file")
@@ -1394,6 +1410,17 @@ def rebalance(
     order_type = str(config.pick(order_type, cfg, "order_type", "market"))
     if order_type not in ("market", "limit-chase"):
         _fail(f"invalid order_type {order_type!r} — use 'market' or 'limit-chase'.")
+    # Sleeve mode is deliberately narrow in v1 (fail-closed, not degraded):
+    #   - limit-chase aggregates fills across several order ids, which the
+    #     ledger's per-order settlement cursor cannot attribute yet;
+    #   - protective stops are sized to the ACCOUNT holding and reconciled/
+    #     pre-cancelled account-wide — in a shared account that would put a
+    #     stop across (or cancel a stop protecting) shares the sleeve does
+    #     not own.
+    if sleeve_name and order_type == "limit-chase":
+        _fail("--sleeve supports market orders only for now — drop --order-type limit-chase.")
+    if sleeve_name and default_stop is not None:
+        _fail("--sleeve does not support protective stops yet — drop --stop-pct (stops are sized account-wide).")
     chase_cfg = None
     if order_type == "limit-chase":
         if moc:
@@ -1448,6 +1475,11 @@ def rebalance(
 
     if default_stop is not None:
         targets = _apply_default_stop(targets, Decimal(str(default_stop)))
+    if sleeve_name and any(t.stop_pct for t in targets):
+        _fail(
+            "--sleeve does not support protective stops yet — remove the stop_pct column "
+            "(stops are sized to the whole account holding, which would cover shares this sleeve does not own)."
+        )
 
     say(f"[green]✓ loaded {len(targets)} targets.[/green]")
 
@@ -1476,15 +1508,41 @@ def rebalance(
         _fail(str(e))
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
-    universe = sorted({tg.ticker for tg in targets} | set(pos.keys()))
+
+    # Sleeve ledger: loaded for EVERY run (an account-level run on a ledgered
+    # account must be refused — its sweep would sell every sleeve's holdings).
+    try:
+        ledger = sleeves.load(b.name, b.account_id)
+    except sleeves.SleeveError as e:
+        _fail(str(e))
+    diff_positions = pos
+    if sleeve_name:
+        # Hold the ledger lock for the rest of the run (released on context
+        # teardown, which click runs even on sys.exit) so two sleeve runs
+        # against the same account are serialized.
+        _slock = sleeves.lock(b.name, b.account_id).__enter__()
+        ctx.call_on_close(lambda: _slock.__exit__(None, None, None))
+        # Settle in-flight orders from previous runs (resting remainders, MOC
+        # fills from the close) BEFORE anything is sized this run.
+        settled = sleeves.settle_pending(ledger, b)
+        if settled:
+            sleeves.save(ledger)
+            for n in settled:
+                say(f"[dim]sleeve: {escape(n)}[/dim]")
+        # The account as this sleeve sees it: only its own confirmed-fill
+        # tally. Manual shares and other sleeves' shares are invisible, so the
+        # diff can neither resize nor sweep them.
+        diff_positions = sleeves.sleeve_view(ledger, sleeve_name, pos)
+
+    universe = sorted({tg.ticker for tg in targets} | set(diff_positions.keys()))
     say(f"Quoting {len(universe)} symbols via {b.name}...", style="dim")
     quotes = retry.with_retry(lambda: b.quote(universe))
-    for tk, p in pos.items():
+    for tk, p in diff_positions.items():
         quotes.setdefault(tk, p.price)
 
     preview = build_preview(
         targets=targets,
-        positions=pos,
+        positions=diff_positions,
         nav=bal.nav,
         cash=bal.cash,
         buying_power=bal.buying_power,
@@ -1508,6 +1566,30 @@ def rebalance(
     if cap_msg:
         preview.blockers.append(cap_msg)
 
+    # Sleeve safety gates (fail-closed; see docs/design-strategy-sleeves.md).
+    if ledger.has_entries() and not sleeve_name:
+        preview.blockers.append(
+            f"this account has sleeve tallies ({', '.join(sorted(ledger.sleeves))}) — an account-level rebalance "
+            f"would sweep every sleeve's holdings. Pass --sleeve NAME, or clear the ledger under "
+            f"{sleeves.LEDGER_DIR} if sleeves are no longer in use."
+        )
+    if sleeve_name:
+        # Tallies claiming more shares than the account holds mean algo shares
+        # vanished outside the tool (manual sell, corporate action). Nobody can
+        # know whose shares vanished — refuse rather than guess.
+        neg = sleeves.negative_residuals(ledger, pos)
+        if neg:
+            details = ", ".join(f"{t} short {-d}" for t, d in sorted(neg.items()))
+            preview.blockers.append(
+                f"sleeve ledger claims more shares than the account holds ({details}) — shares were sold or "
+                f"moved outside msts-trader. Fix the tally with `msts-trader sleeve reconcile` / `sleeve adjust`."
+            )
+        if allocation is None:
+            preview.warnings.append(
+                f"sleeve '{sleeve_name}' has no --allocation — weights size against FULL account NAV, "
+                f"including money this sleeve does not manage."
+            )
+
     # Idempotency: same plan already done today? Params are part of the plan, so
     # a different --allocation/--rebalance-scope/--sweep/--threshold/etc re-runs.
     fp = runstate.fingerprint(
@@ -1522,6 +1604,7 @@ def rebalance(
             "threshold_mode": threshold_mode,
             "whole_shares": whole_shares,
             "min_weight": min_weight,
+            "sleeve": sleeve_name,
         },
     )
     duplicate = runstate.already_done(fp) and not force
@@ -1530,7 +1613,7 @@ def rebalance(
     # blockers, dry_run, duplicate); decide exit purely on those flags so we
     # never print a second JSON object.
     if json_out:
-        _emit_json(b, preview, dry_run=dry_run, duplicate=duplicate)
+        _emit_json(b, preview, dry_run=dry_run, duplicate=duplicate, sleeve=sleeve_name)
         if preview.has_blockers:
             sys.exit(1)
         if dry_run or not preview.orders or duplicate:
@@ -1545,7 +1628,11 @@ def rebalance(
         if not yes:
             print(json.dumps({"error": "refusing to execute without --yes in JSON/non-interactive mode"}))
             sys.exit(1)
-        sent, failed, results = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
+        sent, failed, results = _execute(
+            b, preview, order_type=order_type, chase_cfg=chase_cfg, targets=targets, manage_stops=not sleeve_name
+        )
+        if sleeve_name and results:
+            _record_sleeve_fills(b, ledger, sleeve_name, preview.orders, results)
         if sent > 0 and failed == 0:
             runstate.record(fp)  # only mark done on clean success, so a partial run can re-complete
         _do_notify(
@@ -1573,6 +1660,8 @@ def rebalance(
                 order_type=order_type,
                 moc=moc,
                 recent_clean={r.get("ticker") for r in results if _no_reheal(r)},
+                sleeve=sleeve_name,
+                ledger=ledger,
                 chase_cfg=chase_cfg,
                 notify_url=notify_url,
                 tg_token=tg_token,
@@ -1599,7 +1688,7 @@ def rebalance(
         # name whose stop was missed/filled/rejected must be backfilled (sized from
         # broker.positions(), so never a naked stop). Without this, stops are only
         # touched on days the book trades — the held-within-drift coverage gap.
-        if getattr(b, "supports_stops", False):
+        if not sleeve_name and getattr(b, "supports_stops", False):
             _reconcile_stops(b, preview, [], targets=targets)
         return
     if dry_run:
@@ -1616,7 +1705,7 @@ def rebalance(
         # Same as the within-drift path: reconcile stops even when we skip the
         # trade, so a stop that was filled/cancelled since this morning's run is
         # backfilled on held positions (idempotent — correct stops aren't churned).
-        if getattr(b, "supports_stops", False):
+        if not sleeve_name and getattr(b, "supports_stops", False):
             _reconcile_stops(b, preview, [], targets=targets)
         return
     if not yes:
@@ -1628,7 +1717,11 @@ def rebalance(
             say("[red]Cancelled.[/red]")
             sys.exit(0)
 
-    sent, failed, results = _execute(b, preview, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
+    sent, failed, results = _execute(
+        b, preview, order_type=order_type, chase_cfg=chase_cfg, targets=targets, manage_stops=not sleeve_name
+    )
+    if sleeve_name and results:
+        _record_sleeve_fills(b, ledger, sleeve_name, preview.orders, results)
     if sent > 0 and failed == 0:
         runstate.record(fp)  # only mark done on clean success, so a partial run can re-complete
 
@@ -1654,6 +1747,8 @@ def rebalance(
             order_type=order_type,
             moc=moc,
             recent_clean={r.get("ticker") for r in results if _no_reheal(r)},
+            sleeve=sleeve_name,
+            ledger=ledger,
             chase_cfg=chase_cfg,
             notify_url=notify_url,
             tg_token=tg_token,
@@ -1780,7 +1875,37 @@ def _no_reheal(result: dict) -> bool:
     return _is_clean_send(result.get("status", "?")) or _leg_order_live(result)
 
 
-def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, targets=None):
+def _record_sleeve_fills(broker, ledger, sleeve_name: str, orders, results) -> None:
+    """Record just-placed sleeve orders and settle their fills into the tally.
+
+    `results` is 1:1 with `orders` (the executor appends one result per order).
+    Any order the broker assigned an id is registered as pending — even a
+    "rejected" one, which the settlement pass then drops with zero fill — and
+    settle_pending applies whatever has confirmed so far; anything still live
+    (resting, MOC awaiting the close) stays pending for the next run. Fills,
+    never intent: the tally only ever moves by order_status's filled_qty.
+
+    Caller must already hold the run-level ledger lock (the rebalance flow
+    acquires it for the whole run) — taking it again here would self-block.
+    """
+    for o, r in zip(orders, results):
+        oid = r.get("order_id")
+        if not oid:
+            continue  # never reached the broker (error/skip) -> no tally impact
+        sleeves.record_order(
+            ledger,
+            sleeve_name,
+            order_id=str(oid),
+            ticker=o.ticker,
+            side=o.side.value,
+            requested=o.quantity,
+        )
+    for n in sleeves.settle_pending(ledger, broker):
+        say(f"[dim]sleeve: {escape(n)}[/dim]")
+    sleeves.save(ledger)
+
+
+def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, targets=None, manage_stops: bool = True):
     total = len(preview.orders)
     sent = 0
     failed = 0
@@ -1797,7 +1922,7 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
     # sell of shares that are reserved by an open stop order
     # ("cannot_close_against_more_than_existing_position"), so the protective stop MUST be cancelled
     # BEFORE the sell — not in _reconcile_stops afterwards (by then the sell has already bounced).
-    if getattr(broker, "supports_stops", False):
+    if manage_stops and getattr(broker, "supports_stops", False):
         sell_tkrs = {o.ticker for o in preview.orders if o.side.value == "SELL"}
         if sell_tkrs:
             try:
@@ -1907,7 +2032,10 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
                 break
             _time.sleep(1.5)
 
-    _reconcile_stops(broker, preview, results, targets=targets)
+    # Sleeve runs never touch stops: reconciliation sizes/cancels account-wide,
+    # which would cover or cancel shares the sleeve does not own.
+    if manage_stops:
+        _reconcile_stops(broker, preview, results, targets=targets)
     return sent, failed, results
 
 
@@ -1923,11 +2051,17 @@ def _verify_once(
     rebalance_scope="whole-book",
     sweep=True,
     margin_aware=False,
+    sleeve=None,
+    ledger=None,
 ):
     """Re-fetch broker state and rebuild the diff. Returns (VerifyResult, post_fill_preview)."""
     targets = _normalize_targets(b, targets)
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
+    if sleeve and ledger is not None:
+        # Verify the SLEEVE's convergence, not the account's: same view as the
+        # rebalance itself, rebuilt from the post-fill tally.
+        pos = sleeves.sleeve_view(ledger, sleeve, pos)
     universe = sorted({tg.ticker for tg in targets} | set(pos.keys()))
     quotes = retry.with_retry(lambda: b.quote(universe))
     for tk, p in pos.items():
@@ -1976,6 +2110,8 @@ def _post_trade_verify(
     notify_url=None,
     tg_token=None,
     tg_chat=None,
+    sleeve=None,
+    ledger=None,
 ):
     """After fills, re-fetch broker state and confirm the account CONVERGED to target.
 
@@ -2027,6 +2163,8 @@ def _post_trade_verify(
                 rebalance_scope=rebalance_scope,
                 sweep=sweep,
                 margin_aware=margin_aware,
+                sleeve=sleeve,
+                ledger=ledger,
             )
             if res.ok or not self_heal or attempt >= heal_passes or not post.orders:
                 break
@@ -2048,7 +2186,13 @@ def _post_trade_verify(
             )
             post.orders = heal_orders
             try:
-                ret = _execute(b, post, order_type=order_type, chase_cfg=chase_cfg, targets=targets)
+                ret = _execute(
+                    b, post, order_type=order_type, chase_cfg=chase_cfg, targets=targets, manage_stops=not sleeve
+                )
+                if sleeve and ledger is not None and isinstance(ret, tuple) and len(ret) >= 3:
+                    # Healed fills must land in the tally too, or the next
+                    # verify pass double-counts the residual.
+                    _record_sleeve_fills(b, ledger, sleeve, post.orders, ret[2])
                 healed += 1
                 # Don't re-trade these on the next pass either, for the same reason.
                 heal_results = ret[2] if isinstance(ret, tuple) and len(ret) >= 3 else []
@@ -2256,6 +2400,24 @@ def _rebalance_one(
         return {"broker": b.name, "account": b.account_id, "status": "blocked", "blockers": [str(e)]}
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
+    # Same guard as the single rebalance: an account-level sweep on an account
+    # with sleeve tallies would sell every sleeve's holdings (`multi` has no
+    # per-account sleeve support yet).
+    try:
+        _ledger = sleeves.load(b.name, b.account_id)
+    except sleeves.SleeveError as e:
+        return {"broker": b.name, "account": b.account_id, "status": "blocked", "blockers": [str(e)]}
+    if _ledger.has_entries():
+        return {
+            "broker": b.name,
+            "account": b.account_id,
+            "status": "blocked",
+            "blockers": [
+                f"account has sleeve tallies ({', '.join(sorted(_ledger.sleeves))}) — `multi` runs account-level "
+                f"and would sweep every sleeve's holdings. Rebalance each sleeve with "
+                f"`rebalance --sleeve NAME`, or clear the ledger under {sleeves.LEDGER_DIR}."
+            ],
+        }
     universe = sorted({t.ticker for t in targets} | set(pos.keys()))
     quotes = retry.with_retry(lambda: b.quote(universe))
     for tk, p in pos.items():
@@ -2523,6 +2685,215 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
     c.print(table)
     if any(r.get("status") in ("error", "blocked", "partial") for r in results):
         sys.exit(1)
+
+
+# ------------------------------------------------------------------ sleeves --
+# Per-strategy share tallies inside one account. See msts_trader/sleeves.py
+# for the model and docs/design-strategy-sleeves.md for the full design.
+
+
+_SLEEVE_BROKER_OPT = click.option("--broker", "broker_opt", default=None, help="Broker name (else the stored default).")
+_SLEEVE_CREDS_OPT = click.option(
+    "--creds-file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Load credentials from a JSON or KEY=VALUE file (headless).",
+)
+
+
+def _sleeve_broker(ctx, broker_opt, creds_file, account_sel):
+    if creds_file:
+        _load_creds_file_or_exit(creds_file)
+    b = _load_broker(_resolve_broker_name(ctx, broker_opt))
+    _apply_account_selector(b, account_sel)
+    return b
+
+
+def _sleeve_ledger_or_exit(b):
+    try:
+        return sleeves.load(b.name, b.account_id)
+    except sleeves.SleeveError as e:
+        _fail(str(e))
+
+
+@main.group()
+def sleeve() -> None:
+    """Per-strategy share tallies inside ONE account (virtual sub-books).
+
+    A sleeve run (`rebalance --sleeve NAME`) sizes against only the shares
+    that sleeve's confirmed fills have accumulated — other sleeves' shares
+    and anything traded manually stay invisible and untouched. These commands
+    inspect and maintain the local ledger in ~/.msts-trader/sleeves/.
+    """
+
+
+@sleeve.command("list")
+def sleeve_list() -> None:
+    """Show every sleeve ledger on this machine (offline)."""
+    files = sorted(sleeves.LEDGER_DIR.glob("*.json")) if sleeves.LEDGER_DIR.exists() else []
+    if not files:
+        say("no sleeve ledgers — start one with `msts-trader rebalance --sleeve NAME ...`")
+        return
+    for f in files:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except Exception as e:
+            say(f"[red]{f.name}: unreadable ({e})[/red]")
+            continue
+        c.print(f"[bold]{data.get('broker', '?')}[/bold] · account {data.get('account', '?')}")
+        for name, book in sorted((data.get("sleeves") or {}).items()):
+            held = ", ".join(f"{t} {q}" for t, q in sorted(book.items())) or "(empty)"
+            c.print(f"  {name}: {held}")
+        pending = data.get("pending") or []
+        if pending:
+            c.print(f"  [yellow]{len(pending)} order(s) pending settlement[/yellow]")
+
+
+@sleeve.command("show")
+@click.argument("name")
+def sleeve_show(name: str) -> None:
+    """Show one sleeve's tallies across all ledgers (offline)."""
+    files = sorted(sleeves.LEDGER_DIR.glob("*.json")) if sleeves.LEDGER_DIR.exists() else []
+    found = False
+    for f in files:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        book = (data.get("sleeves") or {}).get(name)
+        if book is None:
+            continue
+        found = True
+        c.print(f"[bold]{name}[/bold] @ {data.get('broker', '?')} · account {data.get('account', '?')}")
+        for t, q in sorted(book.items()):
+            c.print(f"  {t}: {q}")
+        pend = [p for p in (data.get("pending") or []) if p.get("sleeve") == name]
+        for p in pend:
+            c.print(
+                f"  [yellow]pending: {p['ticker']} {p['side']} {p['requested']} "
+                f"(filled so far {p['recorded_fill']}, order {p['order_id']})[/yellow]"
+            )
+    if not found:
+        _fail(f"no sleeve named {name!r} in {sleeves.LEDGER_DIR}")
+
+
+@sleeve.command("adopt")
+@click.argument("name")
+@click.argument("ticker")
+@click.argument("qty")
+@_SLEEVE_BROKER_OPT
+@_SLEEVE_CREDS_OPT
+@_ACCOUNT_OPT
+@click.pass_context
+def sleeve_adopt(ctx, name: str, ticker: str, qty: str, broker_opt, creds_file, account_sel) -> None:
+    """Assign already-held shares to a sleeve (day-one bootstrap).
+
+    Refuses to claim more than the account's unassigned shares — adoption
+    moves existing shares into the tally, it never trades.
+    """
+    b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+    pos = retry.with_retry(b.positions)
+    with sleeves.lock(b.name, b.account_id):
+        ledger = _sleeve_ledger_or_exit(b)
+        try:
+            sleeves.adopt(ledger, name, ticker, Decimal(qty), pos)
+        except (sleeves.SleeveError, ArithmeticError) as e:
+            _fail(str(e))
+        sleeves.save(ledger)
+    say(f"[green]adopted {qty} {ticker.upper()} into '{name}' — tally now {ledger.tally(name, ticker)}[/green]")
+
+
+@sleeve.command("release")
+@click.argument("name")
+@click.argument("ticker")
+@click.argument("qty")
+@_SLEEVE_BROKER_OPT
+@_SLEEVE_CREDS_OPT
+@_ACCOUNT_OPT
+@click.pass_context
+def sleeve_release(ctx, name: str, ticker: str, qty: str, broker_opt, creds_file, account_sel) -> None:
+    """Return shares from a sleeve to unassigned (nothing is traded)."""
+    b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+    with sleeves.lock(b.name, b.account_id):
+        ledger = _sleeve_ledger_or_exit(b)
+        try:
+            sleeves.release(ledger, name, ticker, Decimal(qty))
+        except (sleeves.SleeveError, ArithmeticError) as e:
+            _fail(str(e))
+        sleeves.save(ledger)
+    say(f"[green]released {qty} {ticker.upper()} from '{name}' — tally now {ledger.tally(name, ticker)}[/green]")
+
+
+@sleeve.command("adjust")
+@click.argument("name")
+@click.argument("ticker")
+@click.argument("qty")
+@_SLEEVE_BROKER_OPT
+@_SLEEVE_CREDS_OPT
+@_ACCOUNT_OPT
+@click.pass_context
+def sleeve_adjust(ctx, name: str, ticker: str, qty: str, broker_opt, creds_file, account_sel) -> None:
+    """Assert a sleeve's true tally for one ticker (the reconciliation fix)."""
+    b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+    pos = retry.with_retry(b.positions)
+    with sleeves.lock(b.name, b.account_id):
+        ledger = _sleeve_ledger_or_exit(b)
+        try:
+            sleeves.adjust(ledger, name, ticker, Decimal(qty))
+        except (sleeves.SleeveError, ArithmeticError) as e:
+            _fail(str(e))
+        sleeves.save(ledger)
+    say(f"[green]'{name}' {ticker.upper()} tally set to {qty}[/green]")
+    neg = sleeves.negative_residuals(ledger, pos)
+    if neg:
+        details = ", ".join(f"{t} short {-d}" for t, d in sorted(neg.items()))
+        say(f"[yellow]warning: tallies still exceed the account ({details}) — rebalance will refuse.[/yellow]")
+
+
+@sleeve.command("reconcile")
+@_SLEEVE_BROKER_OPT
+@_SLEEVE_CREDS_OPT
+@_ACCOUNT_OPT
+@click.pass_context
+def sleeve_reconcile(ctx, broker_opt, creds_file, account_sel) -> None:
+    """Settle pending orders, then compare tallies to the live account.
+
+    Positive residual = unassigned shares (your manual book) — normal.
+    Negative residual = the ledger claims shares the account no longer holds;
+    fix with `sleeve adjust` (or `sleeve release`) before the next run.
+    """
+    b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+    pos = retry.with_retry(b.positions)
+    with sleeves.lock(b.name, b.account_id):
+        ledger = _sleeve_ledger_or_exit(b)
+        for n in sleeves.settle_pending(ledger, b):
+            say(f"[dim]{escape(n)}[/dim]")
+        sleeves.save(ledger)
+    claims = ledger.claims()
+    table = Table(show_header=True, header_style="bold", title=f"{b.name} · {b.account_id} — sleeves vs account")
+    table.add_column("Ticker")
+    table.add_column("Account", justify="right")
+    table.add_column("Claimed", justify="right")
+    table.add_column("Unassigned", justify="right")
+    problems = 0
+    for tkr in sorted(set(claims) | set(pos)):
+        held = pos[tkr].quantity if tkr in pos else Decimal(0)
+        claimed = claims.get(tkr, Decimal(0))
+        resid = held - claimed
+        if resid < 0:
+            problems += 1
+            table.add_row(tkr, f"{held}", f"{claimed}", f"[red]{resid}[/red]")
+        else:
+            table.add_row(tkr, f"{held}", f"{claimed}", f"{resid}")
+    c.print(table)
+    if ledger.pending:
+        say(f"[yellow]{len(ledger.pending)} order(s) still pending settlement.[/yellow]")
+    if problems:
+        _fail(
+            f"{problems} ticker(s) claim more than the account holds — fix with "
+            f"`msts-trader sleeve adjust NAME TICKER QTY`."
+        )
+    say("[green]ledger consistent with the account.[/green]")
 
 
 @main.command()

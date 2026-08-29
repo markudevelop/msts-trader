@@ -57,6 +57,7 @@ _KNOWN = {
     "rebalance_scope",  # execution: "whole-book" (default) | "per-ticker"
     "sweep",  # liquidate held tickers not in the CSV (default true); false = only touch listed tickers
     "allocation",  # dollar base the weights apply to (default: full NAV)
+    "sleeve",  # per-strategy share tally: trade only this sleeve's shares (see docs/design-strategy-sleeves.md)
     "account",  # array of [[account]] tables for the `multi` command
     "account_id",  # same-login multi-account selector for single rebalance (full id/number or last-4)
 }
