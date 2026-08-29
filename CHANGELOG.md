@@ -10,6 +10,19 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Docs
+- **Multiple strategies in one account** — new README section. msts-trader
+  has no per-strategy position ledger (positions are read at the *account*
+  level), so two strategies sharing a ticker trade against each other. Three
+  documented ways around it: merge the sleeves into one book, give each
+  strategy its own brokerage account, or keep the sleeves' tickers disjoint
+  with `--allocation` + `--no-sweep`. Also listed under "What it does NOT do".
+
+### Examples
+- `examples/merge_sleeves.py` — merge N strategy sleeves (dollar allocation +
+  weights CSV each) into one combined target CSV, summing any ticker more than
+  one sleeve holds so a single rebalance lands the exact combined book.
+
 ## [0.27.0] — 2026-07-18
 
 ### Added

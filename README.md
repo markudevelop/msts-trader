@@ -611,6 +611,76 @@ summary at the end. `multi` never prompts — `--yes` is required to
 execute, `--dry-run` to preview. See
 [`examples/multi-account.toml`](examples/multi-account.toml).
 
+## Multiple strategies in one account
+
+msts-trader has no per-strategy position ledger — it reads the *account's*
+position in a ticker and sizes against that. Run two strategies as two separate
+rebalances and they will fight over any ticker they share: each sees the other's
+shares as its own drift and trades them away.
+
+Three ways to run several strategies against one login, simplest first.
+
+### Merge the sleeves into one book (works on every broker)
+
+Sum the strategies yourself and send **one** combined CSV. No ledger is needed:
+a single rebalance lands the account on the exact combined target, and a ticker
+held by two strategies nets out correctly by construction.
+
+[`examples/merge_sleeves.py`](examples/merge_sleeves.py) does the arithmetic.
+Each sleeve keeps its own weights CSV (weights are fractions of that sleeve) plus
+a dollar allocation; every line becomes a fraction of total NAV:
+
+```bash
+# momo.csv:  SPY 0.60, GLD 0.40      carry.csv:  SPY 0.50, SHV 0.50
+python examples/merge_sleeves.py 50000 momo.csv 30000 carry.csv > combined.csv
+#  -> SPY 0.5625, GLD 0.25, SHV 0.1875      (SPY = (30k + 15k) / 80k)
+
+msts-trader rebalance --csv-file combined.csv --dry-run
+```
+
+- Keep the default `--sweep`: the merged CSV **is** the complete book.
+- Drift is measured on the *combined* book, so a small sleeve may never breach
+  4% of total NAV. Add `--threshold-mode position` (or a lower `--threshold`)
+  if you want small sleeves to trade.
+- A ticker carries only one `stop_pct`; where sleeves disagree on a shared name
+  the tightest stop wins.
+- One run rebalances everything at once. If one sleeve is daily and another
+  monthly, run the merge daily anyway — the monthly sleeve simply won't move
+  until its weights change.
+
+### Separate brokerage accounts (no bookkeeping at all)
+
+Tastytrade, IBKR and Schwab all allow several accounts under one login. Give each
+strategy its own account and the broker keeps the ledger for you — nothing to
+merge, nothing to reconcile:
+
+```bash
+msts-trader rebalance --broker schwab --account 1234 --csv-file momo.csv  --dry-run
+msts-trader rebalance --broker schwab --account 5678 --csv-file carry.csv --dry-run
+```
+
+(`multi` is not the tool here: it runs *one* CSV across many accounts. For a
+different book per account, use one `rebalance --account …` per strategy.)
+
+### Disjoint tickers per sleeve (`--allocation` + `--no-sweep`)
+
+Separate runs against the *same* account already work when no two sleeves touch
+the same symbol:
+
+```bash
+msts-trader rebalance --csv-file momo.csv  --allocation 50000 --no-sweep --threshold-mode position
+msts-trader rebalance --csv-file carry.csv --allocation 30000 --no-sweep --threshold-mode position
+```
+
+`--allocation` sizes each sleeve against its own dollars, and `--no-sweep` stops
+it liquidating the other sleeve's positions (list a rotated-out name with weight
+`0` to close it). Equivalent exposure is usually available under a second symbol
+— SPY vs VOO/IVV, GLD vs IAU, QQQ vs QQQM — so overlapping strategies can often
+be made disjoint for a few bps of tracking difference. Attribution then comes
+free: every ticker in `~/.msts-trader/fills/*.jsonl` belongs to exactly one
+sleeve. NAV, buying power and stop sizing remain account-wide, so this only
+holds while the universes stay disjoint.
+
 ## Protective stops
 
 Add an optional **`stop_pct`** column to the CSV and msts-trader places a
@@ -706,6 +776,11 @@ Two things to know for a **fresh account**:
   09:30–16:00 ET (crypto via Hyperliquid trades 24/7).
 - Shorting. Negative weights are rejected.
 - Options or futures.
+- Per-strategy position tracking inside one account (no virtual
+  subaccounts). Positions are read at the *account* level, so two
+  strategies sharing a ticker would trade against each other. Merge the
+  books or keep the sleeves disjoint instead — see [Multiple strategies in
+  one account](#multiple-strategies-in-one-account).
 - Active stop *management* (Hydra/Fusion-style trailing watchers). Static
   protective stops **are** supported via the `stop_pct` CSV column — see
   [Protective stops](#protective-stops).
