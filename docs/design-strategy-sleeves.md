@@ -196,6 +196,34 @@ sleeve is now under-claiming; its next run would buy) — `sleeve adjust` is the
 manual fix in v1; automatic corporate-action handling is explicitly out of
 scope.
 
+## Cash: a sleeve manages its own money
+
+(Shipped after P1, prompted by user feedback: a static `--allocation` is
+constant-dollar rebalancing — it trims every gain back to the fixed figure and
+buys a drawdown back up with the ACCOUNT's money. Reproduced on paper before
+fixing: SPY doubling was trimmed 40→20 shares; SPY halving was topped up
+20→80 with $15k of account cash.)
+
+`sleeve invest NAME AMOUNT` adds virtual capital; `divest` takes it back out
+of the sleeve's cash (never its holdings). Nothing moves at the broker — the
+point of sleeves is that all dollars stay in one cross-margined account. From
+the first invest, the sleeve is cash-tracked:
+
+- Sizing base = the sleeve's own NAV (cash + holdings at live quotes),
+  recomputed each run and again post-fill for verify/self-heal.
+- Confirmed fills move cash exactly: a cost cursor (`recorded_cost`) applies
+  `filled * filled_avg_price - recorded_cost` per settlement, which is exact
+  across partial fills at different prices because the broker average is
+  cumulative; `est_price` recorded at placement is the fallback for adapters
+  whose order_status has no average.
+- `--allocation` on a cash-tracked sleeve is refused (the trap above);
+  legacy 0.28.0 sleeves (no cash record) keep it with a warning.
+- A leveraged sleeve (weights sum > 1) runs its cash negative by design —
+  that is the cross-margin borrow, bounded account-wide by margin-aware
+  sizing.
+- NAV ≤ 0 refuses to run (a zero-capital sleeve must not fall back to
+  account NAV sizing).
+
 ## CLI surface
 
 ```bash

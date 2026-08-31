@@ -10,6 +10,28 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Sleeves now manage their own cash** (`sleeve invest NAME AMOUNT` /
+  `sleeve divest NAME AMOUNT`). Investing gives a sleeve virtual capital (no
+  real money moves — it all stays in the one cross-margined account) and
+  switches its sizing base to its OWN NAV (cash + holdings): gains compound
+  inside the sleeve, a drawdown is its own to dig out of, and the account's
+  other money is never touched unless the operator invests more. Confirmed
+  fills move the cash exactly (cost-cursor over the broker's cumulative
+  filled_avg_price, est-price fallback); `sleeve list/show/reconcile` report
+  it; `divest` is bounded by cash on hand (sell holdings first by lowering
+  weights). Credit: GitHub user feedback that a static `--allocation`
+  effectively means "trim gains ASAP, and for losses reach out to the main
+  account's money" — reproduced, confirmed, and fixed.
+
+### Changed
+- `rebalance --sleeve` with `--allocation` is REFUSED on a cash-tracked
+  (invested) sleeve — capital changes go through `sleeve invest/divest`. A
+  legacy sleeve (created on 0.28.0, no cash record) keeps static
+  `--allocation` sizing but now warns about the trim/top-up behavior and
+  points at `sleeve invest`. Post-trade verify re-computes the sleeve's NAV
+  post-fill so self-heal sizes against the same base.
+
 ### Tests
 - Sleeve plumbing units in `__main__`: `_record_sleeve_fills` (records only
   broker-accepted orders, settles fills, keeps resting orders pending,

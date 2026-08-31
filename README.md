@@ -631,13 +631,28 @@ other sleeves' shares and anything you traded by hand are invisible to it, so
 two strategies can hold the SAME ticker and nobody sells anyone else's shares:
 
 ```bash
-msts-trader rebalance --sleeve momo  --allocation 50000 --csv-file momo.csv  --yes
-msts-trader rebalance --sleeve carry --allocation 30000 --csv-file carry.csv --yes
+msts-trader sleeve invest momo 50000     # bootstrap: give the sleeve its capital
+msts-trader sleeve invest carry 30000
 
-msts-trader sleeve list                  # every sleeve, tallies, pending orders
-msts-trader sleeve adopt momo SPY 100    # assign already-held shares (bootstrap)
-msts-trader sleeve reconcile             # tallies vs account, per ticker
+msts-trader rebalance --sleeve momo  --csv-file momo.csv  --yes
+msts-trader rebalance --sleeve carry --csv-file carry.csv --yes
+
+msts-trader sleeve list                  # every sleeve, tallies, cash, pending
+msts-trader sleeve invest momo 25000     # scale the winner up (its only new money)
+msts-trader sleeve divest momo 10000     # take capital back out of its cash
+msts-trader sleeve adopt momo SPY 100    # assign already-held shares
+msts-trader sleeve reconcile             # tallies + cash vs account, per ticker
 ```
+
+**A sleeve manages its own money.** `sleeve invest` sets its virtual cash (no
+real money moves — everything stays in the one cross-margined account), and
+from then on the sleeve sizes against its **own NAV** (cash + holdings):
+gains compound inside the sleeve, and a drawdown is its own to dig out of —
+the account's other money is never pulled in unless you `invest` more.
+Confirmed fills move the sleeve's cash exactly (sells add, buys subtract, at
+the actual fill price). A static `--allocation` would instead trim every gain
+back to the fixed figure and buy losses back up with account money, so it is
+refused on an invested sleeve (and merely warned about on a legacy one).
 
 How it stays safe (details in
 [docs/design-strategy-sleeves.md](docs/design-strategy-sleeves.md)):
@@ -658,9 +673,9 @@ How it stays safe (details in
 
 v1 limits: market orders only (no `--order-type limit-chase`), no protective
 stops under `--sleeve` (stops are sized account-wide today), and `multi` has no
-sleeve support yet — run one `rebalance --sleeve` per strategy. Give each
-sleeve `--allocation` (else weights size against full account NAV) and
-`--threshold-mode position` if the sleeve is small relative to the account.
+sleeve support yet — run one `rebalance --sleeve` per strategy. Bootstrap each
+sleeve with `sleeve invest` (else weights size against full account NAV), and
+add `--threshold-mode position` if the sleeve is small relative to the account.
 
 ### Merge the sleeves into one book (works on every broker)
 

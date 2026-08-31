@@ -1540,6 +1540,30 @@ def rebalance(
     for tk, p in diff_positions.items():
         quotes.setdefault(tk, p.price)
 
+    # Sizing base. A cash-tracked sleeve (one that was `sleeve invest`ed)
+    # sizes against its OWN NAV — cash + holdings — so gains compound inside
+    # the sleeve and losses are its own to dig out of. A static --allocation
+    # would instead trim every gain back to the fixed dollar figure and buy a
+    # drawdown back up with the ACCOUNT's money, which is exactly what a
+    # fenced sub-book must not do.
+    sizing_allocation = Decimal(str(allocation)) if allocation is not None else None
+    if sleeve_name and ledger.cash_tracked(sleeve_name):
+        if allocation is not None:
+            _fail(
+                f"sleeve '{sleeve_name}' tracks its own cash — drop --allocation (its sizing base is its own "
+                f"NAV; change its capital with `msts-trader sleeve invest/divest`)."
+            )
+        sizing_allocation = sleeves.sleeve_nav(ledger, sleeve_name, pos, quotes)
+        if sizing_allocation <= 0:
+            _fail(
+                f"sleeve '{sleeve_name}' has no capital (NAV ${sizing_allocation:,.2f}) — "
+                f"add some with `msts-trader sleeve invest {sleeve_name} AMOUNT`."
+            )
+        say(
+            f"[dim]sleeve '{sleeve_name}' NAV ${sizing_allocation:,.2f} "
+            f"(cash ${ledger.cash[sleeve_name]:,.2f} + holdings) — sizing against it[/dim]"
+        )
+
     preview = build_preview(
         targets=targets,
         positions=diff_positions,
@@ -1549,7 +1573,7 @@ def rebalance(
         quotes=quotes,
         drift_threshold=Decimal(str(threshold)),
         min_weight=Decimal(str(min_weight)) if min_weight is not None else None,
-        allocation=Decimal(str(allocation)) if allocation is not None else None,
+        allocation=sizing_allocation,
         drift_mode=threshold_mode or "nav",
         rebalance_scope=rebalance_scope or "whole-book",
         sweep=sweep,
@@ -1584,11 +1608,19 @@ def rebalance(
                 f"sleeve ledger claims more shares than the account holds ({details}) — shares were sold or "
                 f"moved outside msts-trader. Fix the tally with `msts-trader sleeve reconcile` / `sleeve adjust`."
             )
-        if allocation is None:
-            preview.warnings.append(
-                f"sleeve '{sleeve_name}' has no --allocation — weights size against FULL account NAV, "
-                f"including money this sleeve does not manage."
-            )
+        if not ledger.cash_tracked(sleeve_name):
+            if allocation is None:
+                preview.warnings.append(
+                    f"sleeve '{sleeve_name}' has no capital base — weights size against FULL account NAV. "
+                    f"Bootstrap it with `msts-trader sleeve invest {sleeve_name} AMOUNT` (its own compounding "
+                    f"NAV) or pass --allocation (static dollars)."
+                )
+            else:
+                preview.warnings.append(
+                    f"sleeve '{sleeve_name}' sizes against a STATIC ${Decimal(str(allocation)):,.0f} — gains are "
+                    f"trimmed back to it and losses are topped up from the account. For a self-contained book "
+                    f"that compounds, use `msts-trader sleeve invest` instead of --allocation."
+                )
 
     # Idempotency: same plan already done today? Params are part of the plan, so
     # a different --allocation/--rebalance-scope/--sweep/--threshold/etc re-runs.
@@ -1899,6 +1931,7 @@ def _record_sleeve_fills(broker, ledger, sleeve_name: str, orders, results) -> N
             ticker=o.ticker,
             side=o.side.value,
             requested=o.quantity,
+            est_price=o.estimated_price,
         )
     for n in sleeves.settle_pending(ledger, broker):
         say(f"[dim]sleeve: {escape(n)}[/dim]")
@@ -2058,6 +2091,7 @@ def _verify_once(
     targets = _normalize_targets(b, targets)
     bal = retry.with_retry(b.balances)
     pos = retry.with_retry(b.positions)
+    account_pos = pos
     if sleeve and ledger is not None:
         # Verify the SLEEVE's convergence, not the account's: same view as the
         # rebalance itself, rebuilt from the post-fill tally.
@@ -2066,6 +2100,10 @@ def _verify_once(
     quotes = retry.with_retry(lambda: b.quote(universe))
     for tk, p in pos.items():
         quotes.setdefault(tk, p.price)
+    if sleeve and ledger is not None and ledger.cash_tracked(sleeve):
+        # Same base the rebalance used, recomputed post-fill: the sleeve's own
+        # NAV (fills moved dollars cash<->holdings, so it is ~unchanged).
+        allocation = sleeves.sleeve_nav(ledger, sleeve, account_pos, quotes)
     post = build_preview(
         targets=targets,
         positions=pos,
@@ -2741,9 +2779,16 @@ def sleeve_list() -> None:
             say(f"[red]{f.name}: unreadable ({e})[/red]")
             continue
         c.print(f"[bold]{data.get('broker', '?')}[/bold] · account {data.get('account', '?')}")
-        for name, book in sorted((data.get("sleeves") or {}).items()):
-            held = ", ".join(f"{t} {q}" for t, q in sorted(book.items())) or "(empty)"
-            c.print(f"  {name}: {held}")
+        cash_map = data.get("cash") or {}
+        for name in sorted(set(data.get("sleeves") or {}) | set(cash_map)):
+            book = (data.get("sleeves") or {}).get(name) or {}
+            held = ", ".join(f"{t} {q}" for t, q in sorted(book.items())) or "(no holdings)"
+            cash_note = (
+                f"  ·  cash ${Decimal(cash_map[name]):,.2f}"
+                if name in cash_map
+                else "  ·  (no cash tracked — static --allocation sizing)"
+            )
+            c.print(f"  {name}: {held}{cash_note}")
         pending = data.get("pending") or []
         if pending:
             c.print(f"  [yellow]{len(pending)} order(s) pending settlement[/yellow]")
@@ -2760,12 +2805,17 @@ def sleeve_show(name: str) -> None:
             data = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             continue
+        cash_map = data.get("cash") or {}
         book = (data.get("sleeves") or {}).get(name)
-        if book is None:
+        if book is None and name not in cash_map:
             continue
         found = True
         c.print(f"[bold]{name}[/bold] @ {data.get('broker', '?')} · account {data.get('account', '?')}")
-        for t, q in sorted(book.items()):
+        if name in cash_map:
+            c.print(f"  cash: ${Decimal(cash_map[name]):,.2f}")
+        else:
+            c.print("  (no cash tracked — sizes via --allocation; bootstrap with `sleeve invest`)")
+        for t, q in sorted((book or {}).items()):
             c.print(f"  {t}: {q}")
         pend = [p for p in (data.get("pending") or []) if p.get("sleeve") == name]
         for p in pend:
@@ -2822,6 +2872,57 @@ def sleeve_release(ctx, name: str, ticker: str, qty: str, broker_opt, creds_file
             _fail(str(e))
         sleeves.save(ledger)
     say(f"[green]released {qty} {ticker.upper()} from '{name}' — tally now {ledger.tally(name, ticker)}[/green]")
+
+
+@sleeve.command("invest")
+@click.argument("name")
+@click.argument("amount")
+@_SLEEVE_BROKER_OPT
+@_SLEEVE_CREDS_OPT
+@_ACCOUNT_OPT
+@click.pass_context
+def sleeve_invest(ctx, name: str, amount: str, broker_opt, creds_file, account_sel) -> None:
+    """Add virtual capital to a sleeve — the bootstrap, and the ONLY way its
+    buying power grows besides its own gains.
+
+    No money moves (it all lives in the one brokerage account); this sets the
+    sleeve's own NAV as its sizing base: gains compound inside the sleeve,
+    losses are its own to dig out of, and the account's other money is never
+    pulled in behind your back.
+    """
+    b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+    with sleeves.lock(b.name, b.account_id):
+        ledger = _sleeve_ledger_or_exit(b)
+        try:
+            new_cash = sleeves.invest(ledger, name, Decimal(amount))
+        except (sleeves.SleeveError, ArithmeticError) as e:
+            _fail(str(e))
+        sleeves.save(ledger)
+    say(f"[green]invested {Decimal(amount):,.2f} into '{name}' — sleeve cash now ${new_cash:,.2f}[/green]")
+
+
+@sleeve.command("divest")
+@click.argument("name")
+@click.argument("amount")
+@_SLEEVE_BROKER_OPT
+@_SLEEVE_CREDS_OPT
+@_ACCOUNT_OPT
+@click.pass_context
+def sleeve_divest(ctx, name: str, amount: str, broker_opt, creds_file, account_sel) -> None:
+    """Withdraw virtual capital from a sleeve's CASH (never its holdings).
+
+    To free up more than the cash on hand, lower the sleeve's weights and run
+    it once so it sells its own shares first.
+    """
+    b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+    with sleeves.lock(b.name, b.account_id):
+        ledger = _sleeve_ledger_or_exit(b)
+        try:
+            new_cash = sleeves.divest(ledger, name, Decimal(amount))
+        except (sleeves.SleeveError, ArithmeticError) as e:
+            _fail(str(e))
+        sleeves.save(ledger)
+    say(f"[green]divested {Decimal(amount):,.2f} from '{name}' — sleeve cash now ${new_cash:,.2f}[/green]")
 
 
 @sleeve.command("adjust")
@@ -2886,6 +2987,8 @@ def sleeve_reconcile(ctx, broker_opt, creds_file, account_sel) -> None:
         else:
             table.add_row(tkr, f"{held}", f"{claimed}", f"{resid}")
     c.print(table)
+    for name, amt in sorted(ledger.cash.items()):
+        c.print(f"  {name}: cash ${amt:,.2f}")
     if ledger.pending:
         say(f"[yellow]{len(ledger.pending)} order(s) still pending settlement.[/yellow]")
     if problems:

@@ -62,12 +62,22 @@ class Ledger:
     account: str
     # sleeve name -> ticker -> shares the sleeve owns (confirmed fills only)
     sleeves: dict[str, dict[str, Decimal]] = field(default_factory=dict)
+    # sleeve name -> virtual cash the sleeve manages. Present = cash-tracked:
+    # the sleeve's sizing base is its OWN NAV (cash + holdings), it compounds
+    # its gains and absorbs its losses, and confirmed fills move this cash.
+    # Absent (legacy v1 sleeves) = the sleeve sizes against --allocation.
+    # Purely bookkeeping — invest/divest never moves real money; the dollars
+    # all live in the one brokerage account (that's the cross-margin point).
+    cash: dict[str, Decimal] = field(default_factory=dict)
     # in-flight orders awaiting fills: dicts with order_id/sleeve/ticker/side/
-    # requested/recorded_fill/ts
+    # requested/recorded_fill/recorded_cost/est_price/ts
     pending: list[dict] = field(default_factory=list)
 
     def tally(self, sleeve: str, ticker: str) -> Decimal:
         return self.sleeves.get(sleeve, {}).get(ticker.upper(), Decimal(0))
+
+    def cash_tracked(self, sleeve: str) -> bool:
+        return sleeve in self.cash
 
     def claims(self) -> dict[str, Decimal]:
         """Total shares claimed per ticker across ALL sleeves."""
@@ -78,7 +88,11 @@ class Ledger:
         return out
 
     def has_entries(self) -> bool:
-        return any(any(q > 0 for q in book.values()) for book in self.sleeves.values()) or bool(self.pending)
+        return (
+            any(any(q > 0 for q in book.values()) for book in self.sleeves.values())
+            or bool(self.pending)
+            or bool(self.cash)
+        )
 
 
 def _path(broker: str, account: str) -> Path:
@@ -103,7 +117,11 @@ def load(broker: str, account: str) -> Ledger:
         }
     except (InvalidOperation, AttributeError) as e:
         raise SleeveError(f"sleeve ledger {p} has a corrupt quantity ({e}) — restore {p}.bak") from e
-    return Ledger(broker=broker, account=account, sleeves=sleeves, pending=list(data.get("pending") or []))
+    try:
+        cash = {name: Decimal(v) for name, v in (data.get("cash") or {}).items()}
+    except InvalidOperation as e:
+        raise SleeveError(f"sleeve ledger {p} has a corrupt cash value ({e}) — restore {p}.bak") from e
+    return Ledger(broker=broker, account=account, sleeves=sleeves, cash=cash, pending=list(data.get("pending") or []))
 
 
 def save(ledger: Ledger) -> Path:
@@ -119,6 +137,7 @@ def save(ledger: Ledger) -> Path:
             name: {tkr: str(qty) for tkr, qty in sorted(book.items()) if qty > 0}
             for name, book in sorted(ledger.sleeves.items())
         },
+        "cash": {name: str(v) for name, v in sorted(ledger.cash.items())},
         "pending": ledger.pending,
     }
     tmp = p.with_suffix(".json.tmp")
@@ -182,9 +201,20 @@ def apply_fill(ledger: Ledger, sleeve: str, ticker: str, side: str, qty: Decimal
         book[tkr] = max(Decimal(0), cur - qty)
 
 
-def record_order(ledger: Ledger, sleeve: str, *, order_id: str, ticker: str, side: str, requested: Decimal) -> None:
+def record_order(
+    ledger: Ledger,
+    sleeve: str,
+    *,
+    order_id: str,
+    ticker: str,
+    side: str,
+    requested: Decimal,
+    est_price: Decimal | None = None,
+) -> None:
     """Register a just-placed order as pending. Fills are applied only by
-    settle_pending — never here (intent is not a fill)."""
+    settle_pending — never here (intent is not a fill). est_price is the
+    cash-accounting fallback for brokers whose order_status carries no
+    filled_avg_price."""
     ledger.pending.append(
         {
             "order_id": str(order_id),
@@ -193,6 +223,8 @@ def record_order(ledger: Ledger, sleeve: str, *, order_id: str, ticker: str, sid
             "side": side.upper(),
             "requested": str(requested),
             "recorded_fill": "0",
+            "recorded_cost": "0",
+            "est_price": str(est_price) if est_price else None,
         }
     )
 
@@ -224,6 +256,24 @@ def settle_pending(ledger: Ledger, broker) -> list[str]:
         if delta > 0:
             apply_fill(ledger, entry["sleeve"], entry["ticker"], entry["side"], delta)
             entry["recorded_fill"] = str(filled)
+            # Cash-tracked sleeve: move the fill's dollars between cash and
+            # holdings. Cost is cursor-based like the fill itself — the
+            # broker's filled_avg_price is a CUMULATIVE average, so
+            # (filled * avg) - recorded_cost is exact across partial fills at
+            # different prices; est_price is the fallback for adapters whose
+            # order_status has no average (e.g. hyperliquid).
+            if ledger.cash_tracked(entry["sleeve"]):
+                avg = st.get("filled_avg_price")
+                px = Decimal(str(avg)) if avg else (Decimal(entry["est_price"]) if entry.get("est_price") else None)
+                if px is not None and px > 0:
+                    total_cost = filled * px
+                    delta_cost = total_cost - Decimal(entry.get("recorded_cost", "0"))
+                    entry["recorded_cost"] = str(total_cost)
+                    sl = entry["sleeve"]
+                    if entry["side"] == "BUY":
+                        ledger.cash[sl] = ledger.cash[sl] - delta_cost
+                    else:
+                        ledger.cash[sl] = ledger.cash[sl] + delta_cost
             notes.append(f"{entry['sleeve']}: {entry['ticker']} {entry['side']} settled {delta} (order {status})")
         if status not in _TERMINAL:
             still.append(entry)
@@ -297,3 +347,49 @@ def adjust(ledger: Ledger, sleeve: str, ticker: str, qty: Decimal) -> None:
     if qty < 0:
         raise SleeveError("tally cannot be negative")
     ledger.sleeves.setdefault(sleeve, {})[ticker.upper()] = qty
+
+
+def invest(ledger: Ledger, sleeve: str, amount: Decimal) -> Decimal:
+    """Add virtual capital to a sleeve (and switch it to cash-tracked sizing).
+
+    Bookkeeping only — no money moves; the dollars already live in the one
+    brokerage account. From the first invest on, the sleeve's sizing base is
+    its OWN NAV (cash + holdings): gains compound inside the sleeve and losses
+    are its own to dig out of — the account's other money is never pulled in
+    unless the operator invests more. Returns the new cash balance."""
+    if amount <= 0:
+        raise SleeveError("invest amount must be positive")
+    ledger.cash[sleeve] = ledger.cash.get(sleeve, Decimal(0)) + amount
+    return ledger.cash[sleeve]
+
+
+def divest(ledger: Ledger, sleeve: str, amount: Decimal) -> Decimal:
+    """Withdraw virtual capital from a sleeve's CASH (never its holdings).
+
+    Refuses to take more than the sleeve's cash on hand — to free up more,
+    lower the sleeve's weights (or zero them) and run it once so it sells its
+    own shares first. Returns the new cash balance."""
+    cur = ledger.cash.get(sleeve)
+    if cur is None:
+        raise SleeveError(f"sleeve {sleeve!r} does not track cash — nothing to divest")
+    if amount <= 0 or amount > cur:
+        raise SleeveError(
+            f"cannot divest {amount}: sleeve {sleeve!r} has {cur} cash "
+            f"(sell holdings first by lowering its weights, then divest)"
+        )
+    ledger.cash[sleeve] = cur - amount
+    return ledger.cash[sleeve]
+
+
+def sleeve_nav(ledger: Ledger, sleeve: str, positions: dict[str, Position], quotes: dict[str, Decimal]) -> Decimal:
+    """The sleeve's own NAV: its cash plus its holdings at live quotes (the
+    account-position price is the fallback, mirroring diff's `_mv`). This is
+    the sizing base for a cash-tracked sleeve — the number that lets it
+    compound gains and forces it to absorb losses."""
+    nav = ledger.cash.get(sleeve, Decimal(0))
+    for tkr, pos in sleeve_view(ledger, sleeve, positions).items():
+        px = quotes.get(tkr)
+        if px is None or px <= 0:
+            px = pos.price
+        nav += pos.quantity * px
+    return nav

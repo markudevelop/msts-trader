@@ -646,3 +646,165 @@ def test_self_heal_records_healed_fills_into_the_ledger(monkeypatch):
     assert res.ok is True
     assert led.tally("momo", "SPY") == Decimal("7")
     assert sleeves.load("paper", "PAPER").tally("momo", "SPY") == Decimal("7")
+
+
+# ------------------------------------------------------------ sleeve cash ---
+
+
+def test_invest_divest_bounds():
+    led = _ledger()
+    assert sleeves.invest(led, "momo", Decimal("20000")) == Decimal("20000")
+    assert led.cash_tracked("momo")
+    assert sleeves.divest(led, "momo", Decimal("5000")) == Decimal("15000")
+    with pytest.raises(sleeves.SleeveError, match="sell holdings first"):
+        sleeves.divest(led, "momo", Decimal("15001"))
+    with pytest.raises(sleeves.SleeveError, match="does not track cash"):
+        sleeves.divest(led, "other", Decimal("1"))
+    with pytest.raises(sleeves.SleeveError):
+        sleeves.invest(led, "momo", Decimal("0"))
+
+
+def test_v1_ledger_without_cash_key_loads_as_untracked(ledger_dir):
+    """A 0.28.0 ledger file has no "cash" key — it must load fine and keep
+    static --allocation sizing (cash_tracked False)."""
+    ledger_dir.mkdir(parents=True)
+    (ledger_dir / "paper_PAPER.json").write_text(
+        '{"version": 1, "broker": "paper", "account": "PAPER", "sleeves": {"momo": {"SPY": "40"}}, "pending": []}',
+        encoding="utf-8",
+    )
+    led = sleeves.load("paper", "PAPER")
+    assert led.tally("momo", "SPY") == Decimal("40")
+    assert not led.cash_tracked("momo")
+
+
+def test_cash_round_trips_through_save_and_load():
+    led = _ledger()
+    sleeves.invest(led, "momo", Decimal("12345.67"))
+    sleeves.save(led)
+    assert sleeves.load("paper", "PAPER").cash["momo"] == Decimal("12345.67")
+
+
+def test_settlement_moves_cash_exactly_across_partial_fills():
+    """The cost cursor: filled_avg_price is a CUMULATIVE average, so applying
+    (filled * avg) - recorded_cost is exact even when later fills come at a
+    different price. 4 @ 100 then 6 more @ avg 110 -> total cost 1100."""
+    led = _ledger()
+    sleeves.invest(led, "momo", Decimal("2000"))
+    sleeves.record_order(
+        led, "momo", order_id="o1", ticker="SPY", side="BUY", requested=Decimal("10"), est_price=Decimal("105")
+    )
+
+    class _B(_FakeBroker):
+        def order_status(self, oid):
+            st = self.statuses[oid]
+            return {"status": st[0], "filled_qty": st[1], "filled_avg_price": st[2]}
+
+    b = _B({"o1": ("working", 4.0, 100.0)})
+    sleeves.settle_pending(led, b)
+    assert led.cash["momo"] == Decimal("1600")  # 2000 - 4*100
+
+    b.statuses["o1"] = ("filled", 10.0, 110.0)  # cumulative avg moved
+    sleeves.settle_pending(led, b)
+    assert led.tally("momo", "SPY") == Decimal("10")
+    assert led.cash["momo"] == Decimal("900")  # 2000 - 10*110 exactly
+
+
+def test_settlement_sell_adds_cash_and_est_price_is_the_fallback():
+    led = _ledger()
+    led.cash["momo"] = Decimal("0")  # cash-tracked, fully deployed
+    sleeves.apply_fill(led, "momo", "SPY", "BUY", Decimal("10"))
+    # Broker reports no filled_avg_price (e.g. hyperliquid) -> est_price used.
+    sleeves.record_order(
+        led, "momo", order_id="s1", ticker="SPY", side="SELL", requested=Decimal("10"), est_price=Decimal("250")
+    )
+    sleeves.settle_pending(led, _FakeBroker({"s1": ("filled", 10.0)}))
+    assert led.tally("momo", "SPY") == Decimal("0")
+    assert led.cash["momo"] == Decimal("2500")
+
+
+def test_untracked_sleeve_settlement_leaves_cash_alone():
+    led = _ledger()
+    sleeves.record_order(
+        led, "momo", order_id="o1", ticker="SPY", side="BUY", requested=Decimal("10"), est_price=Decimal("100")
+    )
+    sleeves.settle_pending(led, _FakeBroker({"o1": ("filled", 10.0)}))
+    assert led.tally("momo", "SPY") == Decimal("10")
+    assert led.cash == {}  # no cash entry fabricated
+
+
+def test_cash_sleeve_compounds_gains_and_absorbs_losses(paper_env, tmp_path):
+    """DeltaSurfer's scenario, fixed. Static --allocation trimmed a doubled
+    position back to $20k and bought a halved one back up with ACCOUNT money.
+    A cash-tracked sleeve sizes against its own NAV: gains compound untouched,
+    losses are its own, and rotation proceeds stay inside the sleeve."""
+    runner, tp = paper_env
+    from msts_trader.brokers.paper import Paper
+
+    p = Paper(starting_cash="100000")
+    csv = _csv(tp, "t.csv", "ticker,weight\nSPY,1.0\n")
+    assert runner.invoke(main, ["sleeve", "invest", "m", "20000", "--broker", "paper"]).exit_code == 0
+    args = ["--broker", "paper", "rebalance", "--sleeve", "m", "--csv-file", csv, "--yes", "--no-verify", "--force"]
+
+    r = runner.invoke(main, args)
+    assert r.exit_code == 0, r.output
+    led = sleeves.load("paper", "PAPER")
+    assert led.tally("m", "SPY") == Decimal("40") and led.cash["m"] == Decimal("0.00")
+
+    p.set_quote("SPY", Decimal("1000"))  # doubles -> old behavior sold 20
+    r = runner.invoke(main, args)
+    assert r.exit_code == 0 and "othing to do" in r.output, r.output
+    assert sleeves.load("paper", "PAPER").tally("m", "SPY") == Decimal("40")
+
+    p.set_quote("SPY", Decimal("250"))  # halves -> old behavior bought 40 more with account money
+    r = runner.invoke(main, args)
+    assert r.exit_code == 0 and "othing to do" in r.output, r.output
+    assert sleeves.load("paper", "PAPER").tally("m", "SPY") == Decimal("40")
+
+    # Rotation at the drawdown price: proceeds (40*250 = $10k) become sleeve
+    # cash and SHV is sized off the sleeve's own shrunken NAV — not $20k.
+    csv2 = _csv(tp, "t2.csv", "ticker,weight\nSHV,1.0\n")
+    r = runner.invoke(
+        main,
+        ["--broker", "paper", "rebalance", "--sleeve", "m", "--csv-file", csv2, "--yes", "--no-verify", "--force"],
+    )
+    assert r.exit_code == 0, r.output
+    led = sleeves.load("paper", "PAPER")
+    assert led.tally("m", "SPY") == Decimal("0")
+    assert led.tally("m", "SHV") == Decimal("90.9")  # floor(10000/110, 0.01)
+    assert led.cash["m"] == Decimal("1.00")  # round-down residue stays the sleeve's
+
+
+def test_allocation_refused_on_cash_tracked_sleeve(paper_env, tmp_path):
+    runner, tp = paper_env
+    csv = _csv(tp, "t.csv", "ticker,weight\nSPY,1.0\n")
+    assert runner.invoke(main, ["sleeve", "invest", "m", "20000", "--broker", "paper"]).exit_code == 0
+    r = runner.invoke(
+        main,
+        ["--broker", "paper", "rebalance", "--sleeve", "m", "--allocation", "20000", "--csv-file", csv, "--dry-run"],
+    )
+    assert r.exit_code != 0
+    assert "tracks its own cash" in r.output
+
+
+def test_legacy_allocation_sleeve_still_works_but_warns(paper_env, tmp_path):
+    runner, tp = paper_env
+    csv = _csv(tp, "t.csv", "ticker,weight\nSPY,1.0\n")
+    r = runner.invoke(
+        main,
+        [
+            "--broker",
+            "paper",
+            "rebalance",
+            "--sleeve",
+            "m",
+            "--allocation",
+            "20000",
+            "--csv-file",
+            csv,
+            "--yes",
+            "--no-verify",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert "STATIC" in r.output and "sleeve invest" in r.output
+    assert sleeves.load("paper", "PAPER").tally("m", "SPY") == Decimal("40")
