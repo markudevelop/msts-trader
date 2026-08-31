@@ -251,9 +251,22 @@ same selector works on `rebalance` / `liquidate` / `doctor`, config
 msts-trader login --broker paper
 ```
 
-No real money, no broker connection. The book persists in
+No real money, no broker connection required. The book persists in
 `~/.msts-trader/paper_state.json` between sessions. Reset any time with
 `msts-trader paper-reset`.
+
+**Real quotes for paper (optional):** install the yfinance extra and the
+paper broker fetches live prices for any ticker it has no stored quote for —
+so a paper book (or a paper sleeve experiment) runs against real market
+prices with zero setup:
+
+```bash
+pip install "msts-trader[yfinance]"
+```
+
+Explicitly seeded/booked prices always win, fetched prices are cached in the
+paper state, and `MSTS_PAPER_YF=0` forces the old offline behavior. Without
+the extra installed nothing changes — unquoted tickers are simply skipped.
 
 The first `login` you complete becomes the default broker. Override per
 command with `--broker NAME`, or change the default by logging in again.

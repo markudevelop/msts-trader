@@ -10,6 +10,17 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Live quotes for the paper broker via yfinance**
+  (`pip install "msts-trader[yfinance]"`, also in `[all]`). `quote()` now
+  fills any ticker without a stored price from yfinance when the extra is
+  installed, so a paper book runs against real market prices with zero
+  setup. Seeded/booked prices always win (tests stay deterministic), fetched
+  prices are cached into the paper state and quantized to 4dp,
+  per-ticker failures quietly skip that ticker, and `MSTS_PAPER_YF=0`
+  forces the offline behavior (the test suite pins this). Suggested by the
+  same GitHub user who prompted sleeve cash tracking.
+
 ## [0.29.0] — 2026-08-30
 
 ### Added

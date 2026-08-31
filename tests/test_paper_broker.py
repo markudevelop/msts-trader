@@ -151,3 +151,67 @@ def test_lowercase_order_ticker_is_normalized():
     assert set(pos) == {"SPY"}
     assert pos["SPY"].price == Decimal("500")
     assert p.balances().nav == Decimal("50000")
+
+
+# ------------------------------------------------------- yfinance fallback ---
+# The suite-wide conftest fixture sets MSTS_PAPER_YF=0 so nothing here (or
+# anywhere else) ever touches the network; these tests re-enable the fallback
+# against a FAKED yfinance module.
+
+
+class _FakeFastInfo:
+    def __init__(self, px):
+        self.last_price = px
+
+
+class _FakeTicker:
+    def __init__(self, symbol):
+        prices = {"SPY": 512.34, "BAD": None}
+        self._px = prices.get(symbol, 0)
+
+    @property
+    def fast_info(self):
+        if self._px is None:
+            raise RuntimeError("no data")
+        return _FakeFastInfo(self._px)
+
+
+def _install_fake_yf(monkeypatch):
+    import sys
+    import types
+
+    mod = types.ModuleType("yfinance")
+    mod.Ticker = _FakeTicker
+    monkeypatch.setitem(sys.modules, "yfinance", mod)
+
+
+def test_quote_falls_back_to_yfinance_for_unseeded_tickers(monkeypatch, isolate_paper_state):
+    monkeypatch.setenv("MSTS_PAPER_YF", "1")
+    _install_fake_yf(monkeypatch)
+    p = Paper(starting_cash="50000")
+    p.set_quote("SHV", Decimal("110"))  # seeded price must WIN over the fetcher
+
+    q = p.quote(["SHV", "SPY", "BAD", "ZERO"])
+
+    assert q["SHV"] == Decimal("110")  # stored, not fetched
+    assert q["SPY"] == Decimal("512.34")  # fetched from (fake) yfinance
+    assert "BAD" not in q and "ZERO" not in q  # errors/zero -> quietly missing
+    # Fetched price persisted -> anchors the next fill without a refetch.
+    q2 = Paper(starting_cash="50000").quote(["SPY"])
+    assert q2["SPY"] == Decimal("512.34")
+
+
+def test_yfinance_fallback_disabled_by_env(monkeypatch, isolate_paper_state):
+    monkeypatch.setenv("MSTS_PAPER_YF", "0")
+    _install_fake_yf(monkeypatch)
+    p = Paper(starting_cash="50000")
+    assert p.quote(["SPY"]) == {}
+
+
+def test_missing_yfinance_module_is_quietly_offline(monkeypatch, isolate_paper_state):
+    import sys
+
+    monkeypatch.setenv("MSTS_PAPER_YF", "1")
+    monkeypatch.setitem(sys.modules, "yfinance", None)  # import -> ModuleNotFoundError
+    p = Paper(starting_cash="50000")
+    assert p.quote(["SPY"]) == {}

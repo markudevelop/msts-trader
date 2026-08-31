@@ -20,6 +20,34 @@ STATE_PATH = Path(os.path.expanduser("~/.msts-trader/paper_state.json"))
 STARTING_CASH = Decimal("100000")
 
 
+def _yfinance_quotes(tickers: list[str]) -> dict[str, Decimal]:
+    """Best-effort live quotes via yfinance (the `msts-trader[yfinance]` extra).
+
+    Missing dependency, network failure, or an unknown symbol quietly yields
+    nothing for that ticker — the caller already treats a missing quote as
+    "skip the order", which is the right paper-trading failure mode.
+    Per-ticker isolation: one bad symbol must not sink the batch.
+    """
+    try:
+        import yfinance as yf
+    except ModuleNotFoundError:
+        return {}
+    out: dict[str, Decimal] = {}
+    for t in tickers:
+        try:
+            fi = yf.Ticker(t).fast_info
+            px = getattr(fi, "last_price", None)
+            if px is None and hasattr(fi, "get"):
+                px = fi.get("lastPrice")
+            if px is not None and float(px) > 0:
+                # Trim float noise (769.3499755859375 -> 769.35); 4dp keeps
+                # sub-cent quotes (low-priced/crypto symbols) meaningful.
+                out[t] = Decimal(str(px)).quantize(Decimal("0.0001")).normalize()
+        except Exception:
+            continue
+    return out
+
+
 class Paper:
     name = "paper"
     supports_fractional = True
@@ -77,19 +105,34 @@ class Paper:
         return out
 
     def quote(self, tickers: Iterable[str]) -> dict[str, Decimal]:
-        """Paper broker cannot quote — caller must pre-seed via place_market notional.
+        """Stored last_prices first; live yfinance quotes fill the gaps.
 
-        Returns whatever we last booked as last_price. Real flows seed quotes
-        from the CSV path before calling diff; for paper testing, the CLI hands
-        last_prices from a separate fetch (or the user supplies via env).
+        Booked/seeded prices always win (deterministic tests, explicit
+        set_quote). Tickers with no stored price are fetched via yfinance when
+        it is installed (`pip install "msts-trader[yfinance]"`) so a paper
+        book can be driven with real market prices out of the box. Fetched
+        prices are persisted to last_prices, they anchor the fill on the next
+        order. Set MSTS_PAPER_YF=0 to force the offline behavior.
         """
         s = self._load()
         last = s.get("last_prices", {})
         out: dict[str, Decimal] = {}
-        for t in {x.upper() for x in tickers}:
+        wanted = {x.upper() for x in tickers}
+        for t in wanted:
             v = last.get(t)
             if v:
                 out[t] = Decimal(v)
+        missing = sorted(wanted - set(out))
+        if missing and os.environ.get("MSTS_PAPER_YF") != "0":
+            fetched = _yfinance_quotes(missing)
+            if fetched:
+                s = self._load()
+                lp = dict(s.get("last_prices", {}))
+                for t, px in fetched.items():
+                    lp[t] = str(px)
+                s["last_prices"] = lp
+                self._save(s)
+                out.update(fetched)
         return out
 
     def set_quote(self, ticker: str, price: Decimal) -> None:

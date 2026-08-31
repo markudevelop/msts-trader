@@ -34,6 +34,14 @@ def isolate_fill_log(monkeypatch, tmp_path):
     monkeypatch.setattr(fill_log, "LOG_DIR", tmp_path / "fills")
 
 
+@pytest.fixture(autouse=True)
+def no_network_paper_quotes(monkeypatch):
+    """Kill the paper broker's yfinance fallback for the whole suite — tests
+    must stay hermetic even on a dev machine where yfinance is installed. The
+    yfinance-specific tests re-enable it against a faked module."""
+    monkeypatch.setenv("MSTS_PAPER_YF", "0")
+
+
 @pytest.fixture
 def basic_targets() -> list[Target]:
     return [
