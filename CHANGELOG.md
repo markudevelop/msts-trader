@@ -10,6 +10,8 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.29.0] — 2026-08-30
+
 ### Added
 - **Sleeves now manage their own cash** (`sleeve invest NAME AMOUNT` /
   `sleeve divest NAME AMOUNT`). Investing gives a sleeve virtual capital (no
@@ -1313,7 +1315,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/markudevelop/msts-trader/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/markudevelop/msts-trader/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/markudevelop/msts-trader/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/markudevelop/msts-trader/compare/v0.25.4...v0.26.0
