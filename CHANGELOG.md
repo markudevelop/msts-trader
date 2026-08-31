@@ -10,6 +10,8 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-08-31
+
 ### Added
 - **Flexible sleeve sizing** — `sleeve base NAME own-nav|X%|$X` picks what a
   sleeve's weights apply to: its own compounding NAV (default), a fraction
@@ -1342,7 +1344,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/markudevelop/msts-trader/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/markudevelop/msts-trader/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/markudevelop/msts-trader/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/markudevelop/msts-trader/compare/v0.27.0...v0.28.0
