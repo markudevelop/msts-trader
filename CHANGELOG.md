@@ -10,6 +10,20 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Flexible sleeve sizing** — `sleeve base NAME own-nav|X%|$X` picks what a
+  sleeve's weights apply to: its own compounding NAV (default), a fraction
+  of ACCOUNT NAV (floats with the account; needs no invest), or a static
+  dollar figure (the old --allocation semantics made explicit and
+  persistent). `sleeve cap NAME $X|X%|off` bounds any base from above —
+  allocate an amount to a strategy as a MAXIMUM, gains beyond it parking in
+  the sleeve's cash. Policies live in the ledger; a configured sleeve
+  refuses a per-run --allocation; verify/self-heal recompute the same base.
+- **Cash over-claim warning** — when the sleeves' combined virtual cash
+  exceeds the account's real cash, the run warns (margin accounts: that
+  excess is the cross-margin borrow; cash accounts would reject the buys).
+  The share side keeps its hard refuse-gate; cash is a warning by design.
+
 ## [0.30.0] — 2026-08-31
 
 ### Added

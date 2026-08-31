@@ -783,7 +783,7 @@ def test_allocation_refused_on_cash_tracked_sleeve(paper_env, tmp_path):
         ["--broker", "paper", "rebalance", "--sleeve", "m", "--allocation", "20000", "--csv-file", csv, "--dry-run"],
     )
     assert r.exit_code != 0
-    assert "tracks its own cash" in r.output
+    assert "has its own sizing" in r.output
 
 
 def test_legacy_allocation_sleeve_still_works_but_warns(paper_env, tmp_path):
@@ -808,3 +808,127 @@ def test_legacy_allocation_sleeve_still_works_but_warns(paper_env, tmp_path):
     assert r.exit_code == 0, r.output
     assert "STATIC" in r.output and "sleeve invest" in r.output
     assert sleeves.load("paper", "PAPER").tally("m", "SPY") == Decimal("40")
+
+
+# ------------------------------------------------- sizing policy + cash check ---
+
+
+def test_parse_amount_forms():
+    assert sleeves.parse_amount("20%") == ("pct-nav", Decimal("0.20"))
+    assert sleeves.parse_amount("$50,000") == ("fixed", Decimal("50000"))
+    assert sleeves.parse_amount("50000") == ("fixed", Decimal("50000"))
+    for bad in ("0%", "101%", "-5", "lots"):
+        with pytest.raises(sleeves.SleeveError):
+            sleeves.parse_amount(bad)
+
+
+def test_sizing_base_modes_and_cap():
+    led = _ledger()
+    pos = {"SPY": Position("SPY", Decimal("40"), Decimal("500"))}
+    quotes = {"SPY": Decimal("500")}
+    nav = Decimal("100000")
+
+    # unconfigured -> None (legacy --allocation fallback)
+    assert sleeves.sizing_base(led, "x", account_nav=nav, positions=pos, quotes=quotes) is None
+
+    # own-nav: cash + holdings
+    sleeves.invest(led, "own", Decimal("5000"))
+    sleeves.apply_fill(led, "own", "SPY", "BUY", Decimal("40"))
+    base, _ = sleeves.sizing_base(led, "own", account_nav=nav, positions=pos, quotes=quotes)
+    assert base == Decimal("25000")  # 5000 + 40*500
+
+    # pct-nav: floats with the account, ignores the sleeve's own P&L
+    sleeves.set_base(led, "pct", "20%")
+    base, desc = sleeves.sizing_base(led, "pct", account_nav=nav, positions=pos, quotes=quotes)
+    assert base == Decimal("20000") and "20" in desc
+
+    # fixed
+    sleeves.set_base(led, "fix", "$7500")
+    base, _ = sleeves.sizing_base(led, "fix", account_nav=nav, positions=pos, quotes=quotes)
+    assert base == Decimal("7500")
+
+    # cap trims own-nav from above; % cap resolves against account NAV
+    sleeves.set_cap(led, "own", "15000")
+    base, desc = sleeves.sizing_base(led, "own", account_nav=nav, positions=pos, quotes=quotes)
+    assert base == Decimal("15000") and "capped" in desc
+    sleeves.set_cap(led, "own", "10%")
+    base, _ = sleeves.sizing_base(led, "own", account_nav=nav, positions=pos, quotes=quotes)
+    assert base == Decimal("10000")
+    sleeves.set_cap(led, "own", "off")
+    base, _ = sleeves.sizing_base(led, "own", account_nav=nav, positions=pos, quotes=quotes)
+    assert base == Decimal("25000")
+
+    # base back to own-nav clears the policy entry entirely
+    sleeves.set_base(led, "pct", "own-nav")
+    assert "pct" not in led.policy
+
+
+def test_policy_round_trips_through_save_and_load():
+    led = _ledger()
+    sleeves.set_base(led, "pct", "25%")
+    sleeves.set_cap(led, "pct", "$9000")
+    sleeves.save(led)
+    back = sleeves.load("paper", "PAPER")
+    assert back.policy["pct"]["base"] == {"mode": "pct-nav", "value": "0.25"}
+    assert back.policy["pct"]["cap"] == {"mode": "fixed", "value": "9000"}
+    assert back.configured("pct") and not back.cash_tracked("pct")
+
+
+def test_cash_overclaim():
+    led = _ledger()
+    sleeves.invest(led, "a", Decimal("30000"))
+    sleeves.invest(led, "b", Decimal("30000"))
+    assert sleeves.cash_overclaim(led, Decimal("100000")) == Decimal(0)  # fully backed
+    assert sleeves.cash_overclaim(led, Decimal("45000")) == Decimal("15000")
+
+
+def test_pct_nav_sleeve_sizes_off_account_nav(paper_env, tmp_path):
+    """A policy-only sleeve (no invest needed): 20% of a $100k account at
+    $500/share = 40 shares. Shares are still fenced by the tally."""
+    runner, tp = paper_env
+    csv = _csv(tp, "t.csv", "ticker,weight\nSPY,1.0\n")
+    assert runner.invoke(main, ["sleeve", "base", "pct", "20%", "--broker", "paper"]).exit_code == 0
+    r = runner.invoke(
+        main,
+        ["--broker", "paper", "rebalance", "--sleeve", "pct", "--csv-file", csv, "--yes", "--no-verify", "--force"],
+    )
+    assert r.exit_code == 0, r.output
+    assert "20.0% of account NAV" in r.output
+    assert sleeves.load("paper", "PAPER").tally("pct", "SPY") == Decimal("40")
+
+
+def test_cap_bounds_an_invested_sleeve(paper_env, tmp_path):
+    """invest 20k but cap 15k: only $15k deploys, the rest stays in cash —
+    'allocate amount to strategy as max'."""
+    runner, tp = paper_env
+    csv = _csv(tp, "t.csv", "ticker,weight\nSPY,1.0\n")
+    assert runner.invoke(main, ["sleeve", "invest", "cappy", "20000", "--broker", "paper"]).exit_code == 0
+    assert runner.invoke(main, ["sleeve", "cap", "cappy", "15000", "--broker", "paper"]).exit_code == 0
+    r = runner.invoke(
+        main,
+        ["--broker", "paper", "rebalance", "--sleeve", "cappy", "--csv-file", csv, "--yes", "--no-verify", "--force"],
+    )
+    assert r.exit_code == 0, r.output
+    led = sleeves.load("paper", "PAPER")
+    assert led.tally("cappy", "SPY") == Decimal("30")  # 15000/500
+    assert led.cash["cappy"] == Decimal("5000")
+
+
+def test_cash_overclaim_warns_on_rebalance(paper_env, tmp_path):
+    runner, tp = paper_env
+    csv = _csv(tp, "t.csv", "ticker,weight\nSPY,1.0\n")
+    assert runner.invoke(main, ["sleeve", "invest", "whale", "500000", "--broker", "paper"]).exit_code == 0
+    r = runner.invoke(main, ["--broker", "paper", "rebalance", "--sleeve", "whale", "--csv-file", csv, "--dry-run"])
+    assert r.exit_code == 0, r.output  # warning, not a blocker (margin is legitimate)
+    assert "exceeds the account's real cash" in r.output
+
+
+def test_allocation_refused_on_policy_only_sleeve(paper_env, tmp_path):
+    runner, tp = paper_env
+    csv = _csv(tp, "t.csv", "ticker,weight\nSPY,1.0\n")
+    assert runner.invoke(main, ["sleeve", "base", "pct", "20%", "--broker", "paper"]).exit_code == 0
+    r = runner.invoke(
+        main,
+        ["--broker", "paper", "rebalance", "--sleeve", "pct", "--allocation", "9999", "--csv-file", csv, "--dry-run"],
+    )
+    assert r.exit_code != 0 and "has its own sizing" in r.output

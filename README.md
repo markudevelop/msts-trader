@@ -650,12 +650,27 @@ msts-trader sleeve invest carry 30000
 msts-trader rebalance --sleeve momo  --csv-file momo.csv  --yes
 msts-trader rebalance --sleeve carry --csv-file carry.csv --yes
 
-msts-trader sleeve list                  # every sleeve, tallies, cash, pending
+msts-trader sleeve list                  # every sleeve, tallies, cash, policy
 msts-trader sleeve invest momo 25000     # scale the winner up (its only new money)
 msts-trader sleeve divest momo 10000     # take capital back out of its cash
+msts-trader sleeve base momo 20%         # or: size off 20% of ACCOUNT NAV
+msts-trader sleeve cap momo $50000       # ceiling — never deploy more than this
 msts-trader sleeve adopt momo SPY 100    # assign already-held shares
 msts-trader sleeve reconcile             # tallies + cash vs account, per ticker
 ```
+
+**Sizing bases** (`sleeve base NAME ...`): the default is `own-nav` — the
+compounding book described above. `20%` sizes off account NAV instead (the
+sleeve's capital floats with the whole account — an explicit opt-in, no
+`invest` needed), and `$50000` is a static figure (the old `--allocation`
+semantics, persistent and explicit: gains above it are trimmed, drawdowns
+topped up from the account — use it only when you want exactly that).
+`sleeve cap NAME $X|X%|off` bounds any base from above — "give the strategy
+at most this much", with gains beyond the cap parking in the sleeve's cash.
+A configured sleeve refuses a per-run `--allocation`. Manage by shares via
+`sleeve adopt`/`release`. If the sleeves' combined virtual cash ever exceeds
+the account's real cash, the run warns (in a margin account the excess is
+just the cross-margin borrow; a cash account would reject those buys).
 
 **A sleeve manages its own money.** `sleeve invest` sets its virtual cash (no
 real money moves — everything stays in the one cross-margined account), and

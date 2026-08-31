@@ -1547,22 +1547,20 @@ def rebalance(
     # drawdown back up with the ACCOUNT's money, which is exactly what a
     # fenced sub-book must not do.
     sizing_allocation = Decimal(str(allocation)) if allocation is not None else None
-    if sleeve_name and ledger.cash_tracked(sleeve_name):
+    if sleeve_name and ledger.configured(sleeve_name):
         if allocation is not None:
             _fail(
-                f"sleeve '{sleeve_name}' tracks its own cash — drop --allocation (its sizing base is its own "
-                f"NAV; change its capital with `msts-trader sleeve invest/divest`)."
+                f"sleeve '{sleeve_name}' has its own sizing (cash and/or a policy) — drop --allocation and "
+                f"manage its capital with `msts-trader sleeve invest/divest/base/cap`."
             )
-        sizing_allocation = sleeves.sleeve_nav(ledger, sleeve_name, pos, quotes)
+        sized = sleeves.sizing_base(ledger, sleeve_name, account_nav=bal.nav, positions=pos, quotes=quotes)
+        sizing_allocation, base_desc = sized
         if sizing_allocation <= 0:
             _fail(
-                f"sleeve '{sleeve_name}' has no capital (NAV ${sizing_allocation:,.2f}) — "
+                f"sleeve '{sleeve_name}' has no capital (base ${sizing_allocation:,.2f}) — "
                 f"add some with `msts-trader sleeve invest {sleeve_name} AMOUNT`."
             )
-        say(
-            f"[dim]sleeve '{sleeve_name}' NAV ${sizing_allocation:,.2f} "
-            f"(cash ${ledger.cash[sleeve_name]:,.2f} + holdings) — sizing against it[/dim]"
-        )
+        say(f"[dim]sleeve '{sleeve_name}' sizing base: {base_desc}[/dim]")
 
     preview = build_preview(
         targets=targets,
@@ -1608,7 +1606,15 @@ def rebalance(
                 f"sleeve ledger claims more shares than the account holds ({details}) — shares were sold or "
                 f"moved outside msts-trader. Fix the tally with `msts-trader sleeve reconcile` / `sleeve adjust`."
             )
-        if not ledger.cash_tracked(sleeve_name):
+        if ledger.cash_tracked(sleeve_name):
+            over = sleeves.cash_overclaim(ledger, bal.cash)
+            if over > 0:
+                preview.warnings.append(
+                    f"sleeves' combined virtual cash exceeds the account's real cash by ${over:,.2f} — "
+                    f"in a margin account that excess is a cross-margin borrow; a cash account will start "
+                    f"rejecting those buys. `sleeve divest` (or add funds) to re-balance the claims."
+                )
+        if not ledger.configured(sleeve_name):
             if allocation is None:
                 preview.warnings.append(
                     f"sleeve '{sleeve_name}' has no capital base — weights size against FULL account NAV. "
@@ -2100,10 +2106,12 @@ def _verify_once(
     quotes = retry.with_retry(lambda: b.quote(universe))
     for tk, p in pos.items():
         quotes.setdefault(tk, p.price)
-    if sleeve and ledger is not None and ledger.cash_tracked(sleeve):
-        # Same base the rebalance used, recomputed post-fill: the sleeve's own
-        # NAV (fills moved dollars cash<->holdings, so it is ~unchanged).
-        allocation = sleeves.sleeve_nav(ledger, sleeve, account_pos, quotes)
+    if sleeve and ledger is not None and ledger.configured(sleeve):
+        # Same base the rebalance used, recomputed post-fill (an own-NAV base
+        # is ~unchanged: fills moved dollars cash<->holdings).
+        sized = sleeves.sizing_base(ledger, sleeve, account_nav=bal.nav, positions=account_pos, quotes=quotes)
+        if sized is not None:
+            allocation = sized[0]
     post = build_preview(
         targets=targets,
         positions=pos,
@@ -2780,14 +2788,20 @@ def sleeve_list() -> None:
             continue
         c.print(f"[bold]{data.get('broker', '?')}[/bold] · account {data.get('account', '?')}")
         cash_map = data.get("cash") or {}
-        for name in sorted(set(data.get("sleeves") or {}) | set(cash_map)):
+        for name in sorted(set(data.get("sleeves") or {}) | set(cash_map) | set(data.get("policy") or {})):
             book = (data.get("sleeves") or {}).get(name) or {}
             held = ", ".join(f"{t} {q}" for t, q in sorted(book.items())) or "(no holdings)"
-            cash_note = (
-                f"  ·  cash ${Decimal(cash_map[name]):,.2f}"
-                if name in cash_map
-                else "  ·  (no cash tracked — static --allocation sizing)"
-            )
+            cash_note = f"  ·  cash ${Decimal(cash_map[name]):,.2f}" if name in cash_map else ""
+            pol = (data.get("policy") or {}).get(name) or {}
+            for key, label in (("base", "base"), ("cap", "cap")):
+                if pol.get(key):
+                    m = pol[key]
+                    v = Decimal(m["value"])
+                    cash_note += (
+                        f"  ·  {label} {v * 100}% of NAV" if m["mode"] == "pct-nav" else f"  ·  {label} ${v:,.0f}"
+                    )
+            if not cash_note:
+                cash_note = "  ·  (unconfigured — bootstrap with `sleeve invest`)"
             c.print(f"  {name}: {held}{cash_note}")
         pending = data.get("pending") or []
         if pending:
@@ -2923,6 +2937,57 @@ def sleeve_divest(ctx, name: str, amount: str, broker_opt, creds_file, account_s
             _fail(str(e))
         sleeves.save(ledger)
     say(f"[green]divested {Decimal(amount):,.2f} from '{name}' — sleeve cash now ${new_cash:,.2f}[/green]")
+
+
+@sleeve.command("base")
+@click.argument("name")
+@click.argument("spec")
+@_SLEEVE_BROKER_OPT
+@_SLEEVE_CREDS_OPT
+@_ACCOUNT_OPT
+@click.pass_context
+def sleeve_base(ctx, name: str, spec: str, broker_opt, creds_file, account_sel) -> None:
+    """Set the sleeve's sizing base: `own-nav` (compounding, the default),
+    `20%` of account NAV, or a fixed dollar figure (`$50000`).
+
+    own-nav: the sleeve manages its invested cash + holdings and compounds.
+    20%: the sleeve's capital floats with the whole account — an explicit
+    opt-in to rebalancing capital between the sleeve and everything else.
+    $X: static dollars — gains above X are trimmed and drawdowns topped up
+    from the account, so only use it when that constant-dollar behavior is
+    what you want.
+    """
+    b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+    with sleeves.lock(b.name, b.account_id):
+        ledger = _sleeve_ledger_or_exit(b)
+        try:
+            desc = sleeves.set_base(ledger, name, spec)
+        except sleeves.SleeveError as e:
+            _fail(str(e))
+        sleeves.save(ledger)
+    say(f"[green]'{name}' sizing base: {desc}[/green]")
+
+
+@sleeve.command("cap")
+@click.argument("name")
+@click.argument("spec")
+@_SLEEVE_BROKER_OPT
+@_SLEEVE_CREDS_OPT
+@_ACCOUNT_OPT
+@click.pass_context
+def sleeve_cap(ctx, name: str, spec: str, broker_opt, creds_file, account_sel) -> None:
+    """Cap the sleeve's sizing base from above: `$50000`, `25%` of account
+    NAV, or `off`. A ceiling on how much the sleeve may ever deploy — gains
+    beyond it stay in the sleeve's cash instead of being reinvested."""
+    b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+    with sleeves.lock(b.name, b.account_id):
+        ledger = _sleeve_ledger_or_exit(b)
+        try:
+            desc = sleeves.set_cap(ledger, name, spec)
+        except sleeves.SleeveError as e:
+            _fail(str(e))
+        sleeves.save(ledger)
+    say(f"[green]'{name}': {desc}[/green]")
 
 
 @sleeve.command("adjust")

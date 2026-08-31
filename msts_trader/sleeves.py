@@ -69,6 +69,17 @@ class Ledger:
     # Purely bookkeeping — invest/divest never moves real money; the dollars
     # all live in the one brokerage account (that's the cross-margin point).
     cash: dict[str, Decimal] = field(default_factory=dict)
+    # sleeve name -> sizing policy: {"base": {"mode": ..., "value": ...},
+    # "cap": {"mode": ..., "value": ...} | None}. Modes for base:
+    #   "own-nav" (default): the sleeve's cash + holdings — compounds.
+    #   "pct-nav": a fraction of ACCOUNT NAV — the sleeve's capital floats
+    #       with the whole account (explicit opt back into rebalancing
+    #       capital between the sleeve and everything else).
+    #   "fixed": a static dollar figure (the old --allocation semantics,
+    #       explicit and persistent instead of a per-run flag).
+    # "cap" bounds the computed base from above: dollars or a fraction of
+    # account NAV. Values stored as strings, parsed to Decimal.
+    policy: dict[str, dict] = field(default_factory=dict)
     # in-flight orders awaiting fills: dicts with order_id/sleeve/ticker/side/
     # requested/recorded_fill/recorded_cost/est_price/ts
     pending: list[dict] = field(default_factory=list)
@@ -78,6 +89,11 @@ class Ledger:
 
     def cash_tracked(self, sleeve: str) -> bool:
         return sleeve in self.cash
+
+    def configured(self, sleeve: str) -> bool:
+        """True when the sleeve has its own sizing (cash and/or a policy) —
+        which makes a per-run --allocation both redundant and dangerous."""
+        return sleeve in self.cash or sleeve in self.policy
 
     def claims(self) -> dict[str, Decimal]:
         """Total shares claimed per ticker across ALL sleeves."""
@@ -121,7 +137,14 @@ def load(broker: str, account: str) -> Ledger:
         cash = {name: Decimal(v) for name, v in (data.get("cash") or {}).items()}
     except InvalidOperation as e:
         raise SleeveError(f"sleeve ledger {p} has a corrupt cash value ({e}) — restore {p}.bak") from e
-    return Ledger(broker=broker, account=account, sleeves=sleeves, cash=cash, pending=list(data.get("pending") or []))
+    return Ledger(
+        broker=broker,
+        account=account,
+        sleeves=sleeves,
+        cash=cash,
+        policy=dict(data.get("policy") or {}),
+        pending=list(data.get("pending") or []),
+    )
 
 
 def save(ledger: Ledger) -> Path:
@@ -138,6 +161,7 @@ def save(ledger: Ledger) -> Path:
             for name, book in sorted(ledger.sleeves.items())
         },
         "cash": {name: str(v) for name, v in sorted(ledger.cash.items())},
+        "policy": {name: v for name, v in sorted(ledger.policy.items())},
         "pending": ledger.pending,
     }
     tmp = p.with_suffix(".json.tmp")
@@ -393,3 +417,96 @@ def sleeve_nav(ledger: Ledger, sleeve: str, positions: dict[str, Position], quot
             px = pos.price
         nav += pos.quantity * px
     return nav
+
+
+def parse_amount(text: str) -> tuple[str, Decimal]:
+    """Parse a CLI capital figure: '20%' -> ("pct-nav", 0.20) — a fraction of
+    account NAV — while '$50000' / '50000' -> ("fixed", 50000) dollars."""
+    t = text.strip().replace(",", "").lstrip("$")
+    try:
+        if t.endswith("%"):
+            pct = Decimal(t[:-1]) / 100
+            if not (Decimal(0) < pct <= Decimal(1)):
+                raise SleeveError(f"{text!r}: percent must be in (0, 100]")
+            return "pct-nav", pct
+        val = Decimal(t)
+        if val <= 0:
+            raise SleeveError(f"{text!r}: amount must be positive")
+        return "fixed", val
+    except InvalidOperation as e:
+        raise SleeveError(f"{text!r} is not an amount — use e.g. 50000, $50000 or 20%") from e
+
+
+def set_base(ledger: Ledger, sleeve: str, spec: str) -> str:
+    """Set the sleeve's sizing base: 'own-nav' (compounding, the default),
+    'X%' of account NAV, or a fixed dollar figure. Returns a description."""
+    entry = ledger.policy.setdefault(sleeve, {})
+    if spec.strip().lower() in ("own-nav", "own", "nav"):
+        entry.pop("base", None)  # own-nav IS the default — store nothing
+        if not entry:
+            ledger.policy.pop(sleeve, None)
+        return "own NAV (cash + holdings, compounding)"
+    mode, val = parse_amount(spec)
+    entry["base"] = {"mode": mode, "value": str(val)}
+    return f"{val * 100}% of account NAV" if mode == "pct-nav" else f"fixed ${val:,.2f}"
+
+
+def set_cap(ledger: Ledger, sleeve: str, spec: str) -> str:
+    """Cap the sleeve's sizing base from above ($X or X% of account NAV);
+    'off' removes the cap. Returns a description."""
+    entry = ledger.policy.setdefault(sleeve, {})
+    if spec.strip().lower() in ("off", "none"):
+        entry.pop("cap", None)
+        if not entry:
+            ledger.policy.pop(sleeve, None)
+        return "no cap"
+    mode, val = parse_amount(spec)
+    entry["cap"] = {"mode": mode, "value": str(val)}
+    return f"cap {val * 100}% of account NAV" if mode == "pct-nav" else f"cap ${val:,.2f}"
+
+
+def sizing_base(
+    ledger: Ledger,
+    sleeve: str,
+    *,
+    account_nav: Decimal,
+    positions: dict[str, Position],
+    quotes: dict[str, Decimal],
+) -> tuple[Decimal, str] | None:
+    """The dollars this sleeve's weights apply to, per its policy, cap applied.
+
+    None = the sleeve has neither cash nor a policy (a legacy 0.28.0 sleeve) —
+    the caller falls back to --allocation. Cash bookkeeping is orthogonal: an
+    invested sleeve on a pct-nav or fixed base still settles its fills through
+    its cash (P&L attribution), the base just stops depending on it.
+    """
+    if not ledger.configured(sleeve):
+        return None
+    entry = ledger.policy.get(sleeve, {})
+    base_spec = entry.get("base")
+    if base_spec is None:
+        base = sleeve_nav(ledger, sleeve, positions, quotes)
+        desc = f"own NAV ${base:,.2f}"
+    elif base_spec["mode"] == "pct-nav":
+        pct = Decimal(base_spec["value"])
+        base = account_nav * pct
+        desc = f"{pct * 100}% of account NAV = ${base:,.2f}"
+    else:
+        base = Decimal(base_spec["value"])
+        desc = f"fixed ${base:,.2f}"
+    cap_spec = entry.get("cap")
+    if cap_spec is not None:
+        cap = account_nav * Decimal(cap_spec["value"]) if cap_spec["mode"] == "pct-nav" else Decimal(cap_spec["value"])
+        if base > cap:
+            base = cap
+            desc += f", capped at ${cap:,.2f}"
+    return base, desc
+
+
+def cash_overclaim(ledger: Ledger, account_cash: Decimal) -> Decimal:
+    """How far the sleeves' combined virtual cash exceeds the account's REAL
+    cash (0 when fully backed). Not an error — in a margin account the excess
+    is simply the cross-margin borrow the sleeves would draw on — but worth a
+    warning, since a cash account would start rejecting those buys."""
+    total = sum(ledger.cash.values(), Decimal(0))
+    return max(Decimal(0), total - account_cash)
