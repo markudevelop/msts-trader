@@ -10,6 +10,8 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.32.0] — 2026-08-31
+
 ### Added
 - **Per-sleeve P&L in `sleeve show`** — with a broker login available, show
   prints the sleeve's live NAV and its P&L versus net contributed capital
@@ -1354,7 +1356,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.32.0...HEAD
+[0.32.0]: https://github.com/markudevelop/msts-trader/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/markudevelop/msts-trader/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/markudevelop/msts-trader/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/markudevelop/msts-trader/compare/v0.28.0...v0.29.0
