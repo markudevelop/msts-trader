@@ -10,6 +10,16 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Per-sleeve P&L in `sleeve show`** — with a broker login available, show
+  prints the sleeve's live NAV and its P&L versus net contributed capital
+  (invests − divests; adopted/released shares count at their mark-of-the-day
+  value, so moving shares in or out never reads as instant profit or loss).
+  Sleeves created before contribution tracking show P&L n/a until the next
+  `sleeve invest`, which baselines their pre-existing value automatically so
+  P&L starts at zero rather than counting old value as gain. Offline (no
+  login), show degrades to the ledger view unchanged.
+
 ## [0.31.0] — 2026-08-31
 
 ### Added

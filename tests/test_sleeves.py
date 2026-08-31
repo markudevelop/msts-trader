@@ -932,3 +932,86 @@ def test_allocation_refused_on_policy_only_sleeve(paper_env, tmp_path):
         ["--broker", "paper", "rebalance", "--sleeve", "pct", "--allocation", "9999", "--csv-file", csv, "--dry-run"],
     )
     assert r.exit_code != 0 and "has its own sizing" in r.output
+
+
+# --------------------------------------------------------- per-sleeve P&L ---
+
+
+def test_contributed_tracks_invest_divest_adopt_release():
+    led = _ledger()
+    sleeves.invest(led, "momo", Decimal("20000"))
+    assert led.contributed["momo"] == Decimal("20000")
+    sleeves.divest(led, "momo", Decimal("5000"))
+    assert led.contributed["momo"] == Decimal("15000")
+
+    pos = {"SPY": Position("SPY", Decimal("50"), Decimal("500"))}
+    sleeves.adopt(led, "momo", "SPY", Decimal("10"), pos)  # +10*500 at the mark
+    assert led.contributed["momo"] == Decimal("20000")
+    sleeves.release(led, "momo", "SPY", Decimal("4"), positions=pos)  # -4*500
+    assert led.contributed["momo"] == Decimal("18000")
+
+
+def test_invest_baseline_seeds_pretracking_sleeves_once():
+    """A sleeve from before contribution tracking: its current value baselines
+    on the first new invest (P&L starts ~0), and the baseline never re-applies."""
+    led = _ledger()
+    led.cash["old"] = Decimal("5000")  # legacy: cash with no contributed record
+    sleeves.invest(led, "old", Decimal("1000"), baseline=Decimal("5000"))
+    assert led.contributed["old"] == Decimal("6000")
+    sleeves.invest(led, "old", Decimal("1000"), baseline=Decimal("99999"))  # ignored now
+    assert led.contributed["old"] == Decimal("7000")
+
+
+def test_legacy_divest_without_contribution_record_stays_unrecorded():
+    led = _ledger()
+    led.cash["old"] = Decimal("5000")
+    sleeves.divest(led, "old", Decimal("1000"))
+    assert "old" not in led.contributed  # nothing fabricated
+    assert led.cash["old"] == Decimal("4000")
+
+
+def test_contributed_round_trips_through_save_and_load():
+    led = _ledger()
+    sleeves.invest(led, "momo", Decimal("123.45"))
+    sleeves.save(led)
+    assert sleeves.load("paper", "PAPER").contributed["momo"] == Decimal("123.45")
+
+
+def test_sleeve_show_reports_nav_and_pnl(paper_env, tmp_path):
+    """invest 20k -> 40 SPY @ 500; quote to 600 -> NAV 24k, P&L +4k (+20%)."""
+    runner, tp = paper_env
+    from msts_trader.brokers.paper import Paper
+
+    p = Paper(starting_cash="100000")
+    csv = _csv(tp, "t.csv", "ticker,weight\nSPY,1.0\n")
+    assert runner.invoke(main, ["sleeve", "invest", "momo", "20000", "--broker", "paper"]).exit_code == 0
+    r = runner.invoke(
+        main,
+        ["--broker", "paper", "rebalance", "--sleeve", "momo", "--csv-file", csv, "--yes", "--no-verify", "--force"],
+    )
+    assert r.exit_code == 0, r.output
+
+    p.set_quote("SPY", Decimal("600"))
+    r = runner.invoke(main, ["sleeve", "show", "momo", "--broker", "paper"])
+    assert r.exit_code == 0, r.output
+    assert "NAV: $24,000.00" in r.output
+    assert "$+4,000.00 (+20.00%)" in r.output
+
+    p.set_quote("SPY", Decimal("400"))
+    r = runner.invoke(main, ["sleeve", "show", "momo", "--broker", "paper"])
+    assert "NAV: $16,000.00" in r.output and "$-4,000.00 (-20.00%)" in r.output
+
+
+def test_sleeve_show_pnl_na_for_legacy_then_baselined_by_invest(paper_env, tmp_path):
+    runner, tp = paper_env
+    led = sleeves.load("paper", "PAPER")
+    led.cash["old"] = Decimal("5000")  # legacy sleeve: no contribution record
+    sleeves.save(led)
+
+    r = runner.invoke(main, ["sleeve", "show", "old", "--broker", "paper"])
+    assert r.exit_code == 0 and "n/a" in r.output
+
+    # Re-seeding: pre-existing $5k value baselines, so P&L starts at zero.
+    assert runner.invoke(main, ["sleeve", "invest", "old", "1000", "--broker", "paper"]).exit_code == 0
+    r = runner.invoke(main, ["sleeve", "show", "old", "--broker", "paper"])
+    assert "NAV: $6,000.00" in r.output and "$+0.00 (+0.00%)" in r.output

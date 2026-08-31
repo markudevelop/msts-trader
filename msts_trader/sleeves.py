@@ -80,6 +80,11 @@ class Ledger:
     # "cap" bounds the computed base from above: dollars or a fraction of
     # account NAV. Values stored as strings, parsed to Decimal.
     policy: dict[str, dict] = field(default_factory=dict)
+    # sleeve name -> cumulative NET capital contributed (invests - divests,
+    # plus adopted-in / released-out share value at the mark of the moment).
+    # P&L = sleeve NAV - contributed. Absent for sleeves created before this
+    # field existed — their P&L reads n/a until capital is re-seeded.
+    contributed: dict[str, Decimal] = field(default_factory=dict)
     # in-flight orders awaiting fills: dicts with order_id/sleeve/ticker/side/
     # requested/recorded_fill/recorded_cost/est_price/ts
     pending: list[dict] = field(default_factory=list)
@@ -143,6 +148,7 @@ def load(broker: str, account: str) -> Ledger:
         sleeves=sleeves,
         cash=cash,
         policy=dict(data.get("policy") or {}),
+        contributed={name: Decimal(v) for name, v in (data.get("contributed") or {}).items()},
         pending=list(data.get("pending") or []),
     )
 
@@ -162,6 +168,7 @@ def save(ledger: Ledger) -> Path:
         },
         "cash": {name: str(v) for name, v in sorted(ledger.cash.items())},
         "policy": {name: v for name, v in sorted(ledger.policy.items())},
+        "contributed": {name: str(v) for name, v in sorted(ledger.contributed.items())},
         "pending": ledger.pending,
     }
     tmp = p.with_suffix(".json.tmp")
@@ -352,16 +359,29 @@ def adopt(ledger: Ledger, sleeve: str, ticker: str, qty: Decimal, positions: dic
         )
     book = ledger.sleeves.setdefault(sleeve, {})
     book[tkr] = book.get(tkr, Decimal(0)) + qty
+    # Adopted shares are contributed capital, marked at the position's price
+    # right now — so they don't show up as instant P&L.
+    px = positions[tkr].price if tkr in positions else Decimal(0)
+    if px > 0:
+        ledger.contributed[sleeve] = ledger.contributed.get(sleeve, Decimal(0)) + qty * px
 
 
-def release(ledger: Ledger, sleeve: str, ticker: str, qty: Decimal) -> None:
+def release(
+    ledger: Ledger, sleeve: str, ticker: str, qty: Decimal, positions: dict[str, Position] | None = None
+) -> None:
     """Return shares from a sleeve's tally to unassigned (the tool stops
-    managing them; nothing is traded)."""
+    managing them; nothing is traded). When positions are supplied, the
+    released value is deducted from the contribution record at today's mark —
+    the mirror of adopt — so P&L doesn't read the departure as a loss."""
     tkr = ticker.upper()
     cur = ledger.tally(sleeve, tkr)
     if qty <= 0 or qty > cur:
         raise SleeveError(f"cannot release {qty} {tkr} from {sleeve}: tally is {cur}")
     ledger.sleeves[sleeve][tkr] = cur - qty
+    if positions and tkr in positions and sleeve in ledger.contributed:
+        px = positions[tkr].price
+        if px > 0:
+            ledger.contributed[sleeve] -= qty * px
 
 
 def adjust(ledger: Ledger, sleeve: str, ticker: str, qty: Decimal) -> None:
@@ -373,7 +393,7 @@ def adjust(ledger: Ledger, sleeve: str, ticker: str, qty: Decimal) -> None:
     ledger.sleeves.setdefault(sleeve, {})[ticker.upper()] = qty
 
 
-def invest(ledger: Ledger, sleeve: str, amount: Decimal) -> Decimal:
+def invest(ledger: Ledger, sleeve: str, amount: Decimal, baseline: Decimal | None = None) -> Decimal:
     """Add virtual capital to a sleeve (and switch it to cash-tracked sizing).
 
     Bookkeeping only — no money moves; the dollars already live in the one
@@ -384,6 +404,13 @@ def invest(ledger: Ledger, sleeve: str, amount: Decimal) -> Decimal:
     if amount <= 0:
         raise SleeveError("invest amount must be positive")
     ledger.cash[sleeve] = ledger.cash.get(sleeve, Decimal(0)) + amount
+    # Contribution record (P&L baseline). `baseline` seeds the pre-existing
+    # value of a sleeve created before contributions were tracked, so its P&L
+    # starts at ~0 from this moment instead of counting old value as profit.
+    prior = ledger.contributed.get(sleeve)
+    if prior is None and baseline is not None:
+        prior = baseline
+    ledger.contributed[sleeve] = (prior or Decimal(0)) + amount
     return ledger.cash[sleeve]
 
 
@@ -402,6 +429,8 @@ def divest(ledger: Ledger, sleeve: str, amount: Decimal) -> Decimal:
             f"(sell holdings first by lowering its weights, then divest)"
         )
     ledger.cash[sleeve] = cur - amount
+    if sleeve in ledger.contributed:  # legacy sleeves have no record to reduce
+        ledger.contributed[sleeve] -= amount
     return ledger.cash[sleeve]
 
 

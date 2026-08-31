@@ -2810,8 +2810,14 @@ def sleeve_list() -> None:
 
 @sleeve.command("show")
 @click.argument("name")
-def sleeve_show(name: str) -> None:
-    """Show one sleeve's tallies across all ledgers (offline)."""
+@_SLEEVE_BROKER_OPT
+@_SLEEVE_CREDS_OPT
+@_ACCOUNT_OPT
+@click.pass_context
+def sleeve_show(ctx, name: str, broker_opt, creds_file, account_sel) -> None:
+    """Show one sleeve's tallies — plus live NAV and P&L when a broker login
+    is available (P&L = NAV minus net contributed capital; adopted shares
+    count as contributions at their adoption-day mark)."""
     files = sorted(sleeves.LEDGER_DIR.glob("*.json")) if sleeves.LEDGER_DIR.exists() else []
     found = False
     for f in files:
@@ -2839,6 +2845,32 @@ def sleeve_show(name: str) -> None:
             )
     if not found:
         _fail(f"no sleeve named {name!r} in {sleeves.LEDGER_DIR}")
+    # Live NAV / P&L, best-effort: needs quotes, so it needs a broker session.
+    # Any failure (no login, network) leaves the offline view above intact.
+    try:
+        b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+        ledger = sleeves.load(b.name, b.account_id)
+        if ledger.configured(name) or ledger.sleeves.get(name):
+            pos = retry.with_retry(b.positions)
+            tickers = sorted(ledger.sleeves.get(name, {}))
+            quotes = retry.with_retry(lambda: b.quote(tickers)) if tickers else {}
+            nav = sleeves.sleeve_nav(ledger, name, pos, quotes)
+            c.print(f"  NAV: [bold]${nav:,.2f}[/bold]  ({b.name} · {b.account_id}, live quotes)")
+            contributed = ledger.contributed.get(name)
+            if contributed is not None and contributed > 0:
+                pnl = nav - contributed
+                pct = pnl / contributed * 100
+                color = "green" if pnl >= 0 else "red"
+                c.print(f"  contributed: ${contributed:,.2f}   P&L: [{color}]${pnl:+,.2f} ({pct:+.2f}%)[/{color}]")
+            else:
+                c.print(
+                    "  [dim]P&L: n/a — contributions untracked for this sleeve (re-seed with `sleeve invest`; "
+                    "pre-existing value is baselined automatically).[/dim]"
+                )
+    except SystemExit:
+        raise
+    except Exception as e:
+        say(f"[dim]live NAV/P&L unavailable ({e}) — showing ledger only.[/dim]")
 
 
 @sleeve.command("adopt")
@@ -2878,10 +2910,11 @@ def sleeve_adopt(ctx, name: str, ticker: str, qty: str, broker_opt, creds_file, 
 def sleeve_release(ctx, name: str, ticker: str, qty: str, broker_opt, creds_file, account_sel) -> None:
     """Return shares from a sleeve to unassigned (nothing is traded)."""
     b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+    pos = retry.with_retry(b.positions)
     with sleeves.lock(b.name, b.account_id):
         ledger = _sleeve_ledger_or_exit(b)
         try:
-            sleeves.release(ledger, name, ticker, Decimal(qty))
+            sleeves.release(ledger, name, ticker, Decimal(qty), positions=pos)
         except (sleeves.SleeveError, ArithmeticError) as e:
             _fail(str(e))
         sleeves.save(ledger)
@@ -2907,8 +2940,20 @@ def sleeve_invest(ctx, name: str, amount: str, broker_opt, creds_file, account_s
     b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
     with sleeves.lock(b.name, b.account_id):
         ledger = _sleeve_ledger_or_exit(b)
+        # A sleeve that predates contribution tracking gets its CURRENT value
+        # baselined as contributed capital, so P&L starts at ~0 now instead of
+        # reporting years of pre-existing value as instant profit.
+        baseline = None
+        if name not in ledger.contributed and (ledger.cash_tracked(name) or ledger.sleeves.get(name)):
+            try:
+                pos = retry.with_retry(b.positions)
+                tickers = sorted(ledger.sleeves.get(name, {}))
+                quotes = retry.with_retry(lambda: b.quote(tickers)) if tickers else {}
+                baseline = sleeves.sleeve_nav(ledger, name, pos, quotes)
+            except Exception:
+                baseline = ledger.cash.get(name, Decimal(0))  # cash-only fallback
         try:
-            new_cash = sleeves.invest(ledger, name, Decimal(amount))
+            new_cash = sleeves.invest(ledger, name, Decimal(amount), baseline=baseline)
         except (sleeves.SleeveError, ArithmeticError) as e:
             _fail(str(e))
         sleeves.save(ledger)

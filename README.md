@@ -656,6 +656,7 @@ msts-trader sleeve divest momo 10000     # take capital back out of its cash
 msts-trader sleeve base momo 20%         # or: size off 20% of ACCOUNT NAV
 msts-trader sleeve cap momo $50000       # ceiling — never deploy more than this
 msts-trader sleeve adopt momo SPY 100    # assign already-held shares
+msts-trader sleeve show momo             # tallies + live NAV + P&L vs contributed
 msts-trader sleeve reconcile             # tallies + cash vs account, per ticker
 ```
 
