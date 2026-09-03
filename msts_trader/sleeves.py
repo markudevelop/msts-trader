@@ -414,19 +414,26 @@ def invest(ledger: Ledger, sleeve: str, amount: Decimal, baseline: Decimal | Non
     return ledger.cash[sleeve]
 
 
-def divest(ledger: Ledger, sleeve: str, amount: Decimal) -> Decimal:
-    """Withdraw virtual capital from a sleeve's CASH (never its holdings).
+def divest(ledger: Ledger, sleeve: str, amount: Decimal, nav: Decimal | None = None) -> Decimal:
+    """Withdraw virtual capital from a sleeve — the exact mirror of invest.
 
-    Refuses to take more than the sleeve's cash on hand — to free up more,
-    lower the sleeve's weights (or zero them) and run it once so it sells its
-    own shares first. Returns the new cash balance."""
+    The amount comes straight off the sleeve's cash, and MAY drive it
+    negative: the next rebalance sizes against the reduced NAV and sells
+    holdings down to the new target, which brings the cash back toward zero
+    on its own (with weights summing to 1.0, it sells almost exactly the
+    divested amount). No weight-fiddling required.
+
+    Bounded by the sleeve's NAV when supplied — you cannot take out more
+    than the sleeve is worth. Returns the new cash balance."""
     cur = ledger.cash.get(sleeve)
     if cur is None:
         raise SleeveError(f"sleeve {sleeve!r} does not track cash — nothing to divest")
-    if amount <= 0 or amount > cur:
+    if amount <= 0:
+        raise SleeveError("divest amount must be positive")
+    if nav is not None and amount > nav:
         raise SleeveError(
-            f"cannot divest {amount}: sleeve {sleeve!r} has {cur} cash "
-            f"(sell holdings first by lowering its weights, then divest)"
+            f"cannot divest {amount}: sleeve {sleeve!r} is only worth ${nav:,.2f} "
+            f"(cash + holdings) — that is the most it can give back"
         )
     ledger.cash[sleeve] = cur - amount
     if sleeve in ledger.contributed:  # legacy sleeves have no record to reduce

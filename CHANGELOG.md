@@ -10,6 +10,20 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Changed
+- **`sleeve divest` is now the true mirror of `invest`** — it takes the
+  amount straight off the sleeve's cash, which MAY go negative; the next
+  rebalance sizes against the reduced NAV and sells holdings down to cover,
+  bringing cash back toward zero on its own (weights summing to 1.0 sell
+  almost exactly the divested amount). No weight-fiddling required. The only
+  bound is the sleeve's NAV — you cannot take out more than it is worth.
+  Previously divest refused anything beyond cash on hand. Feedback from the
+  same user driving the sleeve work.
+
+### Docs
+- README "Multiple strategies in one account" intro no longer claims there is
+  no per-strategy ledger — sleeves are the native answer, stated up front.
+
 ## [0.32.0] — 2026-08-31
 
 ### Added

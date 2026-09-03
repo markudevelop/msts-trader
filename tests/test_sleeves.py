@@ -656,12 +656,17 @@ def test_invest_divest_bounds():
     assert sleeves.invest(led, "momo", Decimal("20000")) == Decimal("20000")
     assert led.cash_tracked("momo")
     assert sleeves.divest(led, "momo", Decimal("5000")) == Decimal("15000")
-    with pytest.raises(sleeves.SleeveError, match="sell holdings first"):
-        sleeves.divest(led, "momo", Decimal("15001"))
+    # Beyond cash on hand is ALLOWED (cash goes negative; the next rebalance
+    # sells down to cover) — the only bound is the sleeve's NAV.
+    assert sleeves.divest(led, "momo", Decimal("20000"), nav=Decimal("25000")) == Decimal("-5000")
+    with pytest.raises(sleeves.SleeveError, match="only worth"):
+        sleeves.divest(led, "momo", Decimal("5001"), nav=Decimal("5000"))
     with pytest.raises(sleeves.SleeveError, match="does not track cash"):
         sleeves.divest(led, "other", Decimal("1"))
     with pytest.raises(sleeves.SleeveError):
         sleeves.invest(led, "momo", Decimal("0"))
+    with pytest.raises(sleeves.SleeveError):
+        sleeves.divest(led, "momo", Decimal("0"))
 
 
 def test_v1_ledger_without_cash_key_loads_as_untracked(ledger_dir):
@@ -1015,3 +1020,45 @@ def test_sleeve_show_pnl_na_for_legacy_then_baselined_by_invest(paper_env, tmp_p
     assert runner.invoke(main, ["sleeve", "invest", "old", "1000", "--broker", "paper"]).exit_code == 0
     r = runner.invoke(main, ["sleeve", "show", "old", "--broker", "paper"])
     assert "NAV: $6,000.00" in r.output and "$+0.00 (+0.00%)" in r.output
+
+
+def test_divest_beyond_cash_self_corrects_on_next_rebalance(paper_env, tmp_path):
+    """DeltaSurfer's ask: 'steal 50 from sleeve NAV' with no weight-fiddling.
+    Fully deployed sleeve (40 SPY @ 500, cash 0) divests $5k -> cash -5000;
+    the next rebalance sizes against the reduced NAV and sells 10 SPY, which
+    brings cash back to exactly zero. Over-NAV divests are refused."""
+    runner, tp = paper_env
+    csv = _csv(tp, "t.csv", "ticker,weight\nSPY,1.0\n")
+    args = [
+        "--broker",
+        "paper",
+        "rebalance",
+        "--sleeve",
+        "lowdd",
+        "--csv-file",
+        csv,
+        "--yes",
+        "--no-verify",
+        "--force",
+        "--threshold",
+        "0.01",
+    ]
+    assert runner.invoke(main, ["sleeve", "invest", "lowdd", "20000", "--broker", "paper"]).exit_code == 0
+    assert runner.invoke(main, args).exit_code == 0
+    led = sleeves.load("paper", "PAPER")
+    assert led.tally("lowdd", "SPY") == Decimal("40") and led.cash["lowdd"] == Decimal("0.00")
+
+    r = runner.invoke(main, ["sleeve", "divest", "lowdd", "5000", "--broker", "paper"])
+    assert r.exit_code == 0, r.output
+    assert "cash is negative" in r.output
+    led = sleeves.load("paper", "PAPER")
+    assert led.cash["lowdd"] == Decimal("-5000") and led.contributed["lowdd"] == Decimal("15000")
+
+    r = runner.invoke(main, args)
+    assert r.exit_code == 0, r.output
+    led = sleeves.load("paper", "PAPER")
+    assert led.tally("lowdd", "SPY") == Decimal("30")
+    assert led.cash["lowdd"] == Decimal("0.00")
+
+    r = runner.invoke(main, ["sleeve", "divest", "lowdd", "99999", "--broker", "paper"])
+    assert r.exit_code != 0 and "only worth $15,000.00" in r.output

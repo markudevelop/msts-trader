@@ -205,7 +205,9 @@ fixing: SPY doubling was trimmed 40→20 shares; SPY halving was topped up
 20→80 with $15k of account cash.)
 
 `sleeve invest NAME AMOUNT` adds virtual capital; `divest` takes it back out
-of the sleeve's cash (never its holdings). Nothing moves at the broker — the
+of the sleeve's cash — which may go negative; the next rebalance sells
+holdings down to the reduced NAV to cover it, bounded only by the sleeve's
+NAV (you cannot take out more than it is worth). Nothing moves at the broker — the
 point of sleeves is that all dollars stay in one cross-margined account. From
 the first invest, the sleeve is cash-tracked:
 

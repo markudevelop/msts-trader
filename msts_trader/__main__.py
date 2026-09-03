@@ -2968,20 +2968,34 @@ def sleeve_invest(ctx, name: str, amount: str, broker_opt, creds_file, account_s
 @_ACCOUNT_OPT
 @click.pass_context
 def sleeve_divest(ctx, name: str, amount: str, broker_opt, creds_file, account_sel) -> None:
-    """Withdraw virtual capital from a sleeve's CASH (never its holdings).
+    """Withdraw virtual capital from a sleeve — the mirror of invest.
 
-    To free up more than the cash on hand, lower the sleeve's weights and run
-    it once so it sells its own shares first.
+    Taking more than the cash on hand drives the sleeve's cash negative; the
+    next rebalance sells holdings down to the reduced NAV, which brings cash
+    back toward zero on its own. Bounded by the sleeve's NAV (cash +
+    holdings) — you cannot take out more than the sleeve is worth.
     """
     b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+    pos = retry.with_retry(b.positions)
     with sleeves.lock(b.name, b.account_id):
         ledger = _sleeve_ledger_or_exit(b)
+        tickers = sorted(ledger.sleeves.get(name, {}))
         try:
-            new_cash = sleeves.divest(ledger, name, Decimal(amount))
+            quotes = retry.with_retry(lambda: b.quote(tickers)) if tickers else {}
+        except Exception:
+            quotes = {}
+        nav = sleeves.sleeve_nav(ledger, name, pos, quotes)
+        try:
+            new_cash = sleeves.divest(ledger, name, Decimal(amount), nav=nav)
         except (sleeves.SleeveError, ArithmeticError) as e:
             _fail(str(e))
         sleeves.save(ledger)
     say(f"[green]divested {Decimal(amount):,.2f} from '{name}' — sleeve cash now ${new_cash:,.2f}[/green]")
+    if new_cash < 0:
+        say(
+            f"[yellow]cash is negative — the next `rebalance --sleeve {name}` sells holdings down to the "
+            f"reduced NAV, bringing it back toward zero.[/yellow]"
+        )
 
 
 @sleeve.command("base")

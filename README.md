@@ -626,10 +626,12 @@ execute, `--dry-run` to preview. See
 
 ## Multiple strategies in one account
 
-msts-trader has no per-strategy position ledger — it reads the *account's*
-position in a ticker and sizes against that. Run two strategies as two separate
-rebalances and they will fight over any ticker they share: each sees the other's
-shares as its own drift and trades them away.
+By default a rebalance reads the *account's* position in a ticker and sizes
+against that — so two strategies run as two plain rebalances would fight over
+any ticker they share. **Sleeves solve this natively**: each strategy gets a
+per-sleeve ledger (share tallies, its own cash, a sizing policy) so several
+strategies — and your own manual trades — coexist in one cross-margined
+account without touching each other's shares.
 
 Four ways to run several strategies against one login. Native sleeves are
 the most capable; the others need no state at all.
@@ -652,7 +654,7 @@ msts-trader rebalance --sleeve carry --csv-file carry.csv --yes
 
 msts-trader sleeve list                  # every sleeve, tallies, cash, policy
 msts-trader sleeve invest momo 25000     # scale the winner up (its only new money)
-msts-trader sleeve divest momo 10000     # take capital back out of its cash
+msts-trader sleeve divest momo 10000     # take capital back out (sells down next run)
 msts-trader sleeve base momo 20%         # or: size off 20% of ACCOUNT NAV
 msts-trader sleeve cap momo $50000       # ceiling — never deploy more than this
 msts-trader sleeve adopt momo SPY 100    # assign already-held shares
