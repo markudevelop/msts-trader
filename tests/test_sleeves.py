@@ -1062,3 +1062,76 @@ def test_divest_beyond_cash_self_corrects_on_next_rebalance(paper_env, tmp_path)
 
     r = runner.invoke(main, ["sleeve", "divest", "lowdd", "99999", "--broker", "paper"])
     assert r.exit_code != 0 and "only worth $15,000.00" in r.output
+
+
+# ------------------------------------------------ sleeve show broker scoping ---
+
+
+def _second_ledger(tmp_path, name="lowdd"):
+    """Hand-write an alpaca ledger holding the same sleeve name. Sorts BEFORE
+    paper_*.json, which is what made the old footer land on the wrong block."""
+    import json as _j
+
+    sleeves.LEDGER_DIR.mkdir(parents=True, exist_ok=True)
+    (sleeves.LEDGER_DIR / "alpaca_ACC1.json").write_text(
+        _j.dumps(
+            {
+                "version": 1,
+                "broker": "alpaca",
+                "account": "ACC1",
+                "sleeves": {name: {"SPY": "0.17"}},
+                "cash": {name: "4.58"},
+                "policy": {},
+                "contributed": {name: "100"},
+                "pending": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_show_is_scoped_to_the_named_broker_with_footer_inside_its_block(paper_env, tmp_path):
+    """DeltaSurfer's report: two ledgers for one sleeve name -> `--broker paper`
+    must print ONLY paper's block, with NAV/P&L directly under paper's tallies."""
+    runner, tp = paper_env
+    csv = _csv(tp, "t.csv", "ticker,weight\nSPY,1.0\n")
+    assert runner.invoke(main, ["sleeve", "invest", "lowdd", "100", "--broker", "paper"]).exit_code == 0
+    r = runner.invoke(
+        main,
+        ["--broker", "paper", "rebalance", "--sleeve", "lowdd", "--csv-file", csv, "--yes", "--no-verify", "--force"],
+    )
+    assert r.exit_code == 0, r.output
+    _second_ledger(tp)
+
+    r = runner.invoke(main, ["sleeve", "show", "lowdd", "--broker", "paper"])
+    assert r.exit_code == 0, r.output
+    assert "@ alpaca" not in r.output  # scoped: the other broker's ledger is not shown
+    lines = r.output.splitlines()
+    i_hdr = next(i for i, ln in enumerate(lines) if "@ paper" in ln)
+    i_nav = next(i for i, ln in enumerate(lines) if ln.strip().startswith("NAV:"))
+    assert i_nav > i_hdr  # footer sits inside the paper block
+    assert "contributed: $100.00" in r.output
+
+
+def test_show_without_any_broker_lists_every_ledger_offline(paper_env, tmp_path, monkeypatch):
+    runner, tp = paper_env
+    led = sleeves.load("paper", "PAPER")
+    sleeves.invest(led, "lowdd", Decimal("100"))
+    sleeves.save(led)
+    _second_ledger(tp)
+    from msts_trader import keychain
+
+    monkeypatch.setattr(keychain, "get_default", lambda: None)  # nothing resolvable -> offline
+
+    r = runner.invoke(main, ["sleeve", "show", "lowdd"])
+    assert r.exit_code == 0, r.output
+    assert "@ alpaca" in r.output and "@ paper" in r.output
+    assert "NAV:" not in r.output  # no session, no live figures
+
+
+def test_show_names_other_ledgers_when_sleeve_absent_on_that_broker(paper_env, tmp_path):
+    runner, tp = paper_env
+    _second_ledger(tp, name="onlyalpaca")
+    r = runner.invoke(main, ["sleeve", "show", "onlyalpaca", "--broker", "paper"])
+    assert r.exit_code != 0
+    assert "no ledger on paper" in r.output and "alpaca" in r.output

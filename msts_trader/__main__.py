@@ -2808,6 +2808,54 @@ def sleeve_list() -> None:
             c.print(f"  [yellow]{len(pending)} order(s) pending settlement[/yellow]")
 
 
+def _sleeve_block(name: str, data: dict, *, live=None) -> None:
+    """Render one ledger's view of a sleeve. `live` = (broker, ledger) when a
+    session for THIS ledger's account is open, in which case the NAV / P&L
+    footer is printed inside the block it belongs to."""
+    cash_map = data.get("cash") or {}
+    book = (data.get("sleeves") or {}).get(name) or {}
+    c.print(f"[bold]{name}[/bold] @ {data.get('broker', '?')} · account {data.get('account', '?')}")
+    if name in cash_map:
+        c.print(f"  cash: ${Decimal(cash_map[name]):,.2f}")
+    else:
+        c.print("  (no cash tracked — sizes via --allocation; bootstrap with `sleeve invest`)")
+    for t, q in sorted(book.items()):
+        c.print(f"  {t}: {q}")
+    for p in data.get("pending") or []:
+        if p.get("sleeve") == name:
+            c.print(
+                f"  [yellow]pending: {p['ticker']} {p['side']} {p['requested']} "
+                f"(filled so far {p['recorded_fill']}, order {p['order_id']})[/yellow]"
+            )
+    if live is None:
+        return
+    b, ledger = live
+    try:
+        pos = retry.with_retry(b.positions)
+        tickers = sorted(ledger.sleeves.get(name, {}))
+        quotes = retry.with_retry(lambda: b.quote(tickers)) if tickers else {}
+        nav = sleeves.sleeve_nav(ledger, name, pos, quotes)
+    except Exception as e:
+        say(f"  [dim]live NAV/P&L unavailable ({e})[/dim]")
+        return
+    c.print(f"  NAV: [bold]${nav:,.2f}[/bold]  (live quotes)")
+    contributed = ledger.contributed.get(name)
+    if contributed is not None and contributed > 0:
+        pnl = nav - contributed
+        pct = pnl / contributed * 100
+        color = "green" if pnl >= 0 else "red"
+        c.print(f"  contributed: ${contributed:,.2f}   P&L: [{color}]${pnl:+,.2f} ({pct:+.2f}%)[/{color}]")
+    else:
+        c.print(
+            "  [dim]P&L: n/a — contributions untracked for this sleeve (re-seed with `sleeve invest`; "
+            "pre-existing value is baselined automatically).[/dim]"
+        )
+
+
+def _ledger_has_sleeve(data: dict, name: str) -> bool:
+    return name in (data.get("sleeves") or {}) or name in (data.get("cash") or {}) or name in (data.get("policy") or {})
+
+
 @sleeve.command("show")
 @click.argument("name")
 @_SLEEVE_BROKER_OPT
@@ -2815,62 +2863,41 @@ def sleeve_list() -> None:
 @_ACCOUNT_OPT
 @click.pass_context
 def sleeve_show(ctx, name: str, broker_opt, creds_file, account_sel) -> None:
-    """Show one sleeve's tallies — plus live NAV and P&L when a broker login
-    is available (P&L = NAV minus net contributed capital; adopted shares
-    count as contributions at their adoption-day mark)."""
+    """Show one sleeve: tallies, cash, and — for the broker you name (or the
+    stored default) — live NAV and P&L versus net contributed capital.
+
+    Scoped to ONE broker account so the live figures sit in the block they
+    belong to. With no broker resolvable, every ledger holding the sleeve is
+    listed offline. `sleeve list` is the cross-ledger overview.
+    """
     files = sorted(sleeves.LEDGER_DIR.glob("*.json")) if sleeves.LEDGER_DIR.exists() else []
-    found = False
+    ledgers = []
     for f in files:
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             continue
-        cash_map = data.get("cash") or {}
-        book = (data.get("sleeves") or {}).get(name)
-        if book is None and name not in cash_map:
-            continue
-        found = True
-        c.print(f"[bold]{name}[/bold] @ {data.get('broker', '?')} · account {data.get('account', '?')}")
-        if name in cash_map:
-            c.print(f"  cash: ${Decimal(cash_map[name]):,.2f}")
-        else:
-            c.print("  (no cash tracked — sizes via --allocation; bootstrap with `sleeve invest`)")
-        for t, q in sorted((book or {}).items()):
-            c.print(f"  {t}: {q}")
-        pend = [p for p in (data.get("pending") or []) if p.get("sleeve") == name]
-        for p in pend:
-            c.print(
-                f"  [yellow]pending: {p['ticker']} {p['side']} {p['requested']} "
-                f"(filled so far {p['recorded_fill']}, order {p['order_id']})[/yellow]"
-            )
-    if not found:
+        if _ledger_has_sleeve(data, name):
+            ledgers.append(data)
+    if not ledgers:
         _fail(f"no sleeve named {name!r} in {sleeves.LEDGER_DIR}")
-    # Live NAV / P&L, best-effort: needs quotes, so it needs a broker session.
-    # Any failure (no login, network) leaves the offline view above intact.
-    try:
-        b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
-        ledger = sleeves.load(b.name, b.account_id)
-        if ledger.configured(name) or ledger.sleeves.get(name):
-            pos = retry.with_retry(b.positions)
-            tickers = sorted(ledger.sleeves.get(name, {}))
-            quotes = retry.with_retry(lambda: b.quote(tickers)) if tickers else {}
-            nav = sleeves.sleeve_nav(ledger, name, pos, quotes)
-            c.print(f"  NAV: [bold]${nav:,.2f}[/bold]  ({b.name} · {b.account_id}, live quotes)")
-            contributed = ledger.contributed.get(name)
-            if contributed is not None and contributed > 0:
-                pnl = nav - contributed
-                pct = pnl / contributed * 100
-                color = "green" if pnl >= 0 else "red"
-                c.print(f"  contributed: ${contributed:,.2f}   P&L: [{color}]${pnl:+,.2f} ({pct:+.2f}%)[/{color}]")
-            else:
-                c.print(
-                    "  [dim]P&L: n/a — contributions untracked for this sleeve (re-seed with `sleeve invest`; "
-                    "pre-existing value is baselined automatically).[/dim]"
-                )
-    except SystemExit:
-        raise
-    except Exception as e:
-        say(f"[dim]live NAV/P&L unavailable ({e}) — showing ledger only.[/dim]")
+
+    # Broker scoping: explicit flag > group --broker > stored default. If
+    # nothing resolves, this is an offline view and nothing to connect to.
+    wanted = (broker_opt or (ctx.obj or {}).get("broker") or keychain.get_default() or "").lower().strip()
+    if not wanted:
+        for data in ledgers:
+            _sleeve_block(name, data)
+        return
+
+    b = _sleeve_broker(ctx, broker_opt, creds_file, account_sel)
+    mine = [x for x in ledgers if x.get("broker") == b.name and str(x.get("account")) == str(b.account_id)]
+    if not mine:
+        others = ", ".join(f"{x.get('broker')}·{x.get('account')}" for x in ledgers)
+        _fail(f"sleeve {name!r} has no ledger on {b.name} · {b.account_id} (found on: {others}).")
+    ledger = _sleeve_ledger_or_exit(b)
+    for data in mine:
+        _sleeve_block(name, data, live=(b, ledger))
 
 
 @sleeve.command("adopt")

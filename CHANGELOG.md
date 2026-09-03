@@ -10,6 +10,16 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Fixed
+- **`sleeve show` is now scoped to one broker account, with NAV/P&L inside
+  the block it belongs to.** Previously it printed EVERY ledger holding the
+  sleeve name and then one live footer for whichever session connected —
+  after the last block, so it appeared to belong to a random ledger — and
+  `--broker` steered only that footer. Now `--broker` (or the stored
+  default) selects the ledger shown; with nothing resolvable, every ledger
+  is listed offline. `sleeve list` remains the cross-ledger overview.
+  Reported by the same Alpaca/paper tester.
+
 ## [0.33.0] — 2026-09-03
 
 ### Changed
