@@ -10,6 +10,25 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Studio: a local, open-source Composer-style strategy builder**
+  (`pip install "msts-trader[ui]"`, then `msts-trader ui`). Build strategies
+  as nested blocks (equal / specified / inverse-volatility weights, if-else
+  on indicators, top/bottom-N filters, groups) over nine Composer
+  indicators (RSI, moving averages, cumulative return, volatility,
+  drawdown, …). Backtest daily against SPY with turnover costs, then deploy:
+  each strategy trades as its own sleeve (`sleeve invest` capital, compounds
+  its own P&L), previews orders through the existing `rebalance --sleeve`
+  engine, and executes on any broker. Live execution needs a per-strategy
+  opt-in plus a typed confirmation. An in-process scheduler runs strategies
+  at a set ET time on trading days, per daily/weekly/monthly cadence.
+  Composer symphonies (EDN or JSON) import directly; unsupported blocks are
+  reported, never dropped. The server binds 127.0.0.1 and every API call
+  needs a per-session token. See [docs/studio.md](docs/studio.md).
+- `msts-trader strategy list | eval | backtest | run | import`: the same
+  engine headless. `strategy run ID --yes` is the cron/GitHub Actions entry
+  point.
+
 ## [0.33.1] — 2026-09-03
 
 ### Fixed

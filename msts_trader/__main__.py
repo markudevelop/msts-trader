@@ -3234,5 +3234,196 @@ def _build_broker_quiet(name: str):
     return make(name, **creds)
 
 
+# ── strategies (Composer-style symphonies) ──────────────────────────────────
+def _symphony_mods():
+    """Lazy import: the strategy engine needs the `ui` extra (pandas/numpy/yfinance)."""
+    try:
+        from .symphony import backtest as sbt
+        from .symphony import composer_import as sci
+        from .symphony import prices as spx
+        from .symphony import runner as srun
+        from .symphony import store as sst
+        from .symphony import evaluate as sev
+    except ImportError as e:
+        _fail(f'strategies need the ui extra: pip install "msts-trader[ui]" ({e})')
+    return sbt, sci, spx, srun, sst, sev
+
+
+def _get_strategy(sst, sid: str):
+    try:
+        return sst.get(sid)
+    except sst.StoreError as e:
+        _fail(str(e))
+
+
+@main.group()
+def strategy() -> None:
+    """Composer-style strategies: evaluate, backtest, run on a broker.
+
+    A strategy is a block tree (weights / if-else / filters over indicators)
+    stored in ~/.msts-trader/strategies/. Build them in `msts-trader ui`, or
+    `strategy import` a Composer symphony. Each strategy trades as its own
+    sleeve (id = sleeve name): fund it with `msts-trader sleeve invest ID $`.
+    """
+
+
+@strategy.command("list")
+def strategy_list() -> None:
+    """List saved strategies."""
+    *_, sst, _ = _symphony_mods()
+    rows = sst.list_all()
+    if not rows:
+        say("no strategies yet — create one in `msts-trader ui` or `msts-trader strategy import FILE`.")
+        return
+    t = Table(show_header=True, header_style="bold")
+    for col in ("id", "name", "rebalance", "broker", "live", "schedule"):
+        t.add_column(col)
+    for s in rows:
+        d = s.deploy
+        t.add_row(
+            s.id,
+            s.name,
+            s.rebalance,
+            d.broker,
+            "yes" if d.live_enabled else "no",
+            d.schedule_time + " ET" if d.schedule_enabled else "-",
+        )
+    c.print(t)
+
+
+@strategy.command("eval")
+@click.argument("sid")
+def strategy_eval(sid: str) -> None:
+    """Print today's target weights as a `ticker,weight` CSV (pipe into rebalance)."""
+    _, _, spx, srun, sst, sev = _symphony_mods()
+    s = _get_strategy(sst, sid)
+    try:
+        cur = srun.current_weights(s)
+    except (sev.EvalError, spx.PriceError) as e:
+        _fail(str(e))
+    sys.stdout.write(cur["csv"])
+
+
+@strategy.command("backtest")
+@click.argument("sid")
+@click.option("--start", default=None, help="YYYY-MM-DD (default: as early as the data allows).")
+@click.option("--end", default=None, help="YYYY-MM-DD (default: today).")
+@click.option("--cost-bps", type=float, default=5.0, show_default=True, help="Cost per unit of turnover, in bps.")
+@click.option("--json", "json_out", is_flag=True, help="Full result as JSON (equity curve, allocations).")
+def strategy_backtest(sid: str, start, end, cost_bps: float, json_out: bool) -> None:
+    """Daily-close backtest vs SPY."""
+    sbt, _, spx, _, sst, sev = _symphony_mods()
+    from datetime import date as _date
+
+    from .symphony.model import tickers as _tickers
+
+    s = _get_strategy(sst, sid)
+    try:
+        d0 = _date.fromisoformat(start) if start else None
+        d1 = _date.fromisoformat(end) if end else None
+    except ValueError as e:
+        _fail(f"bad date: {e}")
+    try:
+        closes = spx.load_closes(sorted(set(_tickers(s)) | {"SPY"}))
+        res = sbt.run(s, closes, start=d0, end=d1, cost_bps=cost_bps)
+    except (sev.EvalError, spx.PriceError) as e:
+        _fail(str(e))
+    if json_out:
+        print(json.dumps(res, default=str))
+        return
+    t = Table(title=f"{s.name}  {res['start']} → {res['end']}", show_header=True, header_style="bold")
+    t.add_column("")
+    t.add_column("strategy", justify="right")
+    bm = res.get("benchmark")
+    if bm:
+        t.add_column(bm["ticker"], justify="right")
+
+    def pct(v):
+        return "-" if v is None else f"{v * 100:.1f}%"
+
+    def num(v):
+        return "-" if v is None else f"{v:.2f}"
+
+    m = res["metrics"]
+    for label, key, fmt in (
+        ("Total return", "total_return", pct),
+        ("CAGR", "cagr", pct),
+        ("Max drawdown", "max_drawdown", pct),
+        ("Volatility", "vol", pct),
+        ("Sharpe", "sharpe", num),
+    ):
+        row = [label, fmt(m[key])]
+        if bm:
+            row.append(fmt(bm["metrics"][key]))
+        t.add_row(*row)
+    c.print(t)
+    say(
+        f"[dim]annual turnover {m['annual_turnover']:.1f}x · cost {cost_bps:g} bps · {len(res['allocations'])} rebalances[/dim]"
+    )
+
+
+@strategy.command("run")
+@click.argument("sid")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Execute LIVE on the strategy's broker (requires deploy.live_enabled). Without it: dry-run preview.",
+)
+@click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
+def strategy_run(sid: str, yes: bool, force: bool) -> None:
+    """Evaluate and rebalance the strategy's sleeve (dry-run unless --yes).
+
+    Cron / GitHub Actions: `msts-trader strategy run ID --yes` a few minutes
+    before the close.
+    """
+    *_, srun, sst, _ = _symphony_mods()
+    s = _get_strategy(sst, sid)
+    try:
+        res = srun.run(s, mode=srun.LIVE if yes else srun.DRY, force=force, source="cli")
+    except srun.RunError as e:
+        _fail(str(e))
+    print(json.dumps(res, default=str, indent=2))
+    if res.get("status") in ("error", "blocked", "partial"):
+        sys.exit(1)
+
+
+@strategy.command("import")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@click.option("--id", "sid", default=None, help="Strategy id (default: from the symphony name).")
+def strategy_import(path: str, sid) -> None:
+    """Import a Composer symphony (EDN or JSON) or a msts-trader strategy file."""
+    _, sci, _, _, sst, _ = _symphony_mods()
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    try:
+        s, warnings = sci.import_text(text, id=sid)
+    except sci.ComposerImportError as e:
+        _fail(str(e))
+    if sid is None:
+        s = s.model_copy(update={"id": sst.unique_id(s.id)})
+    sst.save(s)
+    for w in warnings:
+        say(f"[yellow]! {w}[/yellow]")
+    say(f"[green]✓ imported '{s.name}' as {s.id}[/green]")
+
+
+@main.command()
+@click.option("--port", type=int, default=8765, show_default=True)
+@click.option("--no-browser", is_flag=True, help="Don't open a browser tab.")
+@click.option("--no-scheduler", is_flag=True, help="Don't run scheduled strategies while the UI is up.")
+def ui(port: int, no_browser: bool, no_scheduler: bool) -> None:
+    """Local web UI: build, backtest and deploy Composer-style strategies.
+
+    Binds to 127.0.0.1 only; every API call needs the session token printed
+    in the URL, so other web pages can't drive it.
+    """
+    try:
+        from .ui import server
+    except ImportError as e:
+        _fail(f'the UI needs the ui extra: pip install "msts-trader[ui]" ({e})')
+    server.serve(port=port, open_browser=not no_browser, scheduler=not no_scheduler)
+
+
 if __name__ == "__main__":
     main()

@@ -10,6 +10,25 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  web:
+    # The Studio bundle is committed (installs never need Node); fail if it is
+    # stale relative to web/.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: build
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: committed bundle is up to date
+        run: git diff --exit-code -- msts_trader/ui/static || (echo "::error::run 'cd web && npm run build' and commit msts_trader/ui/static" && exit 1)
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -46,3 +65,6 @@ jobs:
           python -m pip install --upgrade build twine
           python -m build
           twine check dist/*
+      - name: wheel ships the Studio bundle
+        shell: bash
+        run: python -c "import zipfile,glob,sys; n=zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist(); sys.exit(0 if 'msts_trader/ui/static/index.html' in n else 'Studio bundle missing from wheel')"

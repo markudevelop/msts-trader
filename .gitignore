@@ -15,3 +15,6 @@ htmlcov/
 
 # outcome-fusion session workspace
 .ai/
+
+# Studio front-end deps (the built bundle in msts_trader/ui/static IS committed)
+web/node_modules/

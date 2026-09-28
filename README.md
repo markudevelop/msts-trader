@@ -465,6 +465,43 @@ whether credentials are present, whether it connects, your NAV, position
 count, and a sample SPY quote — so permission/connectivity problems
 (like the IBKR KID block) surface immediately.
 
+## Studio: build Composer-style strategies (web UI)
+
+```bash
+pip install "msts-trader[ui]"      # or: uv tool install "msts-trader[ui]"
+msts-trader ui                     # opens http://127.0.0.1:8765/?t=<session token>
+```
+
+A local, open-source take on Composer.trade on top of the same rebalancer:
+
+- **Build.** Nest blocks into a strategy: weights (equal, specified %,
+  inverse volatility), **if/else** on indicators (RSI, SMA/EMA, cumulative
+  return, volatility, drawdown, …, against a number or another
+  indicator), **filters** (top/bottom N by an indicator), and groups.
+  Today's allocation updates live as you edit.
+- **Backtest.** Daily-close simulation vs SPY (or any ticker), with
+  turnover costs, equity and drawdown charts, and the allocation history.
+- **Deploy.** Each strategy trades as its own [sleeve](#native-sleeves---sleeve-order-tally-per-strategy):
+  fund it (`Invest`), preview the orders, then execute on paper or any
+  supported broker. Live orders need a per-strategy opt-in plus a typed
+  confirmation. A built-in scheduler runs strategies at a set ET time
+  (daily / weekly / monthly) while the UI is open.
+- **Import.** Paste a Composer symphony (EDN or JSON). Blocks that can't
+  be mapped are listed, never silently dropped.
+
+Headless (cron / GitHub Actions) uses the same engine:
+
+```bash
+msts-trader strategy list
+msts-trader strategy backtest qqq-rsi-guard
+msts-trader strategy eval qqq-rsi-guard            # today's weights as CSV
+msts-trader strategy run qqq-rsi-guard             # dry-run preview (JSON)
+msts-trader strategy run qqq-rsi-guard --yes       # execute (needs live enabled)
+```
+
+Details, including the security model, backtest assumptions and the
+Composer mapping, are in [docs/studio.md](docs/studio.md).
+
 ## What it does
 
 - Parses your CSV into `{ticker: target_weight}`.
@@ -905,8 +942,9 @@ Two things to know for a **fresh account**:
 - Active stop *management* (Hydra/Fusion-style trailing watchers). Static
   protective stops **are** supported via the `stop_pct` CSV column — see
   [Protective stops](#protective-stops).
-- Scheduling itself (use cron / GitHub Actions — see
-  [Headless](#headless--automated-cron-github-actions)).
+- Unattended scheduling without a running process: Studio's scheduler
+  only runs while `msts-trader ui` is open. Otherwise use cron / GitHub
+  Actions (see [Headless](#headless--automated-cron-github-actions)).
 
 ## Troubleshooting
 
@@ -1048,6 +1086,17 @@ uv run ruff format --check msts_trader   # or `ruff format msts_trader` to apply
 
 ```
 
+The Studio front-end lives in `web/` (Vite + React + TypeScript). Its
+build is committed to `msts_trader/ui/static/`, so installs never need
+Node. After changing `web/`:
+
+```bash
+cd web && npm ci && npm run build   # rewrites msts_trader/ui/static
+```
+
+For hot reload, run `MSTS_UI_DEV_ORIGIN=http://localhost:5173 msts-trader ui --no-browser`,
+then `npm run dev` in `web/` and open `http://localhost:5173/?t=<token>`.
+
 The test suite covers:
 
 - CSV parser (header validation, weights, leverage, comments, dup/neg guards)
@@ -1059,6 +1108,9 @@ The test suite covers:
 - Safety (max-notional cap, stale-CSV guard), retry/backoff, idempotency
 - Config file parsing, notifications formatting/dispatch
 - CLI (help, version, brokers list, doctor, login, no-creds clean exit)
+- Studio: indicators vs published references, a lookahead canary, block
+  evaluation, Composer import, API token/origin guard, and a real
+  `rebalance --sleeve` subprocess against the paper broker
 
 Live brokerage adapters are not exercised against real APIs in CI — they
 need credentials and can move real money. The tests verify structure;
