@@ -53,8 +53,12 @@ def last_scheduled_period(s: Symphony) -> str | None:
 
 
 def due(s: Symphony, now: datetime) -> bool:
+    """`now` may be in any timezone (or naive = this machine's local time):
+    everything is decided on the New York clock, so a machine in Sydney or
+    London runs at 15:50 ET, and each side's DST change is handled."""
     if not s.deploy.schedule_enabled:
         return False
+    now = now.astimezone(ET)
     today = now.date()
     if is_weekend(today) or is_holiday(today):
         return False
@@ -62,6 +66,18 @@ def due(s: Symphony, now: datetime) -> bool:
     if not (run_time(s, today) <= now < close):
         return False
     return last_scheduled_period(s) != period_key(today, s.rebalance)
+
+
+def tz_status() -> dict:
+    """Clock facts for the UI: the machine's zone vs the market's."""
+    local = datetime.now().astimezone()
+    et = local.astimezone(ET)
+    return {
+        "market_tz": "America/New_York",
+        "market_now": et.isoformat(timespec="seconds"),
+        "local_tz": local.tzname(),
+        "local_now": local.isoformat(timespec="seconds"),
+    }
 
 
 class Scheduler:
@@ -134,6 +150,7 @@ class Scheduler:
                     }
                 )
         return {
+            **tz_status(),
             "running": bool(self._thread and self._thread.is_alive()),
             "last_tick": self.last_tick,
             "last_error": self.last_error,

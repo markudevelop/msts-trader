@@ -21,6 +21,7 @@ import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from ..market_hours import ET
 from . import prices, store
 from .evaluate import EvalError, evaluate, max_lookback, to_csv
 from .model import Symphony, tickers
@@ -36,7 +37,7 @@ class RunError(RuntimeError):
 
 def history_start(sym: Symphony, today: date | None = None) -> date:
     """Calendar start date that covers the strategy's warm-up with margin."""
-    today = today or date.today()
+    today = today or datetime.now(ET).date()
     days = int(max_lookback(sym) * 1.6) + 60
     return today - timedelta(days=days)
 

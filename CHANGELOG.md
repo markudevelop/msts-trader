@@ -23,6 +23,11 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
   Backtest tab to overlay them on a common date window, with a side-by-side
   metrics table, drawdowns and the correlation of daily returns
   (`POST /api/compare`).
+- Studio scheduler: explicitly timezone-independent. Schedules always run
+  on New York time (tested from Sydney across both US and Australian DST
+  changes), and the Deploy tab shows the next run in ET and your local time.
+  `tzdata` is now a direct Windows dependency, so the New York clock
+  resolves on a bare Windows install.
 
 ## [0.34.0] — 2026-09-28
 

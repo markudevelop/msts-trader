@@ -129,7 +129,11 @@ shaped by that history.
 ### Scheduler
 
 While `msts-trader ui` is running, enabled strategies run at their
-schedule time (US/Eastern) on trading days. On half-days the run moves to
+schedule time on the **New York market clock** on trading days, whatever
+timezone the computer is in. For example, 15:50 ET is about 05:50 (AEST) or
+06:50–07:50 (AEDT) the next morning in Sydney, and both sides' daylight-saving
+changes are handled. The Deploy tab shows the next run in both ET and your
+local time. On half-days the run moves to
 10 minutes before the early close. Each strategy runs once per rebalance
 period, which is recorded in the run log, so restarts never double-run. If
 **Allow live orders** is off, a scheduled run is a dry-run preview.

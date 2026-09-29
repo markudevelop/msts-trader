@@ -390,3 +390,40 @@ def test_oos_multi_day_actual_vs_model(studio_home):
     assert r["metrics"]["actual_return"] == pytest.approx(r["actual"]["nav"][-1] / 10000 - 1, abs=1e-6)
     assert abs(r["metrics"]["tracking_gap"]) < 0.02
     assert r["metrics"]["pnl"] == pytest.approx(r["actual"]["nav"][-1] - 10000, abs=0.01)
+
+
+# ── scheduler runs on New York time whatever the machine's timezone ───────
+SYD = __import__("zoneinfo").ZoneInfo("Australia/Sydney")
+
+
+def test_scheduler_uses_new_york_clock_from_sydney(studio_home):
+    s = make_sym(schedule_enabled=True, schedule_time="15:50")
+    store.save(s)
+    # Tue 2026-09-29 15:55 ET == Wed 2026-09-30 05:55 AEST in Sydney
+    syd = datetime(2026, 9, 29, 15, 55, tzinfo=ET).astimezone(SYD)
+    assert (syd.day, syd.hour, syd.minute) == (30, 5, 55)
+    assert sched.due(s, syd)  # judged on the NY date/time, not Sydney's Wednesday
+    assert not sched.due(s, datetime(2026, 9, 29, 15, 40, tzinfo=ET).astimezone(SYD))
+    # Sat 2026-10-03 05:55 AEST is still Friday afternoon in New York -> a trading day
+    fri = datetime(2026, 10, 3, 5, 55, tzinfo=SYD)
+    assert fri.astimezone(ET).weekday() == 4 and sched.due(s, fri)
+    # Mon 2026-10-05 05:55 AEDT is Sunday in New York -> no run
+    assert not sched.due(s, datetime(2026, 10, 5, 5, 55, tzinfo=SYD))
+    res = sched.Scheduler().tick(syd)
+    assert [r["period"] for r in res] == ["2026-09-29"]  # NY trading date, not Sydney's
+
+
+def test_scheduler_follows_new_york_dst_not_local_dst():
+    s = make_sym(schedule_enabled=True, schedule_time="15:50")
+    # US DST ends 2026-11-01; Sydney DST started 2026-10-04. 15:50 ET maps to
+    # 06:50 AEDT before the US change and 07:50 AEDT after it.
+    before = sched.run_time(s, datetime(2026, 10, 30).date()).astimezone(SYD)
+    after = sched.run_time(s, datetime(2026, 11, 2).date()).astimezone(SYD)
+    assert (before.hour, before.minute) == (6, 50) and (after.hour, after.minute) == (7, 50)
+    assert sched.due(s, datetime(2026, 11, 3, 7, 55, tzinfo=SYD))  # Mon 15:55 EST
+    assert not sched.due(s, datetime(2026, 11, 3, 6, 55, tzinfo=SYD))  # Mon 14:55 EST: too early
+
+
+def test_scheduler_state_reports_both_clocks():
+    st = sched.tz_status()
+    assert st["market_tz"] == "America/New_York" and st["market_now"][-6:] in ("-04:00", "-05:00")

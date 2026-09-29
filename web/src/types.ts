@@ -199,6 +199,9 @@ export interface SleeveLedger {
 
 export interface SchedulerState {
   running: boolean;
+  market_now?: string;
+  local_tz?: string;
+  local_now?: string;
   last_tick?: string | null;
   last_error?: string | null;
   running_now?: string | null;

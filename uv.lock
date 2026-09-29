@@ -1469,6 +1469,7 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "rich" },
     { name = "tastytrade" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
 
 [package.optional-dependencies]
@@ -1537,6 +1538,7 @@ requires-dist = [
     { name = "schwab-py", marker = "extra == 'all'", specifier = ">=1.4" },
     { name = "schwab-py", marker = "extra == 'schwab'", specifier = ">=1.4" },
     { name = "tastytrade", specifier = "==11.0.4" },
+    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2024.1" },
     { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.29" },
     { name = "uvicorn", marker = "extra == 'ui'", specifier = ">=0.29" },
     { name = "yfinance", marker = "extra == 'all'", specifier = ">=0.2.40" },

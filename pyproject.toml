@@ -29,6 +29,9 @@ dependencies = [
     "keyring>=24",
     "pydantic>=2.5",
     "python-dateutil>=2.9",
+    # Windows ships no IANA tz database; market hours and the Studio scheduler
+    # run on America/New_York regardless of the machine's own timezone.
+    "tzdata>=2024.1; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

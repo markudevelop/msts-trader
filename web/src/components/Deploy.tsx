@@ -101,8 +101,12 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
             <label className="check">
               <input type="checkbox" checked={d.schedule_enabled} onChange={(e) => set({ schedule_enabled: e.target.checked })} />
               Run automatically at
-              <input type="time" value={d.schedule_time} disabled={!d.schedule_enabled} onChange={(e) => set({ schedule_time: e.target.value })} /> ET,{" "}
-              {draft.rebalance}
+              <input type="time" value={d.schedule_time} disabled={!d.schedule_enabled} onChange={(e) => set({ schedule_time: e.target.value })} /> New
+              York time (ET), {draft.rebalance}
+              <span className="muted small">
+                {" "}
+                = {etToLocal(d.schedule_time)} your time
+              </span>
             </label>
           </div>
           <div className={`live-toggle ${d.live_enabled ? "on" : ""}`}>
@@ -212,9 +216,16 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
             <p className="muted small">Scheduler is off (started with --no-scheduler).</p>
           )}
           {sched?.last_error && <div className="alert error small">{sched.last_error}</div>}
+          {sched?.market_now && (
+            <p className="muted small">
+              Runs on the New York market clock, not this computer's. Now: <b>{sched.market_now.slice(11, 16)} ET</b> · {sched.local_now?.slice(11, 16)}{" "}
+              {sched.local_tz} here.
+            </p>
+          )}
           {sched?.upcoming?.filter((u) => u.strategy === saved.id).map((u) => (
             <p className="small" key={u.strategy}>
-              Next check <b>{u.next_check.replace("T", " ").slice(0, 16)}</b> ET · {u.mode === "live" ? "LIVE" : "dry-run"} · {u.cadence}
+              Next check <b>{u.next_check.replace("T", " ").slice(0, 16)} ET</b> ({localTime(u.next_check)} your time) ·{" "}
+              {u.mode === "live" ? "LIVE" : "dry-run"} · {u.cadence}
             </p>
           ))}
           <p className="muted small">
@@ -482,4 +493,29 @@ function LivePerformance({ sid, tick }: { sid: string; tick: number }) {
       )}
     </section>
   );
+}
+
+/** An ISO timestamp with offset, shown in the browser's own timezone. */
+function localTime(iso: string) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? "–"
+    : d.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
+}
+
+/** "HH:MM" New York time -> the same instant on the viewer's clock (today's DST offsets). */
+function etToLocal(hhmm: string) {
+  const [h, m] = hhmm.split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return "–";
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m));
+  // Find the UTC instant whose New York wall clock reads hh:mm (DST-safe: ask Intl for NY's offset that day).
+  const nyParts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(d);
+  const nyH = Number(nyParts.find((p) => p.type === "hour")?.value);
+  const nyM = Number(nyParts.find((p) => p.type === "minute")?.value);
+  let diff = (h * 60 + m - (nyH * 60 + nyM)) % 1440;
+  if (diff > 720) diff -= 1440;
+  if (diff < -720) diff += 1440;
+  const at = new Date(d.getTime() + diff * 60_000);
+  return at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
 }
