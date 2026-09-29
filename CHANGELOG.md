@@ -10,6 +10,14 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Studio: combine strategies.** After a comparison on the Backtest tab,
+  give each strategy a share and "Backtest blend" to see the combined book
+  next to its parts, then "Save as strategy" to deploy it like any other.
+  A blend is an ordinary strategy: each part becomes a named group under a
+  fixed-weight block, rebalanced as one book at the most frequent of its
+  parts' cadences, or one you pick (`POST /api/combine`).
+
 ## [0.35.0] — 2026-09-29
 
 ### Added

@@ -427,3 +427,50 @@ def test_scheduler_follows_new_york_dst_not_local_dst():
 def test_scheduler_state_reports_both_clocks():
     st = sched.tz_status()
     assert st["market_tz"] == "America/New_York" and st["market_now"][-6:] in ("-04:00", "-05:00")
+
+
+# ── combine (blend strategies into one) ───────────────────────────────────
+def _qqq(sid="q", rebalance="daily"):
+    return Symphony.model_validate(
+        {"id": sid, "name": "QQQ", "rebalance": rebalance, "children": [{"step": "asset", "ticker": "QQQ"}]}
+    )
+
+
+def test_combine_structure():
+    from msts_trader.symphony.model import combine
+
+    blend = combine([(make_sym("a"), 0.7), (_qqq(rebalance="monthly"), 0.3)], id="mix", name="Mix")
+    top = blend.children[0]
+    assert top.step == "wt-cash-specified" and [g.weight for g in top.children] == [0.7, 0.3]
+    assert [g.name for g in top.children] == ["Momo", "QQQ"] and blend.rebalance == "daily"  # most frequent
+    assert "70% Momo" in blend.description
+    with pytest.raises(ValueError):
+        combine([(make_sym("a"), 1.0)], id="x", name="x")
+    with pytest.raises(ValueError):
+        combine([(make_sym("a"), -0.1), (_qqq(), 1.0)], id="x", name="x")
+
+
+def test_blend_return_is_weighted_sum_of_parts():
+    """Daily parts, daily blend, no costs: every day's blend return is exactly
+    0.5*rA + 0.5*rB — the blend is the two strategies run side by side."""
+    from msts_trader.symphony.model import combine
+
+    closes = _closes(["SPY", "TLT", "QQQ"])
+    a, b = make_sym("a"), _qqq()
+    blend = combine([(a, 0.5), (b, 0.5)], id="mix", name="Mix")
+    ra, rb, rm = (backtest.run(x, closes, cost_bps=0, benchmark=None) for x in (a, b, blend))
+    assert ra["dates"] == rb["dates"] == rm["dates"]
+    ea, eb, em = (np.asarray(r["equity"]) for r in (ra, rb, rm))
+    np.testing.assert_allclose(em[1:] / em[:-1], 0.5 * (ea[1:] / ea[:-1]) + 0.5 * (eb[1:] / eb[:-1]), rtol=1e-5)
+
+
+def test_api_combine_then_compare_and_save(client):
+    a, b = make_sym("a").model_dump(by_alias=True), _qqq().model_dump(by_alias=True)
+    blend = client.post("/api/combine", json={"strategies": [a, b], "weights": [0.6, 0.4]}, headers=H()).json()
+    assert blend["id"] == "__blend__" and blend["name"] == "Momo + QQQ"
+    cmp = client.post("/api/compare", json={"strategies": [a, b, blend], "cost_bps": 0}, headers=H()).json()
+    assert [x["id"] for x in cmp["series"]] == ["a", "q", "__blend__"]
+    saved = client.post("/api/strategies", json={**blend, "id": None, "name": "My blend"}, headers=H()).json()
+    assert saved["id"] == "my-blend" and store.get("my-blend").children[0].step == "wt-cash-specified"
+    bad = client.post("/api/combine", json={"strategies": [a, b], "weights": [1.0]}, headers=H())
+    assert bad.status_code == 422

@@ -219,7 +219,19 @@ export default function App() {
             {err && <div className="alert error">{err}</div>}
             <div className="tab-body">
               {route.tab === "build" && <Build draft={draft} setDraft={setDraft} />}
-              {route.tab === "backtest" && <BacktestPanel draft={draft} others={list.filter((x) => x.id !== draft.id)} />}
+              {route.tab === "backtest" && (
+                <BacktestPanel
+                  draft={draft}
+                  others={list.filter((x) => x.id !== draft.id)}
+                  onSaved={async (s) => {
+                    await loadList();
+                    if (dirty && !window.confirm("Open the new blend? Unsaved changes to this strategy will be discarded.")) return;
+                    setSaved(s);
+                    setDraft(s);
+                    window.location.hash = `/${s.id}/build`;
+                  }}
+                />
+              )}
               {route.tab === "deploy" && (
                 <DeployPanel draft={draft} saved={saved} dirty={dirty} meta={meta} onDeploy={(deploy) => setDraft({ ...draft, deploy })} onSave={save} />
               )}

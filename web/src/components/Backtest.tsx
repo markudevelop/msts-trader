@@ -15,6 +15,8 @@ const ROWS: { label: string; key: keyof Metrics; fmt: (v: number | null | undefi
   { label: "Total return", key: "total_return", fmt: (v) => pct(v, 0), better: "high" },
 ];
 
+const BLEND_ID = "__blend__";
+
 const money = (v: number) => (v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : `$${Math.round(v).toLocaleString()}`);
 const pctFmt = (v: number) => `${v.toFixed(0)}%`;
 
@@ -26,7 +28,15 @@ function drawdown(eq: number[]) {
   });
 }
 
-export function BacktestPanel({ draft, others }: { draft: Strategy; others: StrategySummary[] }) {
+export function BacktestPanel({
+  draft,
+  others,
+  onSaved,
+}: {
+  draft: Strategy;
+  others: StrategySummary[];
+  onSaved: (s: Strategy) => void;
+}) {
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [cost, setCost] = useState(5);
@@ -37,6 +47,7 @@ export function BacktestPanel({ draft, others }: { draft: Strategy; others: Stra
   const [res, setRes] = useState<BacktestResult | null>(null);
   const [cmp, setCmp] = useState<CompareResult | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+  const [parts, setParts] = useState<Strategy[]>([]);
 
   const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id].slice(0, 7)));
 
@@ -48,6 +59,7 @@ export function BacktestPanel({ draft, others }: { draft: Strategy; others: Stra
       if (picked.length) {
         const rest = await Promise.all(picked.map((id) => api<Strategy>(`/strategies/${id}`)));
         setCmp(await api<CompareResult>("/compare", { body: { strategies: [draft, ...rest], ...common } }));
+        setParts([draft, ...rest]);
         setRes(null);
       } else {
         setRes(await api<BacktestResult>("/backtest", { body: { strategy: draft, ...common } }));
@@ -100,6 +112,14 @@ export function BacktestPanel({ draft, others }: { draft: Strategy; others: Stra
       )}
       {res && <Single res={res} name={draft.name} log={log} setLog={setLog} />}
       {cmp && <Compare cmp={cmp} log={log} setLog={setLog} />}
+      {cmp && parts.length > 1 && (
+        <CombineCard
+          parts={parts}
+          onResult={setCmp}
+          onSaved={onSaved}
+          settings={{ start: start || null, end: end || null, cost_bps: cost, benchmark: bench }}
+        />
+      )}
     </div>
   );
 }
@@ -222,9 +242,10 @@ function Compare({ cmp, log, setLog }: { cmp: CompareResult; log: boolean; setLo
             </thead>
             <tbody>
               {cmp.series.map((x, i) => (
-                <tr key={x.id}>
+                <tr key={x.id} className={x.id === BLEND_ID ? "blend-row" : ""}>
                   <td>
                     <span className="swatch" style={{ background: colors[i] }} /> {x.name}
+                    {x.id === BLEND_ID && <span className="pill pill-blend">blend</span>}
                   </td>
                   {ROWS.map((r) => {
                     const v = x.metrics[r.key] as number | null;
@@ -340,6 +361,121 @@ function Allocations({ res }: { res: BacktestResult }) {
           {all ? "Show fewer" : `Show all ${rows.length}`}
         </button>
       )}
+    </div>
+  );
+}
+
+type Settings = { start: string | null; end: string | null; cost_bps: number; benchmark: string };
+
+function CombineCard({
+  parts,
+  onResult,
+  onSaved,
+  settings,
+}: {
+  parts: Strategy[];
+  onResult: (c: CompareResult) => void;
+  onSaved: (s: Strategy) => void;
+  settings: Settings;
+}) {
+  const even = Math.round((100 / parts.length) * 100) / 100;
+  const [w, setW] = useState<number[]>(() => parts.map(() => even));
+  const [cadence, setCadence] = useState<string>("auto");
+  const [name, setName] = useState("");
+  const [blend, setBlend] = useState<Strategy | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const key = parts.map((p) => p.id).join("|");
+  const [lastKey, setLastKey] = useState(key);
+  if (key !== lastKey) {
+    // a new comparison set: reset to equal weights
+    setLastKey(key);
+    setW(parts.map(() => even));
+    setBlend(null);
+  }
+  const sum = w.reduce((a, b) => a + b, 0);
+
+  const build = () =>
+    api<Strategy>("/combine", {
+      body: {
+        strategies: parts,
+        weights: w.map((x) => x / 100),
+        name: name.trim() || null,
+        rebalance: cadence === "auto" ? null : cadence,
+      },
+    });
+
+  const run = async () => {
+    setBusy("run");
+    setErr(null);
+    try {
+      const b = await build();
+      setBlend(b);
+      onResult(await api<CompareResult>("/compare", { body: { strategies: [...parts, b], ...settings } }));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const save = async () => {
+    setBusy("save");
+    setErr(null);
+    try {
+      const b = blend ?? (await build());
+      const body: Partial<Strategy> = { ...b, name: name.trim() || b.name };
+      delete body.id;
+      onSaved(await api<Strategy>("/strategies", { body }));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="card-plain">
+      <div className="section-head">
+        <h3>Combine into one strategy</h3>
+        <span className={`small ${Math.abs(sum - 100) < 0.01 ? "pos" : "muted"}`}>Σ {Math.round(sum * 100) / 100}%</span>
+      </div>
+      <p className="muted small">
+        Run these strategies side by side as one book: each gets a fixed share and the blend rebalances back to those shares. Under 100% leaves
+        cash; over 100% is leverage. A saved blend deploys like any other strategy.
+      </p>
+      <div className="combine-rows">
+        {parts.map((p, i) => (
+          <label key={p.id} className="combine-row">
+            <span className="grow">{p.name}</span>
+            <NumInput value={w[i]} onChange={(v) => setW(w.map((x, j) => (j === i ? v : x)))} min={0} max={300} step={5} />%
+          </label>
+        ))}
+      </div>
+      <div className="btn-row">
+        <button className="btn ghost small" onClick={() => setW(parts.map(() => even))}>
+          Equal weights
+        </button>
+        <label className="inline small">
+          Rebalance
+          <select value={cadence} onChange={(e) => setCadence(e.target.value)}>
+            <option value="auto">auto (most frequent part)</option>
+            {["daily", "weekly", "monthly", "quarterly", "yearly"].map((c) => (
+              <option key={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+        <input className="grow" placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
+      </div>
+      <div className="btn-row">
+        <button className="btn primary" onClick={run} disabled={!!busy || sum <= 0}>
+          {busy === "run" ? "Backtesting…" : "Backtest blend"}
+        </button>
+        <button className="btn" onClick={save} disabled={!!busy || sum <= 0}>
+          {busy === "save" ? "Saving…" : "Save as strategy"}
+        </button>
+      </div>
+      {err && <div className="alert error small">{err}</div>}
     </div>
   );
 }

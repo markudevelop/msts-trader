@@ -85,6 +85,24 @@ growth curves, a side-by-side metrics table with the best value in each
 column highlighted, drawdowns, and the correlation of daily returns. A
 correlation near 1 means two strategies are close to the same bet.
 
+### Combining strategies
+
+Below the comparison, **Combine into one strategy** turns the strategies you
+compared into a blend. Give each one a share (for example 50% / 50%), then:
+
+- **Backtest blend** adds it to the comparison, so it's measured against its
+  parts on the same days.
+- **Save as strategy** stores it as a normal strategy you can edit, deploy,
+  schedule and track.
+
+A blend is the parts run side by side in one sleeve. Each day it holds
+share × what each part would hold, and rebalances back to the shares. It
+rebalances at the most frequent cadence among its parts (a monthly part in a
+daily blend is re-evaluated daily) unless you pick one. Shares under 100%
+leave cash; over 100% is leverage. Tickers that several parts hold are netted
+into one position, so a blend trades less than running each part in its own
+sleeve.
+
 ## Deploying
 
 Each strategy trades as its own **sleeve**. The strategy id is the sleeve

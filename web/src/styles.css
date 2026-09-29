@@ -1081,3 +1081,27 @@ input.num.wide {
 .metric-value.lose {
   color: var(--neg);
 }
+
+/* ── combine ──────────────────────────────────────── */
+.combine-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.combine-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+.blend-row td {
+  font-weight: 600;
+}
+.pill-blend {
+  margin-left: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+}

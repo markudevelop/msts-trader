@@ -212,3 +212,43 @@ def tickers(sym: Symphony) -> list[str]:
 def slugify(name: str) -> str:
     s = re.sub(r"[^A-Za-z0-9]+", "-", name.strip()).strip("-").lower()
     return (s or "strategy")[:40]
+
+
+_CADENCE_ORDER = ("daily", "weekly", "monthly", "quarterly", "yearly")
+
+
+def combine(parts: list[tuple[Symphony, float]], *, id: str, name: str, rebalance: Rebalance | None = None) -> Symphony:
+    """Blend strategies into ONE strategy: each part becomes a named group
+    under a fixed-weight parent (`wt-cash-specified`), so the blend holds
+    weight_i x (what part i would hold) and is rebalanced as one book.
+
+    Weights are fractions as given: summing under 1 leaves cash, over 1 is
+    leverage. The blend rebalances at the most frequent of its parts'
+    cadences unless `rebalance` is set — a monthly part inside a daily blend
+    is re-evaluated daily, which is the price of a single book.
+    """
+    if len(parts) < 2:
+        raise ValueError("combine needs at least two strategies")
+    if any(w < 0 for _, w in parts) or sum(w for _, w in parts) <= 0:
+        raise ValueError("combine weights must be >= 0 and not all zero")
+    groups = []
+    for sym, w in parts:
+        groups.append(
+            {
+                "step": "group",
+                "name": sym.name,
+                "weight": w,
+                "children": [c.model_dump(by_alias=True) for c in sym.children],
+            }
+        )
+    cadence = rebalance or min((p.rebalance for p, _ in parts), key=_CADENCE_ORDER.index)
+    desc = "Blend of " + ", ".join(f"{round(w * 100, 2):g}% {p.name}" for p, w in parts) + "."
+    return Symphony.model_validate(
+        {
+            "id": id,
+            "name": name,
+            "description": desc,
+            "rebalance": cadence,
+            "children": [{"step": "wt-cash-specified", "children": groups}],
+        }
+    )

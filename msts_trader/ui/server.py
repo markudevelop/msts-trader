@@ -32,7 +32,7 @@ from ..brokers import SUPPORTED
 from ..market_hours import market_status
 from ..symphony import backtest, composer_import, performance, prices, runner, store
 from ..symphony.evaluate import EvalError
-from ..symphony.model import INDICATORS, Symphony, slugify, tickers
+from ..symphony.model import INDICATORS, Symphony, combine, slugify, tickers
 
 STATIC_DIR = Path(__file__).parent / "static"
 TOKEN_HEADER = "x-msts-token"
@@ -212,6 +212,26 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
             return backtest.compare(syms, closes, start=d0, end=d1, cost_bps=cost_bps, benchmark=bm)
         except (EvalError, prices.PriceError) as e:
             _bad(422, str(e))
+
+    @app.post("/api/combine")
+    def combine_strategies(
+        strategies: list[dict] = Body(...),
+        weights: list[float] = Body(...),
+        name: str | None = Body(None),
+        rebalance: str | None = Body(None),
+    ):
+        """Build (not save) a blended strategy from 2-8 strategies."""
+        syms = [_sym_or_422(x) for x in strategies]
+        if not 2 <= len(syms) <= 8 or len(weights) != len(syms):
+            _bad(422, "combine 2 to 8 strategies, one weight each")
+        if rebalance is not None and rebalance not in ("daily", "weekly", "monthly", "quarterly", "yearly"):
+            _bad(422, "bad rebalance cadence")
+        label = (name or "").strip() or " + ".join(x.name for x in syms)[:80]
+        try:
+            blend = combine(list(zip(syms, weights)), id="__blend__", name=label, rebalance=rebalance)
+        except ValueError as e:
+            _bad(422, str(e))
+        return blend.model_dump(by_alias=True)
 
     @app.get("/api/strategies/{sid}/performance")
     def strategy_performance(sid: str, benchmark: str = "SPY"):
