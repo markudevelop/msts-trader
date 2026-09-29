@@ -1,0 +1,4 @@
+# Studio front-end: the committed bundle must be byte-identical to a CI (Linux)
+# build, so pin LF for the source and the output on every platform.
+web/** text=auto eol=lf
+msts_trader/ui/static/** text=auto eol=lf
