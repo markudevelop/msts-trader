@@ -52,6 +52,7 @@ class Hyperliquid:
     supports_moc = False  # crypto perps trade 24/7 — no closing auction
     supports_stops = False  # perps use trigger orders; equity stop path never routes here
     supports_limit_chase = True  # GTC limit via exchange.order (EXPERIMENTAL — see module docstring)
+    supports_extended_hours = False
 
     # The rebalance flow translates target tickers through this before diffing,
     # so a "BTC-USD" CSV matches the "BTC" key positions() returns (otherwise
@@ -129,6 +130,12 @@ class Hyperliquid:
         return int(a.get("szDecimals", 4))
 
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
+        if order.extended_hours:
+            return {
+                "status": "error",
+                "ticker": order.ticker,
+                "reason": "extended-hours orders require LIMIT execution",
+            }
         coin = _coin(order.ticker)
         # Order.quantity from the diff engine is shares; for HL it is coin size.
         sz = round(float(order.quantity), self._sz_decimals(coin))

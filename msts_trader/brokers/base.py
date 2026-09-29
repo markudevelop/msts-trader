@@ -142,6 +142,7 @@ class Broker(Protocol):
     # the stop API). Others leave it False — when the user asks for
     # --order-type limit-chase the CLI warns once and uses market orders.
     supports_limit_chase: bool = False
+    supports_extended_hours: bool = False
 
     def balances(self) -> Balances:
         """Net liquidating value, cash, equity buying power. Decimals throughout."""
@@ -193,6 +194,8 @@ class Broker(Protocol):
         successful (non-dry-run) submit the result MUST carry a usable
         `order_id` — the engine polls and cancels by it, and aborts loudly if
         it's missing (an unidentifiable live order can't be managed safely).
+        If order.extended_hours is True, enable premarket/after-hours execution
+        using the broker's session/TIF settings. Never submit a market order.
         Whole-share rounding (where the broker requires it for limits) is the
         adapter's responsibility — return status 'skipped' if the size rounds
         away to nothing."""

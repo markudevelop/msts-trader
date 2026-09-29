@@ -73,6 +73,7 @@ class IBKR:
     supports_moc = True  # orderType MOC — whole shares only
     supports_stops = True  # GTC sell stop via ib_insync StopOrder
     supports_limit_chase = True  # LIMIT DAY via ib_insync LimitOrder
+    supports_extended_hours = True
 
     def __init__(
         self,
@@ -239,6 +240,12 @@ class IBKR:
         return MarketOrder(action, qty, account=self.account_id)
 
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
+        if order.extended_hours:
+            return {
+                "status": "error",
+                "ticker": order.ticker,
+                "reason": "extended-hours orders require LIMIT execution",
+            }
         qty = float(round(float(order.quantity), 4))
         if order.moc:
             qty = float(int(qty))  # IBKR closing-auction orders are whole shares
@@ -329,11 +336,11 @@ class IBKR:
         ct = Stock(order.ticker, "SMART", "USD")
         self._ib.qualifyContracts(ct)
         action = "BUY" if order.side == Side.BUY else "SELL"
-        lo = LimitOrder(action, qty, px, account=self.account_id, tif="DAY")
+        lo = LimitOrder(action, qty, px, account=self.account_id, tif="DAY", outsideRth=order.extended_hours)
         try:
             trade = self._ib.placeOrder(ct, lo)
         except Exception as e:
-            return {"status": "error", "reason": str(e), "ticker": order.ticker}
+            return {"status": "error", "reason": str(e), "ticker": order.ticker, "order_live": order.extended_hours}
         for _ in range(20):
             self._ib.sleep(0.1)
             if trade.orderStatus.status in {

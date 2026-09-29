@@ -107,6 +107,7 @@ def is_weekend(d: date) -> bool:
 
 def market_status(now: datetime | None = None) -> MarketStatus:
     now = now or now_et()
+    now = now.astimezone(ET)
     today = now.date()
     if is_weekend(today) or is_holiday(today):
         return MarketStatus("closed", None, _next_open(now))
@@ -122,6 +123,24 @@ def market_status(now: datetime | None = None) -> MarketStatus:
     if rth_close <= t < time(20, 0):
         return MarketStatus("afterhours", None, None)
     return MarketStatus("closed", None, _next_open(now))
+
+
+def trading_session_error(
+    broker: str, *, extended_hours: bool = False, status: MarketStatus | None = None
+) -> str | None:
+    """Equity execution gate shared by rebalance, multi, and the limit chase.
+
+    Broker/venue session restrictions still apply within the US session.
+    Paper and crypto keep their existing round-the-clock behavior.
+    """
+    if broker in ("paper", "hyperliquid"):
+        return None
+    ms = status or market_status()
+    if ms.status == "open" or (extended_hours and ms.status in ("premarket", "afterhours")):
+        return None
+    if ms.status in ("premarket", "afterhours"):
+        return f"Market in {ms.status} session — use --extended-hours for limit-only execution."
+    return f"Market closed. Next open: {ms.next_open}."
 
 
 def _next_open(now: datetime) -> datetime:

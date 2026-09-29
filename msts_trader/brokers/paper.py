@@ -54,6 +54,7 @@ class Paper:
     supports_moc = True  # simulated: fills at the booked price, tagged moc
     supports_stops = True  # simulated GTC stops, persisted in paper state
     supports_limit_chase = True  # simulated marketable-limit fills, persisted
+    supports_extended_hours = True
 
     def __init__(self, starting_cash: str | float | Decimal | None = None):
         if not STATE_PATH.exists():
@@ -144,6 +145,12 @@ class Paper:
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
         # Normalise like quote()/set_quote() do, so a lowercase order ticker
         # can't book a position whose price lookup then misses last_prices.
+        if order.extended_hours:
+            return {
+                "status": "error",
+                "ticker": order.ticker,
+                "reason": "extended-hours orders require LIMIT execution",
+            }
         tkr = order.ticker.upper()
         qty = Decimal(str(round(float(order.quantity), 4)))
         if qty <= 0:

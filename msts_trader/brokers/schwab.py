@@ -63,6 +63,7 @@ class Schwab:
     supports_moc = True  # orderType MARKET_ON_CLOSE
     supports_stops = True  # GTC sell stop via schwab-py order spec
     supports_limit_chase = True  # LIMIT DAY via equity_buy_limit/equity_sell_limit
+    supports_extended_hours = True
 
     # No trailing slash — schwab-py's recommended registration value. Schwab
     # rejects the OAuth redirect when this doesn't EXACTLY match the URL
@@ -194,6 +195,12 @@ class Schwab:
         return out
 
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
+        if order.extended_hours:
+            return {
+                "status": "error",
+                "ticker": order.ticker,
+                "reason": "extended-hours orders require LIMIT execution",
+            }
         qty = int(order.quantity)  # Schwab equity orders are whole shares
         if qty <= 0:
             return {
@@ -257,11 +264,15 @@ class Schwab:
             if order.side == Side.BUY
             else equity_sell_limit(order.ticker, qty, px)
         )
+        if order.extended_hours:
+            from schwab.orders.common import Session
+
+            spec = spec.set_session(Session.SEAMLESS)
         try:
             resp = self._client.place_order(self._account_hash, spec.build())
             resp.raise_for_status()
         except Exception as e:
-            return {"status": "error", "reason": str(e), "ticker": order.ticker}
+            return {"status": "error", "reason": str(e), "ticker": order.ticker, "order_live": order.extended_hours}
         location = resp.headers.get("Location") or ""
         order_id = location.rsplit("/", 1)[-1] if location else None
         return {

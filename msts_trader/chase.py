@@ -7,10 +7,9 @@ extended-hours chase in the msts-live tastytrade runner, but simplified to
 mid-tracking (no bid/ask ladder) so it runs on every adapter's existing
 ``quote()`` API.
 
-RTH-only by design: the market fallback assumes the regular session, and the
-rebalance command already refuses to run pre/after-hours. The point here is
-execution quality during RTH — peg near the mid instead of crossing the whole
-spread with a plain market order.
+Extended-hours orders stay limit-only: the market fallback is forcibly
+disabled, and the session is checked before every submission. Unfilled limits
+are cancelled and reported as incomplete.
 
 Safety properties carried over from the original:
 - cancel-before-reprice: the prior limit is cancelled before the next is
@@ -26,6 +25,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 
 from .models import Order, Side
+from .market_hours import trading_session_error
 
 # Normalized order_status() vocabulary every chase-capable adapter returns.
 WORKING = "working"
@@ -82,6 +82,10 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
     result dict (status/ticker/order_id/...). `sleep` is injectable for tests."""
     say = log if callable(log) else (lambda *a, **k: None)
     cfg = cfg or ChaseConfig()
+    if order.extended_hours:
+        if order.moc or not getattr(broker, "supports_extended_hours", False):
+            return {"status": "error", "ticker": order.ticker, "reason": "extended-hours LIMIT orders unsupported"}
+        cfg = replace(cfg, fallback_to_market=False)
     side = order.side
     qty_total = Decimal(str(order.quantity))
     if qty_total <= 0:
@@ -93,14 +97,15 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
     if dry_run:
         mid = _mid(broker, order)
         if mid is None:
-            say(f"[yellow]  ⚠ chase {order.ticker}: no quote — would place a MARKET order[/yellow]")
+            action = "would fall back to market" if cfg.fallback_to_market else "no order; fallback disabled"
+            say(f"[yellow]  ⚠ chase {order.ticker}: no quote — {action}[/yellow]")
             return {
                 "status": "dry-run",
                 "ticker": order.ticker,
                 "side": side.value,
                 "quantity": float(qty_total),
                 "dry_run": True,
-                "reason": "chase: no quote; would fall back to market",
+                "reason": f"chase: no quote; {action}",
             }
         limit = limit_from_mid(side, mid, cfg.aggression)
         say(
@@ -120,6 +125,7 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
     total_cost = Decimal(0)
     filled_oid = None
     last_oid = None
+    stop_reason = None
 
     polls = max(1, round(cfg.reprice_interval / cfg.poll_interval)) if cfg.poll_interval > 0 else 1
 
@@ -206,13 +212,22 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
         if rem <= 0:
             break
 
+        if order.extended_hours:
+            stop_reason = trading_session_error(broker.name, extended_hours=True)
+            if stop_reason:
+                break
         mid = _mid(broker, order)
         if mid is None:
             # The user picked limit-chase specifically to control the spread —
             # losing the quote and crossing with a market order is worth shouting about.
             say(
                 f"[yellow]  ⚠ chase {order.ticker}: no quote on attempt {attempt} — "
-                f"falling back to a MARKET order (spread NOT controlled)[/yellow]"
+                + (
+                    "falling back to a MARKET order (spread NOT controlled)"
+                    if cfg.fallback_to_market
+                    else "stopping; market fallback disabled"
+                )
+                + "[/yellow]"
             )
             break
         limit = limit_from_mid(side, mid, cfg.aggression)
@@ -224,6 +239,12 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
             last_oid = None
 
         rem_order = replace(order, quantity=rem, estimated_price=limit)
+        if order.extended_hours:
+            # Fetching a quote can cross the session boundary (notably 20:00,
+            # when an extended-eligible order could enter an overnight venue).
+            stop_reason = trading_session_error(broker.name, extended_hours=True)
+            if stop_reason:
+                break
         try:
             placed = broker.place_limit(rem_order, limit, dry_run=False)
         except Exception as e:
@@ -233,11 +254,16 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
                 "side": side.value,
                 "reason": f"chase: place_limit failed: {e}",
                 "filled_quantity": float(filled_qty),
+                "order_live": order.extended_hours,  # submission may have reached the broker
             }
         if str(placed.get("status") or "").lower() in _PLACE_FAILED:
+            if placed.get("order_live"):
+                return {**placed, "filled_quantity": float(filled_qty)}
+            stop_reason = placed.get("reason")
             say(
                 f"  chase {order.ticker}: place_limit {placed.get('status')} "
-                f"({placed.get('reason', '')}) — falling through to market"
+                f"({placed.get('reason', '')}) — "
+                + ("falling through to market" if cfg.fallback_to_market else "stopping; market fallback disabled")
             )
             last_oid = None
             break
@@ -363,5 +389,5 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
         "status": "error",
         "ticker": order.ticker,
         "side": side.value,
-        "reason": f"chase: unfilled after {cfg.retries} rungs (fallback disabled)",
+        "reason": stop_reason or f"chase: unfilled after {cfg.retries} rungs (fallback disabled)",
     }

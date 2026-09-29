@@ -44,6 +44,7 @@ class FakeBroker:
 
     name = "fake"
     supports_limit_chase = True
+    supports_extended_hours = True
 
     def __init__(
         self, *, mid="100", fill_attempt=None, partials=None, cancel_ok=True, quote_none=False, market_status="FILLED"

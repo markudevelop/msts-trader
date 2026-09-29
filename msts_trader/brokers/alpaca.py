@@ -36,6 +36,7 @@ class Alpaca:
     supports_moc = True  # TimeInForce.CLS — whole shares only
     supports_stops = True  # GTC SELL STOP via StopOrderRequest (whole shares)
     supports_limit_chase = True  # LIMIT DAY via LimitOrderRequest
+    supports_extended_hours = True
 
     def __init__(self, api_key: str, secret_key: str, paper: bool = False):
         if not _ALPACA_OK:
@@ -102,6 +103,12 @@ class Alpaca:
         return out
 
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
+        if order.extended_hours:
+            return {
+                "status": "error",
+                "ticker": order.ticker,
+                "reason": "extended-hours orders require LIMIT execution",
+            }
         qty = round(float(order.quantity), 4)
         if order.moc:
             # Alpaca only accepts whole shares with TimeInForce.CLS.
@@ -158,11 +165,18 @@ class Alpaca:
                 "dry_run": True,
             }
         side = OrderSide.BUY if order.side == Side.BUY else OrderSide.SELL
-        req = LimitOrderRequest(symbol=order.ticker, qty=qty, side=side, time_in_force=TimeInForce.DAY, limit_price=px)
+        req = LimitOrderRequest(
+            symbol=order.ticker,
+            qty=qty,
+            side=side,
+            time_in_force=TimeInForce.DAY,
+            limit_price=px,
+            extended_hours=order.extended_hours,
+        )
         try:
             resp = self._client.submit_order(req)
         except Exception as e:
-            return {"status": "error", "reason": str(e), "ticker": order.ticker}
+            return {"status": "error", "reason": str(e), "ticker": order.ticker, "order_live": order.extended_hours}
         return {
             "status": status_str(getattr(resp, "status", None)),
             "ticker": order.ticker,

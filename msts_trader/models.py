@@ -44,6 +44,9 @@ class Order:
     moc: bool = False
     # Protective stop to attach after this BUY fills (fraction below entry).
     stop_pct: Decimal | None = None
+    # Equity premarket/after-hours eligibility. LIMIT orders only; never
+    # converted to a market order, even if a chase cannot fill.
+    extended_hours: bool = False
 
 
 @dataclass

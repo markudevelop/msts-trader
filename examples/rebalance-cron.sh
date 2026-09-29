@@ -11,8 +11,8 @@
 #   5. Add to crontab (runs 15:50 ET on weekdays — adjust for your TZ):
 #        50 15 * * 1-5  /path/to/rebalance-cron.sh >> ~/.msts-trader/cron.log 2>&1
 #
-# msts-trader refuses to trade outside US regular hours and only acts on
-# tickers that drift past the threshold, so a daily run is safe.
+# Equity trading uses US regular hours unless extended_hours is enabled in
+# config. The drift threshold still controls when a rebalance is needed.
 
 set -euo pipefail
 

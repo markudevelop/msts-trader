@@ -33,6 +33,7 @@ class Tradier:
     supports_moc = False  # Tradier's API has no closing-auction order type
     supports_stops = True  # GTC sell stop via type=stop
     supports_limit_chase = True  # LIMIT DAY via type=limit (whole shares)
+    supports_extended_hours = True
 
     def __init__(self, access_token: str, account_id: str | None = None, sandbox: bool = False, timeout: float = 20.0):
         if not access_token:
@@ -184,6 +185,12 @@ class Tradier:
         return total
 
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
+        if order.extended_hours:
+            return {
+                "status": "error",
+                "ticker": order.ticker,
+                "reason": "extended-hours orders require LIMIT execution",
+            }
         qty = int(order.quantity)  # whole shares
         if qty <= 0:
             return {"status": "skipped", "reason": "qty rounds to 0 (Tradier whole shares)", "ticker": order.ticker}
@@ -226,6 +233,22 @@ class Tradier:
         """LIMIT DAY order for the chase engine. Tradier equities are
         whole-share — a size that rounds to 0 is skipped (the engine then
         market-fallbacks the dust)."""
+        duration = "day"
+        if order.extended_hours:
+            from datetime import time
+            from ..market_hours import market_status, now_et
+
+            now = now_et()
+            session = market_status(now).status
+            t = now.time()
+            # Tradier requires pre/post orders to be entered during that
+            # session, including its narrower premarket and closing cutoffs.
+            if session == "premarket" and time(7) <= t < time(9, 24):
+                duration = "pre"
+            elif session == "afterhours" and time(16) <= t < time(19, 55):
+                duration = "post"
+            elif session != "open":
+                return {"status": "error", "ticker": order.ticker, "reason": "Tradier pre/post session closed"}
         qty = int(order.quantity)
         if qty <= 0:
             return {"status": "skipped", "reason": "qty rounds to 0 (Tradier whole shares)", "ticker": order.ticker}
@@ -236,7 +259,7 @@ class Tradier:
             "side": side,
             "quantity": qty,
             "type": "limit",
-            "duration": "day",
+            "duration": duration,
             "price": f"{float(limit_price):.2f}",
         }
         if dry_run:
@@ -251,7 +274,10 @@ class Tradier:
                 "dry_run": True,
                 "preview": resp.get("order") or {},
             }
-        resp = self._request("POST", f"/v1/accounts/{self.account_id}/orders", params)
+        try:
+            resp = self._request("POST", f"/v1/accounts/{self.account_id}/orders", params)
+        except Exception as e:
+            return {"status": "error", "reason": str(e), "ticker": order.ticker, "order_live": order.extended_hours}
         o = resp.get("order") or {}
         status = o.get("status") or "submitted"
         if str(status).lower() in ("rejected", "error"):

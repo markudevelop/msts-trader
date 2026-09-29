@@ -126,6 +126,49 @@ uv sync --all-extras
 uv run msts-trader --help
 ```
 
+## Upgrade
+
+An upgrade replaces the `msts-trader` command. Broker logins stay in
+the OS keychain, and config, fills, sleeves, and paper state stay in
+`~/.msts-trader/`. Log in again only when a broker itself needs new
+credentials.
+
+### Installed from PyPI
+
+```bash
+uv tool upgrade msts-trader
+```
+
+Extras chosen at install time stay in place. To add or change them:
+
+```bash
+uv tool install --reinstall "msts-trader[all]"
+```
+
+With pip: `pip install --upgrade msts-trader` (or `"msts-trader[all]"`).
+
+### Installed from a zip
+
+Unzip the latest version into the same folder you used the first time
+(for example `C:\utils\msts-trader`), so `pyproject.toml` is at the top
+of that folder. Then, from that folder:
+
+```bash
+uv tool install --reinstall .
+```
+
+Optional brokers: `uv tool install --reinstall ".[all]"`.
+
+### Installed from a git clone
+
+```bash
+git pull
+uv tool install --reinstall ".[all]"
+```
+
+A checkout you run with `uv run` only needs `uv sync --all-extras`
+after the pull.
+
 ## One-time setup
 
 You provide your own broker credentials. They are stored in your OS
@@ -314,6 +357,7 @@ msts-trader rebalance --threshold 0.02                # tighter rebalance (defau
 msts-trader rebalance --csv-file targets.csv          # read from a file
 msts-trader rebalance --moc                           # market-on-close orders (see below)
 msts-trader rebalance --order-type limit-chase        # work each order as a limit pegged to the mid (see below)
+msts-trader rebalance --extended-hours                # premarket / after-hours weights with LIMIT orders only
 msts-trader rebalance --min-weight 0.01               # ignore CSV rows under 1% weight
 msts-trader rebalance --allocation 50000              # weights apply to $50k, not full NAV
 msts-trader --broker paper rebalance --csv-file ...   # test against paper
@@ -337,10 +381,18 @@ msts-trader --broker paper rebalance --csv-file ...   # test against paper
   spread. Safety: the prior limit is **cancelled before each reprice** (and the
   chase aborts rather than risk two live orders if a cancel fails), partial
   fills only re-submit the remainder, and no resting order is ever left behind.
-  **RTH only** (the market fallback assumes the regular session), supported on
+  **RTH by default** (the market fallback assumes the regular session), supported on
   **all brokers**; any that can't chase warn once and use market orders. Also
   available as `order_type = "limit-chase"` in the config file (and in a `multi`
   config, including per-`[[account]]` override).
+- **`--extended-hours`:** opt in to premarket and after-hours weight rebalances.
+  Automatically selects limit-chase and disables market fallback, even if
+  `--chase-fallback` or `order_type = "market"` is configured. Works with
+  **Tastytrade, Alpaca, IBKR, Schwab, Tradier, and paper**. Unfilled remainders
+  are cancelled and reported as incomplete; a failed cancellation is reported
+  as potentially still live and is never retried by self-heal. Existing chase
+  price/retry settings apply. Cannot be combined with `--moc` or `--sleeve`.
+  See [Extended-hours weights](#extended-hours-weights) below.
 - **`--whole-shares`:** round every order *down* to whole shares (buys never
   exceed target, sells never exceed the held quantity). Use it for an IBKR
   account — or any broker/account — without fractional-trading permission on
@@ -431,12 +483,13 @@ telegram_token = "123456:ABC-DEF..."   # optional, instead of MSTS_TELEGRAM_TOKE
 telegram_chat_id = "987654321"          # optional, instead of MSTS_TELEGRAM_CHAT_ID
 margin_aware = true   # default; set false to disable buying-power-fit scaling
 moc = false           # set true to always use market-on-close orders
-order_type = "market" # or "limit-chase": peg a limit to the mid, reprice, then market-fallback (RTH only)
+order_type = "market" # or "limit-chase": peg a limit to the quote and reprice
+extended_hours = false # true forces limit-chase with NO market fallback, including during RTH
 chase_retries = 5     # limit-chase: reprice attempts before the market fallback
 chase_interval = 5    # limit-chase: seconds to wait for a fill before repricing
 chase_poll = 1        # limit-chase: status-poll cadence within each rung (seconds)
 chase_aggression = 0  # limit-chase: fraction past the mid toward the fill side (0 = pure mid)
-chase_fallback = true # limit-chase: market order for any unfilled remainder
+chase_fallback = true # regular-hours limit-chase only; ignored when extended_hours = true
 whole_shares = false  # set true to round every order to whole shares (IBKR/no-fractional accounts)
 min_weight = 0.01     # ignore CSV rows with weight under 1%
 stop_pct = 0.015      # default protective stop for rows with no per-row stop_pct (per-row wins)
@@ -562,8 +615,39 @@ Ready-to-use templates are in [`examples/`](examples/):
 - **IBKR** needs a running TWS / IB Gateway on a machine you control →
   use cron on that machine, not GitHub Actions.
 
-The market-hours guard still applies: a headless run outside US regular
-hours exits without trading, so a daily schedule is safe.
+The market-hours guard applies to headless runs too. Equity trading is
+regular-hours only unless `--extended-hours` (or `extended_hours = true`)
+is enabled. Overnight sessions, weekends, and listed holidays remain blocked.
+
+### Extended-hours weights
+
+```bash
+msts-trader rebalance --broker alpaca --csv-file weights.csv --extended-hours --dry-run
+msts-trader rebalance --broker alpaca --csv-file weights.csv --extended-hours --yes
+msts-trader multi --config accounts.toml --extended-hours --yes
+```
+
+You can also set `extended_hours = true` in TOML, either globally or in a
+`multi` `[[account]]` table. `--no-extended-hours` overrides those settings.
+The app permits equity premarket from 04:00 ET and after-hours until 20:00 ET
+on trading days; each broker's narrower session, symbol eligibility, and
+account permissions still apply. It checks the session again before execution
+and before each chase attempt. Paper remains available at any time;
+Hyperliquid continues its existing 24/7 crypto flow without this equity flag.
+
+| Broker | Extended-hours limit request |
+|--------|------------------------------|
+| Alpaca | DAY limit with [`extended_hours = true`](https://docs.alpaca.markets/us/docs/orders-at-alpaca) |
+| Tastytrade | Limit with [`Ext` time in force](https://developer.tastytrade.com/reference/orders/postAccountsAccountNumberOrders/) |
+| IBKR | DAY limit with [`outsideRth = true`](https://interactivebrokers.github.io/tws-api/classIBApi_1_1Order.html) |
+| Schwab | DAY limit with [`SEAMLESS` session](https://schwab-py.readthedocs.io/en/latest/order-builder.html) |
+| Tradier | Limit with `pre` / `post` duration in its [session windows](https://docs.tradier.com/reference/trading-getting-started): 07:00–09:24 / 16:00–19:55 ET; DAY during regular hours |
+
+Tastytrade, Schwab, and Tradier previews use whole shares in this mode.
+Protective stops retain their existing regular-session behavior; they do not
+provide extended-hours protection. Quotes and liquidity depend on the broker's
+data feed, and limit orders can remain unfilled. Partial or failed execution
+exits with code 1 so an unattended run can detect an incomplete rebalance.
 
 ### Exit codes
 
@@ -573,7 +657,7 @@ For scripting, `rebalance` / `multi` use:
 |------|---------|
 | `0`  | Success — executed, or nothing to do (within drift / dry-run / duplicate) |
 | `1`  | Error — bad/missing creds, malformed CSV, a blocker (e.g. `--max-notional`), stale CSV, or a partial/failed execution |
-| `2`  | Market closed or not in a regular-hours session (equities) |
+| `2`  | Market closed or extended-hours execution not enabled (single-account equities) |
 
 ## Multiple accounts
 
@@ -932,8 +1016,9 @@ Two things to know for a **fresh account**:
 
 ## What it does NOT do (yet)
 
-- Pre-market or after-hours execution for equities. Refuses outside
-  09:30–16:00 ET (crypto via Hyperliquid trades 24/7).
+- Overnight equity execution (before 04:00 or at/after 20:00 ET).
+  Premarket and after-hours weights are supported with `--extended-hours`;
+  the separate `liquidate` command remains regular-hours only.
 - Shorting. Negative weights are rejected.
 - Options or futures.
 - Protective stops or limit-chase under `--sleeve` (sleeve runs are

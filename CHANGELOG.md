@@ -10,6 +10,24 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- Premarket and after-hours weight rebalances via `--extended-hours` or
+  `extended_hours = true`, including multi-account overrides. Tastytrade,
+  Alpaca, IBKR, Schwab, and Tradier send session-eligible limits; paper
+  simulates the same flow. Extended runs always use limit-chase without a
+  market fallback, preserve partial-fill sizing and session intent on
+  self-heal, and recheck market hours before further submissions.
+
+### Fixed
+- Multi-account equity rebalances now apply the same market-hours guard as
+  single-account runs. Failed single-account executions return exit code 1.
+- A within-drift dry-run no longer reconciles live protective stops.
+
+### Docs
+- README now includes upgrade steps for an existing install: PyPI
+  (`uv tool upgrade`), a source zip unzipped over the same folder
+  (`uv tool install --reinstall .`), and a git checkout.
+
 ## [0.38.0] — 2026-09-29
 
 ### Added

@@ -42,6 +42,7 @@ _KNOWN = {
     "quiet",
     "margin_aware",
     "moc",
+    "extended_hours",  # opt in to premarket/after-hours limit execution
     "order_type",  # "market" (default) | "limit-chase"
     "chase_retries",
     "chase_interval",

@@ -31,7 +31,7 @@ from .creds_file import CredsFileError, broker_kwargs_from_env, load_into_env
 from .csv_parser import CSVParseError, parse_csv
 from .diff import DRIFT_THRESHOLD, apply_margin_aware, build_preview
 from .login_errors import explain_login_error
-from .market_hours import market_status
+from .market_hours import market_status, trading_session_error
 from .models import Side
 from .prompts import ask_secret, ask_text, ask_yes_no, env_value, is_interactive
 from .verify import check_convergence, converged_within_buying_power
@@ -125,6 +125,7 @@ def _emit_json(broker, preview, *, dry_run: bool, duplicate: bool, sleeve: str |
                 "quantity": str(o.quantity),
                 "estimated_price": str(o.estimated_price) if o.estimated_price else None,
                 "notional": str(o.notional),
+                "extended_hours": o.extended_hours,
             }
             for o in preview.orders
         ],
@@ -1278,13 +1279,18 @@ def liquidate(
     "--order-type",
     type=click.Choice(["market", "limit-chase"]),
     default=None,
-    help="market (default) or limit-chase: work each order as a LIMIT pegged to the live mid, repricing every few seconds, then fall back to a market order. RTH only; supported brokers fall back to market.",
+    help="market (default) or limit-chase: reprice LIMIT orders near the live quote, then optionally fall back to market during RTH. --extended-hours forces limit-chase without market fallback.",
+)
+@click.option(
+    "--extended-hours/--no-extended-hours",
+    default=None,
+    help="Allow premarket and after-hours weight rebalances using LIMIT orders only (no market fallback).",
 )
 @click.option(
     "--chase-retries",
     type=int,
     default=None,
-    help="limit-chase: reprice attempts before the market fallback (default 5).",
+    help="limit-chase: maximum reprice attempts (default 5).",
 )
 @click.option(
     "--chase-interval",
@@ -1307,7 +1313,7 @@ def liquidate(
 @click.option(
     "--chase-fallback/--no-chase-fallback",
     default=None,
-    help="limit-chase: send a market order for any unfilled remainder when the chase exhausts (default on).",
+    help="limit-chase: send a market order for any unfilled remainder (default on; disabled by --extended-hours).",
 )
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
 @click.option(
@@ -1320,7 +1326,7 @@ def liquidate(
     "--no-self-heal",
     is_flag=True,
     default=False,
-    help="Disable self-heal. By default, if post-trade verify finds the book off target, the residual legs are re-executed once (market-open only) to converge — set this to report-only.",
+    help="Disable self-heal. By default, if post-trade verify finds the book off target, eligible residual legs are re-executed once in the selected trading session.",
 )
 @click.option(
     "--heal-passes",
@@ -1357,6 +1363,7 @@ def rebalance(
     moc: bool | None,
     whole_shares: bool | None,
     order_type: str | None,
+    extended_hours: bool | None,
     chase_retries: int | None,
     chase_interval: float | None,
     chase_poll: float | None,
@@ -1410,6 +1417,11 @@ def rebalance(
     order_type = str(config.pick(order_type, cfg, "order_type", "market"))
     if order_type not in ("market", "limit-chase"):
         _fail(f"invalid order_type {order_type!r} — use 'market' or 'limit-chase'.")
+    extended_hours = bool(config.pick(extended_hours, cfg, "extended_hours", False))
+    if extended_hours:
+        if moc:
+            _fail("--extended-hours and --moc are mutually exclusive.")
+        order_type = "limit-chase"
     # Sleeve mode is deliberately narrow in v1 (fail-closed, not degraded):
     #   - limit-chase aggregates fills across several order ids, which the
     #     ledger's per-order settlement cursor cannot attribute yet;
@@ -1418,7 +1430,7 @@ def rebalance(
     #     stop across (or cancel a stop protecting) shares the sleeve does
     #     not own.
     if sleeve_name and order_type == "limit-chase":
-        _fail("--sleeve supports market orders only for now — drop --order-type limit-chase.")
+        _fail("--sleeve supports market orders only for now — drop --extended-hours / --order-type limit-chase.")
     if sleeve_name and default_stop is not None:
         _fail("--sleeve does not support protective stops yet — drop --stop-pct (stops are sized account-wide).")
     chase_cfg = None
@@ -1432,7 +1444,7 @@ def rebalance(
             reprice_interval=float(config.pick(chase_interval, cfg, "chase_interval", 5.0)),
             poll_interval=float(config.pick(chase_poll, cfg, "chase_poll", 1.0)),
             aggression=Decimal(str(config.pick(chase_aggression, cfg, "chase_aggression", 0.0))),
-            fallback_to_market=bool(config.pick(chase_fallback, cfg, "chase_fallback", True)),
+            fallback_to_market=not extended_hours and bool(config.pick(chase_fallback, cfg, "chase_fallback", True)),
         )
 
     global _QUIET, _JSON
@@ -1443,11 +1455,9 @@ def rebalance(
     broker = _resolve_broker_name(ctx, broker_opt)
 
     ms = market_status()
-    if broker not in ("paper", "hyperliquid"):  # crypto trades 24/7
-        if ms.status == "closed" and not dry_run:
-            _fail(f"Market closed. Next open: {ms.next_open}.", code=2)
-        if ms.status in ("premarket", "afterhours") and not dry_run:
-            _fail(f"Market in {ms.status} session — only RTH market orders are supported.", code=2)
+    session_error = trading_session_error(broker, extended_hours=extended_hours, status=ms)
+    if session_error and not dry_run:
+        _fail(session_error, code=2)
 
     if csv_file and csv_url:
         _fail("pass only one of --csv-file / --csv-url.")
@@ -1485,6 +1495,11 @@ def rebalance(
 
     b = _load_broker(broker)
     _apply_account_selector(b, account_sel)
+    if extended_hours:
+        if not (getattr(b, "supports_extended_hours", False) and getattr(b, "supports_limit_chase", False)):
+            _fail(f"{b.name} does not support extended-hours equity limit orders.")
+        # Tastytrade limits require whole shares, including chase residuals.
+        whole_shares = whole_shares or b.name == "tastytrade"
     # Brokers that can't place fractional equity orders (Schwab, Tradier)
     # already truncate to whole shares at submit — so force whole-share sizing
     # in the preview too, otherwise the preview / notional / --max-notional cap
@@ -1582,6 +1597,8 @@ def rebalance(
     if moc:
         for o in preview.orders:
             o.moc = True
+    if extended_hours:
+        _enable_extended_hours(preview, targets)
 
     # Extra safety cap on top of the engine's own checks.
     cap_msg = safety.check_max_notional(preview.orders, Decimal(str(max_notional)) if max_notional else None)
@@ -1696,6 +1713,7 @@ def rebalance(
                 self_heal=not no_self_heal,
                 heal_passes=heal_passes,
                 order_type=order_type,
+                extended_hours=extended_hours,
                 moc=moc,
                 recent_clean={r.get("ticker") for r in results if _no_reheal(r)},
                 sleeve=sleeve_name,
@@ -1714,6 +1732,8 @@ def rebalance(
                 "residual_dollars": float(vres.residual_dollars),
             }
         print(json.dumps(out, default=str))
+        if failed:
+            sys.exit(1)
         return
 
     _render_preview(preview, b.name, b.account_id, ms)
@@ -1726,7 +1746,7 @@ def rebalance(
         # name whose stop was missed/filled/rejected must be backfilled (sized from
         # broker.positions(), so never a naked stop). Without this, stops are only
         # touched on days the book trades — the held-within-drift coverage gap.
-        if not sleeve_name and getattr(b, "supports_stops", False):
+        if not dry_run and not sleeve_name and getattr(b, "supports_stops", False):
             _reconcile_stops(b, preview, [], targets=targets)
         return
     if dry_run:
@@ -1783,6 +1803,7 @@ def rebalance(
             self_heal=not no_self_heal,
             heal_passes=heal_passes,
             order_type=order_type,
+            extended_hours=extended_hours,
             moc=moc,
             recent_clean={r.get("ticker") for r in results if _no_reheal(r)},
             sleeve=sleeve_name,
@@ -1792,6 +1813,8 @@ def rebalance(
             tg_token=tg_token,
             tg_chat=tg_chat,
         )
+    if failed:
+        sys.exit(1)
 
 
 def _render_preview(preview, broker_name: str, account_id: str, ms) -> None:
@@ -1944,6 +1967,18 @@ def _record_sleeve_fills(broker, ledger, sleeve_name: str, orders, results) -> N
     sleeves.save(ledger)
 
 
+def _enable_extended_hours(preview, targets=()):
+    for order in preview.orders:
+        order.extended_hours = True
+    preview.warnings.append(
+        "Extended hours: LIMIT chase only; unfilled remainders are cancelled, with no market fallback."
+    )
+    if any(t.stop_pct for t in targets):
+        preview.warnings.append(
+            "Protective stops keep their regular-session behavior; they do not protect extended-hours trading."
+        )
+
+
 def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, targets=None, manage_stops: bool = True):
     total = len(preview.orders)
     sent = 0
@@ -1954,6 +1989,15 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
     # that can't chase degrade to market with a one-time warning — same pattern
     # as unsupported protective stops.
     use_chase = order_type == "limit-chase"
+    if any(o.extended_hours for o in preview.orders):
+        if not (getattr(broker, "supports_extended_hours", False) and getattr(broker, "supports_limit_chase", False)):
+            raise BrokerError(f"{broker.name} does not support extended-hours equity limit orders")
+        use_chase = True
+        # Recheck after the preview/confirmation, before cancelling stops.
+        error = trading_session_error(broker.name, extended_hours=True, status=market_status())
+        if error:
+            results = [{"status": "error", "ticker": o.ticker, "reason": error} for o in preview.orders]
+            return 0, total, results
     if use_chase and not getattr(broker, "supports_limit_chase", False):
         say(f"[yellow]{broker.name} does not support limit-chase orders — using market orders instead.[/yellow]")
         use_chase = False
@@ -2003,6 +2047,8 @@ def _execute(broker, preview, *, order_type: str = "market", chase_cfg=None, tar
                 result = broker.place_market(o, dry_run=False)
         except Exception as e:
             result = {"status": "error", "reason": str(e), "ticker": o.ticker}
+        if o.extended_hours:
+            result["extended_hours"] = True
         status = result.get("status", "?")
         if not _is_clean_send(status):
             failed += 1
@@ -2150,6 +2196,7 @@ def _post_trade_verify(
     self_heal=False,
     heal_passes=1,
     order_type="market",
+    extended_hours=False,
     moc=False,
     recent_clean=None,
     chase_cfg=None,
@@ -2166,7 +2213,7 @@ def _post_trade_verify(
     agnostic (Broker Protocol only) and best-effort — never raises.
 
     SELF-HEAL (self_heal=True): if not converged, RE-EXECUTE the residual orders and re-verify,
-    up to `heal_passes` times. Only re-trades while the market is OPEN; each pass goes through the
+    up to `heal_passes` times. Only re-trades in the selected session; each pass goes through the
     normal _execute path (so re-bought legs get their protective stops too). A leg that simply
     cannot fill (no liquidity / repeatedly rejected) stops after the cap and is reported 🔴.
     """
@@ -2214,7 +2261,8 @@ def _post_trade_verify(
             )
             if res.ok or not self_heal or attempt >= heal_passes or not post.orders:
                 break
-            if market_status().status != "open":
+            session = market_status()
+            if session.status != "open" and not (extended_hours and session.status in ("premarket", "afterhours")):
                 say("[yellow]self-heal skipped — market not open.[/yellow]")
                 break
             heal_orders = (
@@ -2231,6 +2279,8 @@ def _post_trade_verify(
                 f"{len(heal_orders)} residual leg(s)…[/yellow]"
             )
             post.orders = heal_orders
+            if extended_hours:
+                _enable_extended_hours(post, targets)
             try:
                 ret = _execute(
                     b, post, order_type=order_type, chase_cfg=chase_cfg, targets=targets, manage_stops=not sleeve
@@ -2430,6 +2480,7 @@ def _rebalance_one(
     sweep: bool = True,
     order_type: str = "market",
     chase_cfg=None,
+    extended_hours: bool = False,
 ) -> dict:
     """Run the full rebalance pipeline for one already-built broker.
 
@@ -2438,6 +2489,16 @@ def _rebalance_one(
     the same `_execute` (single-submit, no order retry) and idempotency
     rules as the interactive `rebalance`.
     """
+    if order_type not in ("market", "limit-chase"):
+        raise BrokerError(f"invalid order_type {order_type!r}")
+    if extended_hours:
+        if not (getattr(b, "supports_extended_hours", False) and getattr(b, "supports_limit_chase", False)):
+            raise BrokerError(f"{b.name} does not support extended-hours equity limit orders")
+        order_type = "limit-chase"
+        whole_shares = whole_shares or b.name == "tastytrade"
+    error = trading_session_error(b.name, extended_hours=extended_hours, status=market_status())
+    if error and not dry_run:
+        return {"broker": b.name, "account": b.account_id, "status": "blocked", "blockers": [error]}
     # Whole-share brokers truncate at submit; size the preview to match.
     whole_shares = whole_shares or not getattr(b, "supports_fractional", True)
     try:
@@ -2489,6 +2550,8 @@ def _rebalance_one(
     cap = safety.check_max_notional(preview.orders, Decimal(str(max_notional)) if max_notional else None)
     if cap:
         preview.blockers.append(cap)
+    if extended_hours:
+        _enable_extended_hours(preview, targets)
 
     fp = runstate.fingerprint(
         b.name,
@@ -2562,7 +2625,10 @@ def _rebalance_one(
 @click.option("--force", is_flag=True, help="Run even if identical targets were already executed today.")
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON.")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output.")
-def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, json_out, quiet):
+@click.option(
+    "--extended-hours/--no-extended-hours", default=None, help="Allow premarket/after-hours LIMIT rebalances."
+)
+def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, json_out, quiet, extended_hours):
     """Run the same target weights across several accounts in one pass.
 
     Each `[[account]]` in the config names a broker and a creds file; the
@@ -2599,7 +2665,12 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
     if order_type not in ("market", "limit-chase"):
         _fail(f"invalid order_type {order_type!r} in config — use 'market' or 'limit-chase'.")
     chase_cfg = None
-    if order_type == "limit-chase" or any(str(a.get("order_type", "")) == "limit-chase" for a in accounts):
+    if (
+        order_type == "limit-chase"
+        or extended_hours
+        or cfg.get("extended_hours")
+        or any(a.get("extended_hours") or str(a.get("order_type", "")) == "limit-chase" for a in accounts)
+    ):
         from .chase import ChaseConfig
 
         chase_cfg = ChaseConfig(
@@ -2666,6 +2737,9 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
         try:
             # per-account `allocation`, `order_type`, `stop_pct` win over top-level.
             acct_order_type = str(acct.get("order_type", order_type))
+            acct_extended_hours = bool(
+                config.pick(extended_hours, acct, "extended_hours", cfg.get("extended_hours", False))
+            )
             acct_stop = acct.get("stop_pct", default_stop)
             acct_targets = _apply_default_stop(targets, Decimal(str(acct_stop))) if acct_stop is not None else targets
             r = _rebalance_one(
@@ -2683,7 +2757,8 @@ def multi(config_path, csv_file, csv_url, dry_run, yes, margin_aware, force, jso
                 rebalance_scope=str(acct.get("rebalance_scope", rebalance_scope)),
                 sweep=bool(acct.get("sweep", sweep_default)),
                 order_type=acct_order_type,
-                chase_cfg=chase_cfg if acct_order_type == "limit-chase" else None,
+                chase_cfg=chase_cfg if acct_order_type == "limit-chase" or acct_extended_hours else None,
+                extended_hours=acct_extended_hours,
             )
         except Exception as e:
             r = {"broker": broker, "status": "error", "reason": str(e)}

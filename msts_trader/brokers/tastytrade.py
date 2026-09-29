@@ -30,6 +30,7 @@ class Tastytrade:
     supports_moc = False  # tastytrade's API has no closing-auction order type
     supports_stops = True  # GTC SELL STOP via OrderType.STOP + stop_trigger
     supports_limit_chase = True  # LIMIT DAY via the chase engine (whole shares)
+    supports_extended_hours = True
 
     def __init__(self, provider_secret: str, refresh_token: str, account_id: str | None = None, is_test: bool = False):
         if not provider_secret or not refresh_token:
@@ -180,6 +181,12 @@ class Tastytrade:
         return None
 
     def place_market(self, order: Order, dry_run: bool = False) -> dict:
+        if order.extended_hours:
+            return {
+                "status": "error",
+                "ticker": order.ticker,
+                "reason": "extended-hours orders require LIMIT execution",
+            }
         positions = self.positions()
         cur = positions.get(order.ticker)
         if order.side == Side.BUY:
@@ -241,11 +248,16 @@ class Tastytrade:
         px = Decimal(str(limit_price)).quantize(Decimal("0.01"))
         signed = -abs(px) if order.side == Side.BUY else abs(px)
         leg = Leg(instrument_type=InstrumentType.EQUITY, symbol=order.ticker, action=action, quantity=qty)
-        new_order = NewOrder(time_in_force=OrderTimeInForce.DAY, order_type=OrderType.LIMIT, legs=[leg], price=signed)
+        new_order = NewOrder(
+            time_in_force=OrderTimeInForce.EXT if order.extended_hours else OrderTimeInForce.DAY,
+            order_type=OrderType.LIMIT,
+            legs=[leg],
+            price=signed,
+        )
         try:
             resp = self._acct.place_order(self._sess, new_order, dry_run=dry_run)
         except Exception as e:
-            return {"status": "error", "reason": str(e), "ticker": order.ticker}
+            return {"status": "error", "reason": str(e), "ticker": order.ticker, "order_live": order.extended_hours}
         order_obj = getattr(resp, "order", None)
         order_id = getattr(order_obj, "id", None) or getattr(resp, "id", None)
         status = getattr(order_obj, "status", None) or getattr(resp, "status", None)
