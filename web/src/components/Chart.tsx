@@ -2,7 +2,13 @@ import { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 
-export type Series = { label: string; values: number[]; color: string; fill?: string; dash?: number[] };
+export type Series = { label: string; values: (number | null)[]; color: string; fill?: string; dash?: number[] };
+
+export const PALETTE = ["--accent", "--c2", "--c3", "--c4", "--c5", "--c6", "--c7", "--c8"];
+
+export function cssColor(name: string) {
+  return cssVar(name);
+}
 
 function cssVar(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";

@@ -157,4 +157,8 @@ def run(
         entry["status"] = "preview" if mode == DRY else "error"
         if mode == LIVE:
             entry.setdefault("error", "live run produced no execution result")
+    if mode == LIVE and entry.get("status") in ("executed", "partial"):
+        from .performance import snapshot  # local: performance imports runner's siblings
+
+        snapshot(sym, event="run")
     return store.log_run(entry)

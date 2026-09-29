@@ -10,6 +10,20 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Studio: live (out-of-sample) performance.** The Deploy tab tracks each
+  strategy from go-live, meaning its first executed live run (paper counts).
+  It shows the sleeve's actual time-weighted return and $ P&L, the model's
+  backtest over the same days, SPY, and the gap between actual and model
+  (execution cost). Actual value is rebuilt from sleeve snapshots taken
+  after every live run and invest/withdraw, marked at each close, so no
+  process has to run in the evening. The Backtest chart now colors
+  everything after go-live as out-of-sample.
+- **Studio: compare strategies.** Pick other saved strategies on the
+  Backtest tab to overlay them on a common date window, with a side-by-side
+  metrics table, drawdowns and the correlation of daily returns
+  (`POST /api/compare`).
+
 ## [0.34.0] — 2026-09-28
 
 ### Added

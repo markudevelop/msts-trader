@@ -129,6 +129,35 @@ export interface BacktestResult {
   allocations: { date: string; weights: Record<string, number> }[];
   cost_bps: number;
   benchmark?: { ticker: string; equity: number[]; metrics: Metrics };
+  oos_start?: string | null;
+}
+
+export interface CompareResult {
+  start: string;
+  end: string;
+  dates: string[];
+  series: { id: string; name: string; equity: number[]; metrics: Metrics; rebalances: number }[];
+  correlation: number[][];
+  benchmark?: { ticker: string; equity: number[]; metrics: Metrics };
+}
+
+export interface OosResult {
+  live_since: string | null;
+  reason?: string;
+  dates?: string[];
+  actual?: { nav: number[]; contributed: (number | null)[]; index: number[] };
+  model?: { index: (number | null)[] } | null;
+  model_error?: string;
+  benchmark?: { ticker: string; index: number[] };
+  metrics?: {
+    actual_return: number | null;
+    model_return?: number | null;
+    benchmark_return?: number | null;
+    tracking_gap?: number;
+    pnl: number | null;
+    nav: number | null;
+    actual_max_drawdown: number | null;
+  };
 }
 
 export interface PreviewOrder {

@@ -2,6 +2,7 @@
 
 ~/.msts-trader/strategies/<id>.json   (override: MSTS_STRATEGIES_DIR)
 ~/.msts-trader/runs.jsonl             (append-only; override: MSTS_RUNS_LOG)
+~/.msts-trader/sleeve_snapshots.jsonl (append-only; override: MSTS_SNAPSHOTS_LOG)
 
 Writes are temp-file + atomic replace with one `.bak` of the previous
 version, the same pattern the sleeve ledger uses.
@@ -27,6 +28,10 @@ def strategies_dir() -> Path:
 
 def runs_log() -> Path:
     return Path(os.environ.get("MSTS_RUNS_LOG") or os.path.expanduser("~/.msts-trader/runs.jsonl"))
+
+
+def snapshots_log() -> Path:
+    return Path(os.environ.get("MSTS_SNAPSHOTS_LOG") or os.path.expanduser("~/.msts-trader/sleeve_snapshots.jsonl"))
 
 
 def _path(sid: str) -> Path:
@@ -89,13 +94,16 @@ def unique_id(base: str) -> str:
     return sid
 
 
-def log_run(entry: dict) -> dict:
+def _append(p: Path, entry: dict) -> dict:
     entry = {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **entry}
-    p = runs_log()
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, default=str) + "\n")
     return entry
+
+
+def log_run(entry: dict) -> dict:
+    return _append(runs_log(), entry)
 
 
 def read_runs(sid: str | None = None, limit: int = 100) -> list[dict]:
@@ -111,3 +119,24 @@ def read_runs(sid: str | None = None, limit: int = 100) -> list[dict]:
         if sid is None or e.get("strategy") == sid:
             out.append(e)
     return out[-limit:][::-1]
+
+
+def log_snapshot(entry: dict) -> dict:
+    """Sleeve state {cash, holdings, contributed} after a live run / capital change."""
+    return _append(snapshots_log(), entry)
+
+
+def read_snapshots(sid: str) -> list[dict]:
+    """Oldest first."""
+    p = snapshots_log()
+    if not p.exists():
+        return []
+    out = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("strategy") == sid:
+            out.append(e)
+    return out

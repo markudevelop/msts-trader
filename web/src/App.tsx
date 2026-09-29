@@ -219,7 +219,7 @@ export default function App() {
             {err && <div className="alert error">{err}</div>}
             <div className="tab-body">
               {route.tab === "build" && <Build draft={draft} setDraft={setDraft} />}
-              {route.tab === "backtest" && <BacktestPanel draft={draft} />}
+              {route.tab === "backtest" && <BacktestPanel draft={draft} others={list.filter((x) => x.id !== draft.id)} />}
               {route.tab === "deploy" && (
                 <DeployPanel draft={draft} saved={saved} dirty={dirty} meta={meta} onDeploy={(deploy) => setDraft({ ...draft, deploy })} onSave={save} />
               )}

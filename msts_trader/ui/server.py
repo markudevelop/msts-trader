@@ -13,7 +13,6 @@ Security model — this process can place real orders, so:
 
 from __future__ import annotations
 
-import json
 import os
 import secrets
 import subprocess
@@ -28,10 +27,10 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import __version__, sleeves
+from .. import __version__
 from ..brokers import SUPPORTED
 from ..market_hours import market_status
-from ..symphony import backtest, composer_import, prices, runner, store
+from ..symphony import backtest, composer_import, performance, prices, runner, store
 from ..symphony.evaluate import EvalError
 from ..symphony.model import INDICATORS, Symphony, slugify, tickers
 
@@ -69,30 +68,7 @@ def _summary(s: Symphony) -> dict:
 
 
 def _sleeve_state(sid: str, broker: str) -> list[dict]:
-    """Every ledger (account) of `broker` that knows this sleeve. File-only —
-    no broker login needed; values use the last cached close."""
-    out = []
-    if not sleeves.LEDGER_DIR.exists():
-        return out
-    for p in sorted(sleeves.LEDGER_DIR.glob(f"{broker}_*.json")):
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        book = (data.get("sleeves") or {}).get(sid)
-        cash = (data.get("cash") or {}).get(sid)
-        if book is None and cash is None:
-            continue
-        out.append(
-            {
-                "account": data.get("account"),
-                "cash": cash,
-                "contributed": (data.get("contributed") or {}).get(sid),
-                "holdings": {t: q for t, q in sorted((book or {}).items()) if Decimal(q) != 0},
-                "pending": [x for x in data.get("pending") or [] if x.get("sleeve") == sid],
-            }
-        )
-    return out
+    return performance.sleeve_ledgers(sid, broker)
 
 
 def _cli(args: list[str], timeout: int = 120) -> dict:
@@ -203,8 +179,54 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
         bm = (benchmark or "").strip().upper() or None
         try:
             closes = prices.load_closes(sorted(set(tickers(s)) | ({bm} if bm else set())))
-            return backtest.run(s, closes, start=d0, end=d1, cost_bps=cost_bps, benchmark=bm)
+            res = backtest.run(s, closes, start=d0, end=d1, cost_bps=cost_bps, benchmark=bm)
         except (EvalError, prices.PriceError) as e:
+            _bad(422, str(e))
+        # In-sample vs out-of-sample split: everything after go-live is OOS.
+        live = performance.go_live(s.id, s.deploy.broker) if store.exists(s.id) else None
+        res["oos_start"] = live.isoformat() if live else None
+        return res
+
+    @app.post("/api/compare")
+    def compare(
+        strategies: list[dict] = Body(...),
+        start: str | None = Body(None),
+        end: str | None = Body(None),
+        cost_bps: float = Body(5.0),
+        benchmark: str = Body("SPY"),
+    ):
+        syms = [_sym_or_422(x) for x in strategies]
+        if len(syms) < 2 or len(syms) > 8:
+            _bad(422, "compare 2 to 8 strategies")
+        if len({x.id for x in syms}) != len(syms):
+            _bad(422, "each strategy can appear once")
+        try:
+            d0 = date.fromisoformat(start) if start else None
+            d1 = date.fromisoformat(end) if end else None
+        except ValueError as e:
+            _bad(422, f"bad date: {e}")
+        bm = (benchmark or "").strip().upper() or None
+        universe = set().union(*(tickers(x) for x in syms)) | ({bm} if bm else set())
+        try:
+            closes = prices.load_closes(sorted(universe))
+            return backtest.compare(syms, closes, start=d0, end=d1, cost_bps=cost_bps, benchmark=bm)
+        except (EvalError, prices.PriceError) as e:
+            _bad(422, str(e))
+
+    @app.get("/api/strategies/{sid}/performance")
+    def strategy_performance(sid: str, benchmark: str = "SPY"):
+        s = _get(sid)
+        bm = (benchmark or "").strip().upper() or None
+        held = set()
+        for snap in store.read_snapshots(s.id):
+            held |= set((snap.get("holdings") or {}).keys())
+        live = performance.go_live(s.id, s.deploy.broker)
+        if live is None:
+            return performance.oos(s, None)  # -> {"live_since": None, ...}
+        try:
+            closes = prices.load_closes(sorted(set(tickers(s)) | held | ({bm} if bm else set())))
+            return performance.oos(s, closes, benchmark=bm)
+        except (EvalError, prices.PriceError, ValueError) as e:
             _bad(422, str(e))
 
     @app.post("/api/import")
@@ -251,6 +273,7 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
         res = _cli(args)
         if not res["ok"]:
             _bad(422, res["output"] or f"sleeve {action} failed")
+        performance.snapshot(s, event=action)
         return {**res, "sleeve": _sleeve_state(s.id, s.deploy.broker)}
 
     @app.get("/api/strategies/{sid}/sleeve")

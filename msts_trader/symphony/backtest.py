@@ -156,3 +156,57 @@ def run(
                 "metrics": metrics(bench, eq_dates),
             }
     return out
+
+
+def compare(
+    syms: list[Symphony],
+    closes: pd.DataFrame,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+    cost_bps: float = 5.0,
+    benchmark: str | None = "SPY",
+) -> dict:
+    """Backtest several strategies over their COMMON window so the curves are
+    comparable: every series starts on the same day (the latest warm-up among
+    them, or `start` if later) at 1.0. Adds pairwise correlation of daily
+    returns — two strategies that look different but move together don't
+    diversify each other."""
+    if len(syms) < 2:
+        raise EvalError("pick at least two strategies to compare")
+    closes = closes.sort_index()
+    if end is not None:
+        closes = closes[closes.index <= pd.Timestamp(end)]
+    t0 = max(first_tradable_index(s, closes) for s in syms)
+    if t0 >= len(closes.index) - 1:
+        raise EvalError("these strategies share no common backtest window")
+    common = closes.index[t0].date()
+    if start is None or start < common:
+        start = common
+    runs = [run(s, closes, start=start, cost_bps=cost_bps, benchmark=benchmark) for s in syms]
+    dates = runs[0]["dates"]
+    if any(r["dates"] != dates for r in runs):  # same closes frame -> must hold
+        raise EvalError("internal: comparison windows differ")
+    series = [
+        {
+            "id": s.id,
+            "name": s.name,
+            "equity": r["equity"],
+            "metrics": r["metrics"],
+            "rebalances": len(r["allocations"]),
+        }
+        for s, r in zip(syms, runs)
+    ]
+    rets = np.array([np.diff(np.asarray(x["equity"])) / np.asarray(x["equity"])[:-1] for x in series])
+    corr = np.corrcoef(rets) if rets.shape[1] > 1 else np.eye(len(series))
+    out = {
+        "start": dates[0],
+        "end": dates[-1],
+        "dates": dates,
+        "series": series,
+        "correlation": [[round(float(v), 4) for v in row] for row in np.nan_to_num(corr, nan=0.0)],
+        "cost_bps": cost_bps,
+    }
+    if "benchmark" in runs[0]:
+        out["benchmark"] = runs[0]["benchmark"]
+    return out

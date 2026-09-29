@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { Deploy, Meta, RunEntry, SchedulerState, SleeveLedger, Strategy } from "../types";
+import type { Deploy, Meta, OosResult, RunEntry, SchedulerState, SleeveLedger, Strategy } from "../types";
+import { LineChart, cssColor, type Series } from "./Chart";
 import { NumInput } from "./Editor";
 
 type Props = {
@@ -25,6 +26,7 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [tick, setTick] = useState(0);
 
   const refresh = useCallback(async () => {
     const [r, s, sc] = await Promise.all([
@@ -35,6 +37,7 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
     setRuns(r);
     setSleeve(s.ledgers);
     setSched(sc);
+    setTick((t) => t + 1);
   }, [saved.id]);
 
   useEffect(() => {
@@ -151,6 +154,8 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
           {err && <div className="alert error">{err}</div>}
           {last && <RunResult run={last} />}
         </section>
+
+        <LivePerformance sid={saved.id} tick={tick} />
 
         <section className="card-plain">
           <h3>History</h3>
@@ -388,5 +393,93 @@ function ConfirmLive({ strategy, onCancel, onConfirm }: { strategy: Strategy; on
         </div>
       </div>
     </div>
+  );
+}
+
+const pctS = (v: number | null | undefined, dp = 2) => (v == null ? "–" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(dp)}%`);
+
+function LivePerformance({ sid, tick }: { sid: string; tick: number }) {
+  const [perf, setPerf] = useState<OosResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setErr(null);
+    api<OosResult>(`/strategies/${sid}/performance`)
+      .then((p) => alive && setPerf(p))
+      .catch((e) => alive && setErr(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [sid, tick]);
+
+  const growth = useMemo<Series[]>(() => {
+    if (!perf?.dates || !perf.actual) return [];
+    const s: Series[] = [{ label: "Actual (your sleeve)", values: perf.actual.index.map((v) => (v - 1) * 100), color: cssColor("--oos") }];
+    if (perf.model) s.push({ label: "Model (backtest)", values: perf.model.index.map((v) => (v == null ? null : (v - 1) * 100)), color: cssColor("--accent"), dash: [5, 3] });
+    if (perf.benchmark) s.push({ label: perf.benchmark.ticker, values: perf.benchmark.index.map((v) => (v - 1) * 100), color: cssColor("--bench"), dash: [2, 3] });
+    return s;
+  }, [perf]);
+  const pnl = useMemo<Series[]>(() => {
+    if (!perf?.dates || !perf.actual) return [];
+    const { nav, contributed } = perf.actual;
+    return [{ label: "P&L $", values: nav.map((v, i) => (contributed[i] == null ? null : v - (contributed[i] as number))), color: cssColor("--oos"), fill: "rgba(71,205,137,0.10)" }];
+  }, [perf]);
+  const pctFmt = useMemo(() => (v: number) => `${v.toFixed(1)}%`, []);
+  const usd = useMemo(() => (v: number) => `${v < 0 ? "-" : ""}$${Math.abs(Math.round(v)).toLocaleString()}`, []);
+
+  const m = perf?.metrics;
+  return (
+    <section className="card-plain">
+      <div className="section-head">
+        <h3>Live performance (out-of-sample)</h3>
+        {perf?.live_since && <span className="muted small">since go-live {perf.live_since}</span>}
+      </div>
+      {err && <div className="alert error small">{err}</div>}
+      {perf && !perf.live_since && (
+        <p className="muted small">
+          Tracking starts with the first executed live run (paper counts). From then on, the sleeve's real value is marked at every close and
+          compared with what the backtest says the strategy should have done.
+        </p>
+      )}
+      {perf?.live_since && m && (
+        <>
+          <div className="metrics compact">
+            <div className="metric-card">
+              <div className="metric-label">Actual return</div>
+              <div className={`metric-value ${(m.actual_return ?? 0) >= 0 ? "win" : "lose"}`}>{pctS(m.actual_return)}</div>
+              <div className="metric-sub">time-weighted</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">P&amp;L</div>
+              <div className={`metric-value ${(m.pnl ?? 0) >= 0 ? "win" : "lose"}`}>{m.pnl == null ? "–" : usd(m.pnl)}</div>
+              <div className="metric-sub">NAV {m.nav == null ? "–" : usd(m.nav)}</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-label">Model</div>
+              <div className="metric-value">{pctS(m.model_return)}</div>
+              <div className="metric-sub" title="Actual minus model: execution cost, timing, rounding">gap {pctS(m.tracking_gap)}</div>
+            </div>
+            {perf.benchmark && (
+              <div className="metric-card">
+                <div className="metric-label">{perf.benchmark.ticker}</div>
+                <div className="metric-value">{pctS(m.benchmark_return)}</div>
+                <div className="metric-sub">max DD (actual) {pctS(m.actual_max_drawdown == null ? null : -m.actual_max_drawdown)}</div>
+              </div>
+            )}
+          </div>
+          {perf.dates && perf.dates.length > 1 ? (
+            <>
+              <LineChart dates={perf.dates} series={growth} height={220} format={pctFmt} />
+              <LineChart dates={perf.dates} series={pnl} height={140} format={usd} />
+            </>
+          ) : (
+            <p className="muted small">
+              The first point is the close on {perf.live_since} (4:00 pm ET); the chart fills in from there.
+            </p>
+          )}
+          {perf.model_error && <p className="muted small">Model unavailable: {perf.model_error}</p>}
+        </>
+      )}
+    </section>
   );
 }
