@@ -4,7 +4,7 @@ import { TEMPLATES, treeTickers } from "./blocks";
 import { BacktestPanel } from "./components/Backtest";
 import { DeployPanel } from "./components/Deploy";
 import { NodeList } from "./components/Editor";
-import type { Cadence, EvalResult, FeedCatalog, Meta, Strategy, StrategySummary } from "./types";
+import type { Cadence, EvalResult, FeedCatalog, Meta, Strategy, StrategySummary, UrlFeedTest } from "./types";
 
 type Tab = "build" | "backtest" | "deploy";
 
@@ -390,7 +390,7 @@ function NewModal({ onClose, onCreate }: { onClose: () => void; onCreate: (s: Pa
 }
 
 function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: (s: Strategy) => Promise<void> }) {
-  const [tab, setTab] = useState<"pnl" | "composer">("pnl");
+  const [tab, setTab] = useState<"pnl" | "url" | "composer">("pnl");
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div className="modal wide" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
@@ -399,11 +399,16 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: (s: Str
           <button className={tab === "pnl" ? "on" : ""} onClick={() => setTab("pnl")} role="tab" aria-selected={tab === "pnl"}>
             pnlportfolio books
           </button>
+          <button className={tab === "url" ? "on" : ""} onClick={() => setTab("url")} role="tab" aria-selected={tab === "url"}>
+            Custom feed
+          </button>
           <button className={tab === "composer" ? "on" : ""} onClick={() => setTab("composer")} role="tab" aria-selected={tab === "composer"}>
             Composer / JSON
           </button>
         </div>
-        {tab === "pnl" ? <PnlImport onClose={onClose} onDone={onDone} /> : <ComposerImport onClose={onClose} onDone={onDone} />}
+        {tab === "pnl" && <PnlImport onClose={onClose} onDone={onDone} />}
+        {tab === "url" && <CustomFeedImport onClose={onClose} onDone={onDone} />}
+        {tab === "composer" && <ComposerImport onClose={onClose} onDone={onDone} />}
       </div>
     </div>
   );
@@ -508,6 +513,128 @@ function PnlImport({ onClose, onDone }: { onClose: () => void; onDone: (s: Strat
         </button>
         <button className="btn primary" disabled={!picked.length || !!busy || !cat} onClick={doImport}>
           {busy === "import" ? "Importing…" : `Import ${picked.length} book${picked.length === 1 ? "" : "s"}`}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function CustomFeedImport({ onClose, onDone }: { onClose: () => void; onDone: (s: Strategy) => Promise<void> }) {
+  const [name, setName] = useState("");
+  const [weightsUrl, setWeightsUrl] = useState("");
+  const [navUrl, setNavUrl] = useState("");
+  const [auth, setAuth] = useState<"none" | "bearer" | "query">("none");
+  const [tokenParam, setTokenParam] = useState("token");
+  const [token, setToken] = useState("");
+  const [test, setTest] = useState<UrlFeedTest | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const body = () => ({
+    weights_url: weightsUrl.trim(),
+    nav_url: navUrl.trim() || null,
+    auth,
+    token_param: tokenParam.trim() || "token",
+    token: token.trim() || null,
+  });
+
+  const runTest = async () => {
+    setBusy("test");
+    setErr(null);
+    setTest(null);
+    try {
+      setTest(await api<UrlFeedTest>("/feeds/url/test", { body: body() }));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const doImport = async () => {
+    setBusy("import");
+    setErr(null);
+    try {
+      const s = await api<Strategy>("/feeds/url/import", { body: { ...body(), name: name.trim() } });
+      await onDone(s);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const valid = /^https?:\/\/\S+$/.test(weightsUrl.trim()) && (!navUrl.trim() || /^https?:\/\/\S+$/.test(navUrl.trim()));
+
+  return (
+    <>
+      <p className="muted small">
+        Any URL that serves target weights: <code>ticker,weight</code> CSV (the format msts-trader already reads) or JSON{" "}
+        <code>{'{"weights": {...}}'}</code>. For example a Google Sheet published as CSV, a raw GitHub file, or your own script.
+      </p>
+      <div className="form-grid">
+        <label>
+          Name
+          <input value={name} placeholder="My model" onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label>
+          Weights URL
+          <input value={weightsUrl} placeholder="https://…/weights.csv" spellCheck={false} onChange={(e) => setWeightsUrl(e.target.value)} />
+        </label>
+        <label>
+          History URL <span className="muted small">(optional, date,nav CSV)</span>
+          <input value={navUrl} placeholder="https://…/nav.csv" spellCheck={false} onChange={(e) => setNavUrl(e.target.value)} />
+        </label>
+        <label>
+          Token
+          <span className="inline">
+            <select value={auth} onChange={(e) => setAuth(e.target.value as "none" | "bearer" | "query")}>
+              <option value="none">none</option>
+              <option value="bearer">Authorization: Bearer</option>
+              <option value="query">query parameter</option>
+            </select>
+            {auth === "query" && <input className="num wide" value={tokenParam} onChange={(e) => setTokenParam(e.target.value)} aria-label="Query parameter name" />}
+          </span>
+        </label>
+        {auth !== "none" && (
+          <label>
+            Token value <span className="muted small">(stored in your OS keychain, never in files)</span>
+            <input type="password" autoComplete="off" value={token} placeholder={test?.token_stored ? "stored ✓ (leave empty)" : ""} onChange={(e) => setToken(e.target.value)} />
+          </label>
+        )}
+      </div>
+      {test && (
+        <div className="test-result">
+          <div>
+            ✓ {test.positions} positions · gross {(test.gross * 100).toFixed(1)}%{test.asof ? ` · as of ${test.asof}` : ""}
+          </div>
+          <div className="chips">
+            {test.top.map(([t, w]) => (
+              <span className="chip" key={t}>
+                {t} <b>{(w * 100).toFixed(1)}%</b>
+              </span>
+            ))}
+          </div>
+          {test.history && (
+            <div>
+              ✓ history {test.history.start} → {test.history.end} ({test.history.days.toLocaleString()} days)
+            </div>
+          )}
+          {!navUrl.trim() && <div className="muted small">No history URL: backtests start once Studio has recorded a few days of this feed.</div>}
+          {test.history_error && <div className="neg small">History: {test.history_error}</div>}
+          {test.stops > 0 && <div className="muted small">{test.stops} protective stop(s) in the feed will not be placed (sleeves don't place stops).</div>}
+        </div>
+      )}
+      {err && <div className="alert error small">{err}</div>}
+      <div className="btn-row end">
+        <button className="btn ghost" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn" disabled={!valid || !!busy} onClick={runTest}>
+          {busy === "test" ? "Testing…" : "Test"}
+        </button>
+        <button className="btn primary" disabled={!valid || !name.trim() || !!busy} onClick={doImport}>
+          {busy === "import" ? "Importing…" : "Import"}
         </button>
       </div>
     </>

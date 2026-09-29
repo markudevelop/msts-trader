@@ -3450,6 +3450,56 @@ def strategy_import_feed(books) -> None:
         say(f"[green]✓ imported {book} as {s.id}[/green]")
 
 
+@strategy.command("import-url")
+@click.argument("name")
+@click.argument("weights_url")
+@click.option("--nav-url", default=None, help="Optional `date,nav` CSV history for backtests.")
+@click.option(
+    "--auth",
+    type=click.Choice(["none", "bearer", "query"]),
+    default="none",
+    show_default=True,
+    help="How to send the token: Authorization: Bearer, or a query parameter.",
+)
+@click.option("--token-param", default="token", show_default=True, help="Query parameter name for --auth query.")
+@click.option("--token-prompt", is_flag=True, help="Prompt for the token (stored in the OS keychain).")
+def strategy_import_url(name, weights_url, nav_url, auth, token_param, token_prompt) -> None:
+    """Import any URL that serves target weights (`ticker,weight` CSV or JSON) as a strategy."""
+    *_, sst, _ = _symphony_mods()
+    from .symphony import feeds
+    from .symphony.model import Feed, Symphony, slugify
+
+    try:
+        node = Feed.model_validate(
+            {
+                "provider": "url",
+                "name": name,
+                "weights_url": weights_url,
+                "nav_url": nav_url,
+                "auth": auth,
+                "token_param": token_param,
+            }
+        )
+    except Exception as e:
+        _fail(f"invalid feed: {e}")
+    if token_prompt:
+        feeds.set_feed_token(node.ref, click.prompt("token", hide_input=True))
+    try:
+        w = feeds.url_weights(node)
+    except feeds.FeedError as e:
+        _fail(str(e))
+    s = Symphony.model_validate(
+        {
+            "id": sst.unique_id(slugify(name)),
+            "name": name,
+            "rebalance": "daily",
+            "children": [node.model_dump(by_alias=True, exclude_none=True)],
+        }
+    )
+    sst.save(s)
+    say(f"[green]✓ imported '{name}' as {s.id} — {len(w['weights'])} positions[/green]")
+
+
 @strategy.command("import")
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--id", "sid", default=None, help="Strategy id (default: from the symphony name).")

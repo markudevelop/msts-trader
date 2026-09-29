@@ -10,6 +10,24 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Studio: custom feeds from any URL.** Import → Custom feed turns any http(s)
+  URL that serves target weights into a strategy. Weights can be
+  `ticker,weight` CSV (`# asof:` honoured) or JSON (`{"weights": {...}}` or a
+  flat `{TICKER: w}`). Examples: a Google Sheet published as CSV, a raw
+  GitHub file, your own script. Optional parts:
+  - a history URL (`date,nav` CSV) for backtests;
+  - a token sent as a Bearer header or a query parameter, stored in the OS
+    keychain per feed and never in strategy files or API responses.
+  **Test** previews positions, gross exposure, top holdings and the history
+  range before you import. Without a history URL, Studio records the feed's
+  weights each day it evaluates and builds a track record from real closes.
+  Custom feeds get everything pnlportfolio books have: blends, filters,
+  compare, sleeves, scheduling and live P&L. CLI:
+  `strategy import-url NAME URL [--nav-url] [--auth bearer|query] [--token-prompt]`.
+  Weights stamped more than 6 days old are refused; for JSON, the newest of
+  its date fields counts.
+
 ## [0.37.0] — 2026-09-29
 
 ### Added

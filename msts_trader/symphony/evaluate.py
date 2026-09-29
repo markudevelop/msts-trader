@@ -30,7 +30,6 @@ from .model import (
     WeightEqual,
     WeightInverseVol,
     WeightSpecified,
-    feed_key,
     walk,
 )
 
@@ -70,7 +69,7 @@ _CMP = {
 
 class Engine:
     def __init__(self, sym: Symphony, closes: pd.DataFrame, feeds: dict[str, dict[str, float]] | None = None):
-        """`feeds` = {book: {ticker: weight}} — the LIVE books. When given, a
+        """`feeds` = {feed ref: {ticker: weight}} — the LIVE books. When given, a
         feed block expands to its real tickers on `live_t` (the evaluation
         day); on every other day (backtests, ranking a group's history) it is
         one position in the book's NAV series."""
@@ -142,14 +141,16 @@ class Engine:
             return {n.ticker: 1.0}
         if isinstance(n, Feed):
             if self.feeds is not None and t == self.live_t:
-                book = self.feeds.get(n.book)
+                book = self.feeds.get(n.ref)
                 if book is None:
-                    raise EvalError(f"no live weights for feed {n.book!r}")
+                    raise EvalError(f"no live weights for feed {n.label!r}")
                 return dict(book)
-            key = feed_key(n.book)
+            key = n.series_key
+            if key not in self.closes.columns:
+                raise EvalError(f"feed {n.label} has no history yet (add a history URL, or let Studio record it)")
             v = self._series(key).iloc[t]
             if pd.isna(v):
-                raise EvalError(f"feed {n.book} has no NAV on {self._day(t)}")
+                raise EvalError(f"feed {n.label} has no history on {self._day(t)}")
             return {key: 1.0}
         if isinstance(n, (Group, WeightEqual)):
             return self.nodes_equal(n.children, t)
@@ -184,7 +185,7 @@ class Engine:
         if isinstance(c, Asset):
             return self.indicator(fn, c.ticker, window, t)
         if isinstance(c, Feed):
-            return self.indicator(fn, feed_key(c.book), window, t)
+            return self.indicator(fn, c.series_key, window, t)
         span = max(indicators.lookback(fn, window), 2)
         start = t - span
         if start < 1:

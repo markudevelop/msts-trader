@@ -23,7 +23,7 @@ export const STEP_LABEL: Record<Step, string> = {
   "wt-inverse-vol": "Weight · Inverse volatility",
   if: "If / Else",
   filter: "Filter",
-  feed: "Feed · pnlportfolio",
+  feed: "Feed",
 };
 
 export const STEP_HINT: Record<Step, string> = {
@@ -34,7 +34,7 @@ export const STEP_HINT: Record<Step, string> = {
   "wt-inverse-vol": "Less volatile children get more",
   if: "Branch on an indicator",
   filter: "Keep the top / bottom N by an indicator",
-  feed: "Hold a published pnlportfolio.com book",
+  feed: "Hold a pnlportfolio book (or a custom URL feed via Import)",
 };
 
 export const ADDABLE: Step[] = ["asset", "wt-cash-equal", "wt-cash-specified", "wt-inverse-vol", "if", "filter", "group", "feed"];
@@ -165,7 +165,7 @@ export function treeTickers(nodes: Node[]): string[] {
   const walk = (ns: Node[]) =>
     ns.forEach((n) => {
       if (n.step === "asset") out.add(n.ticker);
-      else if (n.step === "feed") out.add(`pnl:${n.book}`);
+      else if (n.step === "feed") out.add(n.provider === "url" ? `feed:${n.name ?? "url"}` : `pnl:${n.book}`);
       else if (n.step === "if") {
         out.add(n.condition.lhs.ticker);
         if (n.condition.rhs) out.add(n.condition.rhs.ticker);

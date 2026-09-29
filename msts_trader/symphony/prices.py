@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from .model import FEED_PREFIX
+from .model import FEED_SOURCES, is_feed_key
 
 ET = ZoneInfo("America/New_York")
 DEFAULT_START = date(2000, 1, 1)
@@ -117,18 +117,29 @@ def load_closes(tickers: list[str], start: date | None = None, *, today: date | 
     tickers = sorted({t.upper() for t in tickers})
     if not tickers:
         raise PriceError("strategy references no tickers")
-    # Feed books price from their own published NAV, not from Yahoo.
-    feed_cols = [t for t in tickers if t.startswith(FEED_PREFIX)]
-    tickers = [t for t in tickers if not t.startswith(FEED_PREFIX)]
+    # Feeds price from their own history (published NAV, a history URL, or
+    # what Studio recorded) — never from Yahoo.
+    feed_cols = [t for t in tickers if is_feed_key(t)]
+    tickers = [t for t in tickers if not is_feed_key(t)]
     extra = {}
     for key in feed_cols:
         from . import feeds
 
+        node = FEED_SOURCES.get(key)
+        if node is None:
+            raise PriceError(f"unknown feed series {key}")
         try:
-            extra[key] = feeds.nav_series(key[len(FEED_PREFIX) :].lower())
+            series = feeds.history(node)
         except feeds.FeedError as e:
-            raise PriceError(str(e)) from e
+            raise PriceError(f"{node.label}: {e}") from e
+        if series is not None:
+            extra[key] = series.rename(key)
     if not tickers:
+        if not extra:
+            # A brand-new feed with no history: one row for today, so live
+            # evaluation still has a day to evaluate (backtests will say why).
+            today = today or datetime.now(ET).date()
+            return pd.DataFrame(index=pd.DatetimeIndex([pd.Timestamp(today)]))
         df = pd.DataFrame(extra).sort_index()
         return _fill_gaps(df[df.index >= pd.Timestamp(start or DEFAULT_START)])
     start = start or DEFAULT_START

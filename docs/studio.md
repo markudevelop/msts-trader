@@ -203,6 +203,40 @@ Each book becomes a strategy with one **Feed** block:
 CLI equivalents: `msts-trader strategy feeds`, `strategy feed-token`,
 `strategy import-feed core apex hydra blend unified`.
 
+## Custom feeds (any URL)
+
+**Import → Custom feed** turns any URL that publishes target weights into a
+strategy, for example a Google Sheet published as CSV, a raw GitHub file, your
+own script, or another weights API.
+
+| Field | |
+|---|---|
+| Weights URL | `ticker,weight` CSV (msts-trader's own format; `# asof:` honoured) or JSON: `{"weights": {"SPY": 0.4, ...}}`, or a flat `{"SPY": 0.4, ...}` |
+| History URL | optional `date,<value>` CSV. The value column is `nav_net` / `nav` / `value` / `equity` / `close`, else the last column |
+| Token | none, `Authorization: Bearer <token>`, or a query parameter (`?token=`, name configurable). Stored in the OS keychain for this feed |
+
+**Test** fetches both URLs and shows positions, gross exposure, top holdings
+and the history range, without saving anything. **Import** creates a
+strategy holding one Feed block. The block stores the URLs and how to send the
+token, never the token itself.
+
+- **Without a history URL**, Studio records the feed's weights each day it
+  evaluates it (`~/.msts-trader/feed_history/`) and rebuilds a daily NAV from
+  real closes. Backtests and ranking start once a few days are recorded. Live
+  runs work from day one.
+- **Freshness**: weights stamped more than 6 days old are refused, which
+  clears weekends and holidays for a daily feed. For JSON, the newest of
+  `asof` / `as_of` / `date` / `trade_date` / `updated` counts. Unstamped feeds
+  are trusted.
+- Same rules as every feed: long-only, and protective stops in the feed are
+  reported, not placed. There's a 5 MB limit and http(s) only.
+
+CLI: `msts-trader strategy import-url "My model" https://…/weights.csv --nav-url https://…/nav.csv --auth bearer --token-prompt`.
+
+pnlportfolio books are this same block with a built-in preset (catalog
+picker, stale-book messages). A pnlportfolio API URL also works as a plain
+custom feed.
+
 ## Importing from Composer
 
 Paste the symphony's EDN (from its editor's source view) or JSON into

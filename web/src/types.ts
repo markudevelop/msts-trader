@@ -70,9 +70,13 @@ export interface FilterNode extends Base {
 
 export interface FeedNode extends Base {
   step: "feed";
-  provider?: "pnlportfolio";
-  book: string;
+  provider?: "pnlportfolio" | "url";
+  book?: string | null;
   name?: string | null;
+  weights_url?: string | null;
+  nav_url?: string | null;
+  auth?: "none" | "bearer" | "query";
+  token_param?: string;
 }
 
 export type Node = AssetNode | GroupNode | EqualNode | SpecifiedNode | InvVolNode | IfNode | FilterNode | FeedNode;
@@ -229,4 +233,15 @@ export interface FeedCatalog {
   provider: string;
   has_token: boolean;
   books: FeedBook[];
+}
+
+export interface UrlFeedTest {
+  positions: number;
+  gross: number;
+  top: [string, number][];
+  asof: string | null;
+  stops: number;
+  history: { start: string; end: string; days: number } | null;
+  history_error?: string;
+  token_stored: boolean;
 }

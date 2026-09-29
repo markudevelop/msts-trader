@@ -190,3 +190,238 @@ def nav_series(book: str) -> pd.Series:
         raise FeedError(f"the {book} book has no NAV history")
     _nav_cache[book] = (time.monotonic(), s)
     return s
+
+
+# ── custom URL feeds ───────────────────────────────────────────────────────
+# Any http(s) URL serving target weights (`ticker,weight` CSV, or JSON
+# {"weights": {...}} / {TICKER: w}), optionally a `date,nav` history URL, and
+# an optional token sent as a Bearer header or a query parameter.
+MAX_BYTES = 5 * 1024 * 1024
+STALE_HOURS = 144  # refuse weights stamped >6 days old (a Friday book is ~5 days old next Tuesday pre-publish)
+
+
+def history_dir():
+    from pathlib import Path
+
+    return Path(os.environ.get("MSTS_FEED_HISTORY_DIR") or os.path.expanduser("~/.msts-trader/feed_history"))
+
+
+def _token_key(ref: str) -> str:
+    return f"feed-token:{ref}"
+
+
+def get_feed_token(ref: str) -> str | None:
+    try:
+        import keyring
+
+        return keyring.get_password(_KEYRING_SERVICE, _token_key(ref)) or None
+    except Exception:
+        return None
+
+
+def set_feed_token(ref: str, token: str) -> None:
+    import keyring
+
+    keyring.set_password(_KEYRING_SERVICE, _token_key(ref), token.strip())
+
+
+def _redact(url: str) -> str:
+    """URL without its query string: never echo a token-bearing URL."""
+    return url.split("?", 1)[0]
+
+
+def fetch_url(url: str, *, token: str | None = None, auth: str = "none", token_param: str = "token") -> str:
+    if not url.lower().startswith(("http://", "https://")):
+        raise FeedError("feed URLs must be http(s)")
+    shown = _redact(url)
+    headers = {"User-Agent": _UA, "Accept": "application/json, text/csv, text/plain"}
+    if token and auth == "bearer":
+        headers["Authorization"] = f"Bearer {token}"
+    elif token and auth == "query":
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}{urllib.parse.urlencode({token_param: token})}"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 (scheme checked above)
+            data = r.read(MAX_BYTES + 1)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise FeedError(f"{shown} refused access ({e.code}): check the token and how it is sent") from None
+        raise FeedError(f"{shown} returned HTTP {e.code}") from None
+    except urllib.error.URLError as e:
+        raise FeedError(f"{shown} unreachable ({e.reason})") from None
+    if len(data) > MAX_BYTES:
+        raise FeedError(f"{shown} returned more than 5 MB: is this really a weights file?")
+    return data.decode("utf-8-sig", "replace")
+
+
+def parse_weights(text: str, *, now=None) -> dict:
+    """Weights from `ticker,weight` CSV (msts-trader's own format, `# asof:`
+    honoured) or JSON. Long-only; zero rows dropped; stale stamps refused."""
+    from datetime import datetime, timezone
+
+    from ..csv_parser import CSVParseError, parse_csv
+    from ..safety import check_stale, parse_asof
+
+    stripped = text.strip()
+    asof = None
+    stops: dict = {}
+    if stripped.startswith("{"):
+        try:
+            d = json.loads(stripped)
+        except json.JSONDecodeError as e:
+            raise FeedError(f"weights JSON is invalid: {e}") from None
+        nested = isinstance(d.get("weights"), dict)
+        raw = d["weights"] if nested else d
+        # Publishers label freshness differently (asof / as_of / date / ...);
+        # the NEWEST parseable stamp is the one that describes these weights.
+        stamps = []
+        for k in ("asof", "as_of", "date", "trade_date", "updated"):
+            v = d.get(k)
+            if isinstance(v, str):
+                ts = parse_asof(f"# asof: {v}")
+                if ts is not None:
+                    stamps.append((ts, v))
+        weights = {}
+        for t, w in raw.items():
+            if isinstance(w, bool) or not isinstance(w, (int, float)):
+                if not nested:
+                    continue  # a flat mapping may carry metadata keys
+                raise FeedError(f"weight for {t!r} is not a number")
+            if w < 0:
+                raise FeedError(f"{t} has a negative weight ({w}); msts-trader is long-only")
+            if w > 1e-9:
+                weights[str(t).strip().upper()] = float(w)
+        if stamps:
+            asof, asof_raw = max(stamps)
+            age = ((now or datetime.now(timezone.utc)) - asof).total_seconds() / 3600
+            if age > STALE_HOURS:
+                raise FeedError(f"weights are stale (as of {asof_raw}, {age:.0f}h old)")
+        stops = (d.get("stops") or {}) if nested else {}
+    else:
+        stale = check_stale(text, STALE_HOURS, now=now)
+        if stale:
+            raise FeedError(stale)
+        try:
+            targets = parse_csv(text)
+        except CSVParseError as e:
+            raise FeedError(f"weights CSV: {e}") from None
+        weights = {t.ticker: float(t.weight) for t in targets if t.weight > 0}
+        stops = {t.ticker: float(t.stop_pct) for t in targets if t.stop_pct}
+        asof = parse_asof(text)
+    if not weights:
+        raise FeedError("the feed has no positions")
+    return {"weights": weights, "date": asof.date().isoformat() if asof else None, "stops": stops}
+
+
+def parse_history(text: str) -> pd.Series:
+    """`date,<value>` CSV -> daily series. Value column: nav_net / nav / value /
+    equity / close, else the last column."""
+    try:
+        df = pd.read_csv(io.StringIO(text), comment="#")
+    except Exception as e:
+        raise FeedError(f"history CSV is invalid: {e}") from None
+    if df.shape[1] < 2:
+        raise FeedError("history CSV needs a date column and a value column")
+    cols = {str(c).lower().strip(): c for c in df.columns}
+    dcol = cols.get("date", df.columns[0])
+    vcol = next((cols[c] for c in ("nav_net", "nav", "value", "equity", "close") if c in cols), df.columns[-1])
+    s = pd.Series(
+        pd.to_numeric(df[vcol], errors="coerce").to_numpy(dtype=float),
+        index=pd.to_datetime(df[dcol], errors="coerce"),
+    )
+    s = s[s.index.notna()].dropna()
+    s.index = pd.DatetimeIndex(s.index).tz_localize(None).normalize()
+    s = s[~s.index.duplicated(keep="last")].sort_index()
+    if len(s) < 2 or (s <= 0).any():
+        raise FeedError("history needs at least two positive values")
+    return s
+
+
+def url_weights(node, token: str | None = None) -> dict:
+    tok = token if token is not None else get_feed_token(node.ref)
+    if node.auth != "none" and not tok:
+        raise FeedError(f"feed {node.label!r} needs a token: set it in Studio (Import, Custom feed)")
+    text = fetch_url(node.weights_url, token=tok, auth=node.auth, token_param=node.token_param)
+    return parse_weights(text)
+
+
+def url_history(node, token: str | None = None) -> pd.Series | None:
+    """The feed's value history: its history URL, else what Studio recorded."""
+    if node.nav_url:
+        tok = token if token is not None else get_feed_token(node.ref)
+        s = parse_history(fetch_url(node.nav_url, token=tok, auth=node.auth, token_param=node.token_param))
+        return s.rename(node.series_key)
+    return recorded_history(node)
+
+
+# ── recorded history (URL feeds without a history URL) ─────────────────────
+def _history_path(ref: str):
+    return history_dir() / f"{ref}.json"
+
+
+def record_weights(node, weights: dict, day) -> None:
+    """Keep one weights snapshot per (ET) day for a URL feed with no history URL."""
+    if node.provider != "url" or node.nav_url:
+        return
+    p = _history_path(node.ref)
+    try:
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except Exception:
+        data = {}
+    data[str(day)] = {k: round(float(v), 8) for k, v in sorted(weights.items())}
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def recorded_history(node) -> pd.Series | None:
+    """NAV rebuilt from recorded daily weights x real closes: the snapshot
+    recorded on/before day d-1 earns day d's returns. None until there is a
+    snapshot and at least one close after it."""
+    p = _history_path(node.ref)
+    if not p.exists():
+        return None
+    try:
+        snaps = {pd.Timestamp(k): v for k, v in json.loads(p.read_text(encoding="utf-8")).items()}
+    except Exception:
+        return None
+    if not snaps:
+        return None
+    from . import prices
+
+    first = min(snaps)
+    tickers = sorted({t for w in snaps.values() for t in w})
+    closes = prices.load_closes(tickers, first.date())
+    closes = closes[closes.index >= first]
+    if len(closes) < 2:
+        return None
+    rets = closes.pct_change()
+    days = sorted(snaps)
+    nav = [1.0]
+    k = 0
+    for i in range(1, len(closes)):
+        prev = closes.index[i - 1]
+        while k + 1 < len(days) and days[k + 1] <= prev:
+            k += 1
+        w = snaps[days[k]] if days[k] <= prev else {}
+        r = 0.0
+        for t, wt in w.items():
+            if t in rets.columns and not pd.isna(rets[t].iloc[i]):
+                r += wt * rets[t].iloc[i]
+        nav.append(nav[-1] * (1.0 + r))
+    return pd.Series(nav, index=closes.index, name=node.series_key)
+
+
+# ── one entry point for both providers ─────────────────────────────────────
+def live_weights(node) -> dict:
+    if node.provider == "pnlportfolio":
+        return book_weights(node.book)
+    return url_weights(node)
+
+
+def history(node) -> pd.Series | None:
+    if node.provider == "pnlportfolio":
+        return nav_series(node.book)
+    return url_history(node)

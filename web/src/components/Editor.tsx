@@ -130,6 +130,35 @@ function NodeCard({ node, parent, depth, onChange, onRemove, onUp, onDown, onDup
     );
   }
 
+  if (node.step === "feed" && node.provider === "url") {
+    let host = "";
+    try {
+      host = new URL(node.weights_url ?? "").host;
+    } catch {
+      host = "invalid URL";
+    }
+    return (
+      <div className="card card-feed">
+        {weightInput}
+        <span className="tag tag-feed">Feed</span>
+        <input
+          className="inline-text"
+          value={node.name ?? ""}
+          placeholder="Feed name"
+          aria-label="Feed name"
+          onChange={(e) => onChange({ ...node, name: e.target.value })}
+        />
+        <span className="muted small mono" title={(node.weights_url ?? "").split("?")[0]}>
+          {host}
+          {node.nav_url ? " · history URL" : " · history recorded"}
+          {node.auth && node.auth !== "none" ? " · token 🔒" : ""}
+        </span>
+        <span className="spacer" />
+        {actions}
+      </div>
+    );
+  }
+
   if (node.step === "feed") {
     return (
       <div className="card card-feed">
@@ -139,10 +168,10 @@ function NodeCard({ node, parent, depth, onChange, onRemove, onUp, onDown, onDup
         <input
           className="ticker"
           list="pnl-books"
-          value={node.book}
+          value={node.book ?? ""}
           spellCheck={false}
           aria-label="Book id"
-          size={Math.max(8, node.book.length + 1)}
+          size={Math.max(8, (node.book ?? "").length + 1)}
           onChange={(e) => onChange({ ...node, book: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 64) })}
         />
         <datalist id="pnl-books">

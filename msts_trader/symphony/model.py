@@ -45,13 +45,26 @@ Rebalance = Literal["daily", "weekly", "monthly", "quarterly", "yearly"]
 ID_RE = re.compile(r"[A-Za-z0-9_-]{1,40}")
 _TICKER_RE = re.compile(r"[A-Za-z0-9.\-^=/]{1,20}")
 _BOOK_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
-# Column name for a feed book's NAV series in the price table. "@" can never
+# Column name for a feed's history series in the price table. "@" can never
 # be a real ticker (see _TICKER_RE), so it can't collide or reach an order.
-FEED_PREFIX = "@PNL:"
+FEED_PREFIX = "@PNL:"  # pnlportfolio books (kept for existing strategies)
+URL_FEED_PREFIX = "@URL:"  # custom URL feeds
+_HTTP_URL_RE = re.compile(r"https?://[^\s]{3,2000}")
 
 
 def feed_key(book: str) -> str:
+    """Series column for a pnlportfolio book."""
     return f"{FEED_PREFIX}{book.upper()}"
+
+
+def is_feed_key(ticker: str) -> bool:
+    return ticker.startswith("@")
+
+
+# series key -> the Feed block that owns it. Filled as strategies are
+# validated, so the price loader can find a feed's history source from the
+# column name alone (the URL never has to travel through ticker lists).
+FEED_SOURCES: dict[str, "Feed"] = {}
 
 
 class _Base(BaseModel):
@@ -139,20 +152,71 @@ class If(_NodeBase):
 
 
 class Feed(_NodeBase):
-    """Hold a published external book (pnlportfolio.com) — see feeds.py."""
+    """Hold an externally published set of weights — see feeds.py.
+
+    provider "pnlportfolio": a pnlportfolio.com book (`book`).
+    provider "url": any http(s) URL serving `ticker,weight` CSV or JSON
+      (`weights_url`), optionally with a `date,nav` history (`nav_url`) and a
+      token sent as a Bearer header or a query parameter. The token itself is
+      kept in the OS keychain, never in this block.
+    """
 
     step: Literal["feed"] = "feed"
-    provider: Literal["pnlportfolio"] = "pnlportfolio"
-    book: str
+    provider: Literal["pnlportfolio", "url"] = "pnlportfolio"
+    book: str | None = None
     name: str | None = None
+    weights_url: str | None = None
+    nav_url: str | None = None
+    auth: Literal["none", "bearer", "query"] = "none"
+    token_param: str = Field(default="token", pattern=r"^[A-Za-z0-9_.-]{1,40}$")
 
     @field_validator("book")
     @classmethod
-    def _book(cls, v: str) -> str:
+    def _book(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
         v = v.strip().lower()
         if not _BOOK_RE.fullmatch(v):
             raise ValueError(f"invalid book id {v!r}")
         return v
+
+    @field_validator("weights_url", "nav_url")
+    @classmethod
+    def _url(cls, v: str | None) -> str | None:
+        if v is None or not v.strip():
+            return None
+        v = v.strip()
+        if not _HTTP_URL_RE.fullmatch(v):
+            raise ValueError("feed URLs must be http(s)")
+        return v
+
+    @model_validator(mode="after")
+    def _shape(self) -> Feed:
+        if self.provider == "pnlportfolio" and not self.book:
+            raise ValueError("a pnlportfolio feed needs a book")
+        if self.provider == "url" and not self.weights_url:
+            raise ValueError("a URL feed needs weights_url")
+        FEED_SOURCES[self.series_key] = self
+        return self
+
+    @property
+    def ref(self) -> str:
+        """Stable identity: the book id, or url-<hash of the weights URL>."""
+        if self.provider == "pnlportfolio":
+            return self.book  # type: ignore[return-value]
+        import hashlib
+
+        return "url-" + hashlib.sha1(self.weights_url.encode("utf-8")).hexdigest()[:10]  # type: ignore[union-attr]
+
+    @property
+    def series_key(self) -> str:
+        if self.provider == "pnlportfolio":
+            return feed_key(self.book)  # type: ignore[arg-type]
+        return f"{URL_FEED_PREFIX}{self.ref[4:].upper()}"
+
+    @property
+    def label(self) -> str:
+        return self.name or self.book or self.ref
 
 
 class Filter(_NodeBase):
@@ -228,7 +292,7 @@ def tickers(sym: Symphony) -> list[str]:
         if isinstance(n, Asset):
             seen.add(n.ticker)
         elif isinstance(n, Feed):
-            seen.add(feed_key(n.book))  # its NAV series (backtests, indicators)
+            seen.add(n.series_key)  # its history series (backtests, indicators)
         elif isinstance(n, If):
             seen.add(n.condition.lhs.ticker)
             if n.condition.rhs is not None:
@@ -237,7 +301,17 @@ def tickers(sym: Symphony) -> list[str]:
 
 
 def feed_books(sym: Symphony) -> list[str]:
-    return sorted({n.book for n in walk(sym.children) if isinstance(n, Feed)})
+    """pnlportfolio book ids used by the strategy."""
+    return sorted({n.book for n in walk(sym.children) if isinstance(n, Feed) and n.provider == "pnlportfolio"})
+
+
+def feed_nodes(sym: Symphony) -> list[Feed]:
+    """One Feed block per distinct feed (by ref)."""
+    out: dict[str, Feed] = {}
+    for n in walk(sym.children):
+        if isinstance(n, Feed):
+            out.setdefault(n.ref, n)
+    return [out[k] for k in sorted(out)]
 
 
 def slugify(name: str) -> str:

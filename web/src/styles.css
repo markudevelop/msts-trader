@@ -1164,3 +1164,16 @@ input.num.wide {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+
+.test-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--oos) 8%, transparent);
+  font-size: 13px;
+}
+.modal .form-grid > label {
+  min-width: 0;
+}

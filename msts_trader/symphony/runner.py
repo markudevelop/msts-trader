@@ -24,7 +24,7 @@ from pathlib import Path
 from ..market_hours import ET
 from . import feeds, prices, store
 from .evaluate import EvalError, evaluate, max_lookback, to_csv
-from .model import FEED_PREFIX, Symphony, feed_books, tickers
+from .model import Symphony, feed_nodes, is_feed_key, tickers
 
 LIVE = "live"
 DRY = "dry"
@@ -46,17 +46,24 @@ def current_weights(sym: Symphony, closes=None) -> dict:
     """{'asof': 'YYYY-MM-DD', 'weights': {ticker: w}, 'csv': str}."""
     if closes is None:
         closes = prices.load_closes(tickers(sym), history_start(sym))
-    books = {b: feeds.book_weights(b) for b in feed_books(sym)}
-    weights, asof = evaluate(sym, closes, feeds={b: v["weights"] for b, v in books.items()} or None)
-    real = [t for t in tickers(sym) if not t.startswith(FEED_PREFIX)]
+    nodes = feed_nodes(sym)
+    books = {n.ref: feeds.live_weights(n) for n in nodes}
+    weights, asof = evaluate(sym, closes, feeds={r: v["weights"] for r, v in books.items()} or None)
+    today = datetime.now(ET).date()
+    for n in nodes:  # URL feeds without a history URL build their own track record
+        feeds.record_weights(n, books[n.ref]["weights"], today)
+    real = [t for t in tickers(sym) if not is_feed_key(t)]
     real += [t for v in books.values() for t in sorted(v["weights"])]
     csv = to_csv(weights, asof=datetime.now(timezone.utc), fallback=real[0] if real else None)
     out = {"asof": asof, "weights": {k: round(v, 6) for k, v in sorted(weights.items())}, "csv": csv}
     if books:
-        out["feeds"] = {b: v["date"] for b, v in books.items()}
+        labels = {n.ref: n.label for n in nodes}
+        out["feeds"] = {labels[r]: v["date"] for r, v in books.items()}
         # A feed's live book is newer than its published NAV series; report the book's date.
         out["asof"] = max([asof] + [str(v["date"]) for v in books.values() if v.get("date")])
-        dropped = sorted(b for b, v in books.items() if v["stops"])
+        if not any(v.get("date") for v in books.values()) and not [t for t in tickers(sym) if not is_feed_key(t)]:
+            out["asof"] = today.isoformat()
+        dropped = sorted(labels[r] for r, v in books.items() if v["stops"])
         if dropped:
             out["warnings"] = [
                 f"protective stops published with {', '.join(dropped)} are not placed (sleeves don't place stops yet)"

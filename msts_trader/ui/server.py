@@ -32,7 +32,7 @@ from ..brokers import SUPPORTED
 from ..market_hours import market_status
 from ..symphony import backtest, composer_import, feeds, performance, prices, runner, store
 from ..symphony.evaluate import EvalError
-from ..symphony.model import INDICATORS, Symphony, combine, slugify, tickers
+from ..symphony.model import INDICATORS, Feed, Symphony, combine, slugify, tickers
 
 STATIC_DIR = Path(__file__).parent / "static"
 TOKEN_HEADER = "x-msts-token"
@@ -270,6 +270,93 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
             store.save(s)
             created.append(s.model_dump(by_alias=True))
         return {"created": created}
+
+    # ── custom URL feeds ────────────────────────────────────────────
+    def _url_feed(name, weights_url, nav_url, auth, token_param) -> Feed:
+        try:
+            return Feed.model_validate(
+                {
+                    "step": "feed",
+                    "provider": "url",
+                    "name": (name or "").strip() or None,
+                    "weights_url": weights_url,
+                    "nav_url": nav_url or None,
+                    "auth": auth,
+                    "token_param": token_param or "token",
+                }
+            )
+        except Exception as e:
+            _bad(422, f"invalid feed: {e}")
+
+    @app.post("/api/feeds/url/test")
+    def url_feed_test(
+        weights_url: str = Body(...),
+        nav_url: str | None = Body(None),
+        auth: str = Body("none"),
+        token_param: str = Body("token"),
+        token: str | None = Body(None),
+    ):
+        """Fetch + parse without saving anything. Uses the typed token, else a
+        stored one for this URL. Returns a summary only — never the token."""
+        node = _url_feed("test", weights_url, nav_url, auth, token_param)
+        tok = (token or "").strip() or feeds.get_feed_token(node.ref)
+        try:
+            w = feeds.url_weights(node, token=tok)
+        except feeds.FeedError as e:
+            _bad(422, str(e))
+        top = sorted(w["weights"].items(), key=lambda kv: -kv[1])[:6]
+        out = {
+            "positions": len(w["weights"]),
+            "gross": round(sum(w["weights"].values()), 6),
+            "top": [[t, round(v, 6)] for t, v in top],
+            "asof": w["date"],
+            "stops": len(w["stops"]),
+            "history": None,
+            "token_stored": bool(feeds.get_feed_token(node.ref)),
+        }
+        if node.nav_url:
+            try:
+                h = feeds.url_history(node, token=tok)
+                out["history"] = {
+                    "start": h.index[0].date().isoformat(),
+                    "end": h.index[-1].date().isoformat(),
+                    "days": len(h),
+                }
+            except feeds.FeedError as e:
+                out["history_error"] = str(e)
+        return out
+
+    @app.post("/api/feeds/url/import")
+    def url_feed_import(
+        name: str = Body(...),
+        weights_url: str = Body(...),
+        nav_url: str | None = Body(None),
+        auth: str = Body("none"),
+        token_param: str = Body("token"),
+        token: str | None = Body(None),
+    ):
+        """Create a strategy holding one URL feed. A typed token goes to the OS
+        keychain (keyed by the feed's URL hash), never into the strategy file."""
+        if not name.strip():
+            _bad(422, "give the feed a name")
+        node = _url_feed(name, weights_url, nav_url, auth, token_param)
+        tok = (token or "").strip()
+        if node.auth != "none" and not tok and not feeds.get_feed_token(node.ref):
+            _bad(422, "this feed sends a token: paste it once so it can be stored in your keychain")
+        if tok:
+            feeds.set_feed_token(node.ref, tok)
+        s = Symphony.model_validate(
+            {
+                "id": store.unique_id(slugify(name)),
+                "name": name.strip(),
+                "description": "Holds the weights published at a custom URL"
+                + ("; backtests on its history URL." if node.nav_url else "; history is recorded as Studio runs it."),
+                "rebalance": "daily",
+                "children": [node.model_dump(by_alias=True, exclude_none=True)],
+            }
+        )
+        store.save(s)
+        return s.model_dump(by_alias=True)
 
     @app.post("/api/combine")
     def combine_strategies(
