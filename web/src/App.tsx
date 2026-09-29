@@ -4,7 +4,7 @@ import { TEMPLATES, treeTickers } from "./blocks";
 import { BacktestPanel } from "./components/Backtest";
 import { DeployPanel } from "./components/Deploy";
 import { NodeList } from "./components/Editor";
-import type { Cadence, EvalResult, Meta, Strategy, StrategySummary } from "./types";
+import type { Cadence, EvalResult, FeedCatalog, Meta, Strategy, StrategySummary } from "./types";
 
 type Tab = "build" | "backtest" | "deploy";
 
@@ -390,6 +390,131 @@ function NewModal({ onClose, onCreate }: { onClose: () => void; onCreate: (s: Pa
 }
 
 function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: (s: Strategy) => Promise<void> }) {
+  const [tab, setTab] = useState<"pnl" | "composer">("pnl");
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal wide" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+        <h3>Import</h3>
+        <div className="seg wide-seg" role="tablist">
+          <button className={tab === "pnl" ? "on" : ""} onClick={() => setTab("pnl")} role="tab" aria-selected={tab === "pnl"}>
+            pnlportfolio books
+          </button>
+          <button className={tab === "composer" ? "on" : ""} onClick={() => setTab("composer")} role="tab" aria-selected={tab === "composer"}>
+            Composer / JSON
+          </button>
+        </div>
+        {tab === "pnl" ? <PnlImport onClose={onClose} onDone={onDone} /> : <ComposerImport onClose={onClose} onDone={onDone} />}
+      </div>
+    </div>
+  );
+}
+
+function PnlImport({ onClose, onDone }: { onClose: () => void; onDone: (s: Strategy) => Promise<void> }) {
+  const [cat, setCat] = useState<FeedCatalog | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [token, setToken] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    api<FeedCatalog>("/feeds")
+      .then((c) => {
+        setCat(c);
+        setPicked(c.books.filter((b) => b.featured).map((b) => b.id));
+      })
+      .catch((e) => setErr(e.message));
+  }, []);
+
+  const saveToken = async () => {
+    setBusy("token");
+    setErr(null);
+    try {
+      await api("/feeds/token", { method: "PUT", body: { token } });
+      setToken("");
+      setCat((c) => (c ? { ...c, has_token: true } : c));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const doImport = async () => {
+    setBusy("import");
+    setErr(null);
+    try {
+      const r = await api<{ created: Strategy[] }>("/feeds/import", { body: { books: picked } });
+      if (r.created.length) await onDone(r.created[0]);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const shown = (cat?.books ?? []).filter((b) => b.featured || !q || `${b.id} ${b.label}`.toLowerCase().includes(q.toLowerCase()));
+
+  return (
+    <>
+      <p className="muted small">
+        Each book becomes a strategy holding exactly what pnlportfolio.com publishes: today's weights for live runs, and its published NAV for
+        backtests. Fund, schedule and track it like any other strategy, or blend it with your own.
+      </p>
+      {!cat && !err && <p className="muted small">Loading books…</p>}
+      {cat && (
+        <div className={`token-row ${cat.has_token ? "ok" : ""}`}>
+          {cat.has_token ? (
+            <span className="small">✓ API token stored in your OS keychain</span>
+          ) : (
+            <span className="small">Live weights need your pnlportfolio API token. It is stored in your OS keychain, never in strategy files.</span>
+          )}
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder={cat.has_token ? "Replace token" : "API token"}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+          />
+          <button className="btn small" disabled={!token.trim() || !!busy} onClick={saveToken}>
+            {busy === "token" ? "Checking…" : "Save token"}
+          </button>
+        </div>
+      )}
+      {cat && (
+        <>
+          <input className="grow" placeholder={`Search all ${cat.books.length} books…`} value={q} onChange={(e) => setQ(e.target.value)} />
+          <div className="book-list">
+            {shown.map((b) => (
+              <label key={b.id} className={`book ${picked.includes(b.id) ? "on" : ""}`}>
+                <input type="checkbox" checked={picked.includes(b.id)} onChange={() => toggle(b.id)} />
+                <span className="grow">
+                  <b>{b.label}</b> <span className="muted small mono">{b.id}</span>
+                  {b.featured && <span className="pill pill-blend">Research</span>}
+                </span>
+                <span className="muted small">
+                  {b.num_positions ?? "–"} pos · {b.date ?? "–"}
+                </span>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+      {err && <div className="alert error small">{err}</div>}
+      <div className="btn-row end">
+        <button className="btn ghost" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn primary" disabled={!picked.length || !!busy || !cat} onClick={doImport}>
+          {busy === "import" ? "Importing…" : `Import ${picked.length} book${picked.length === 1 ? "" : "s"}`}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function ComposerImport({ onClose, onDone }: { onClose: () => void; onDone: (s: Strategy) => Promise<void> }) {
   const [text, setText] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -410,9 +535,7 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: (s: Str
     }
   };
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="modal wide" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
-        <h3>Import a symphony</h3>
+    <>
         <p className="muted small">
           Paste a Composer symphony (the EDN from its editor's source view, or its JSON), or a msts-trader strategy file. Blocks that can't be
           mapped are listed rather than silently dropped.
@@ -432,7 +555,6 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: (s: Str
             {busy ? "Importing…" : "Import"}
           </button>
         </div>
-      </div>
-    </div>
+    </>
   );
 }

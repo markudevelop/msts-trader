@@ -18,6 +18,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from .model import FEED_PREFIX
+
 ET = ZoneInfo("America/New_York")
 DEFAULT_START = date(2000, 1, 1)
 _REFRESH_DAYS = 7
@@ -93,6 +95,18 @@ def _save_meta(meta: dict) -> None:
     os.replace(tmp, p)
 
 
+def _fill_gaps(df: pd.DataFrame) -> pd.DataFrame:
+    """Forward-fill short INTERIOR gaps (holiday-calendar mismatches) but never
+    past a series' last real value — a feed NAV that stops publishing or a
+    delisted ticker must end there, not grow flat fake days."""
+    last = {c: df[c].last_valid_index() for c in df.columns}
+    out = df.ffill(limit=5)
+    for c, lv in last.items():
+        if lv is not None:
+            out.loc[out.index > lv, c] = float("nan")
+    return out
+
+
 def load_closes(tickers: list[str], start: date | None = None, *, today: date | None = None) -> pd.DataFrame:
     """Aligned daily closes for `tickers` from `start` through today.
 
@@ -103,6 +117,20 @@ def load_closes(tickers: list[str], start: date | None = None, *, today: date | 
     tickers = sorted({t.upper() for t in tickers})
     if not tickers:
         raise PriceError("strategy references no tickers")
+    # Feed books price from their own published NAV, not from Yahoo.
+    feed_cols = [t for t in tickers if t.startswith(FEED_PREFIX)]
+    tickers = [t for t in tickers if not t.startswith(FEED_PREFIX)]
+    extra = {}
+    for key in feed_cols:
+        from . import feeds
+
+        try:
+            extra[key] = feeds.nav_series(key[len(FEED_PREFIX) :].lower())
+        except feeds.FeedError as e:
+            raise PriceError(str(e)) from e
+    if not tickers:
+        df = pd.DataFrame(extra).sort_index()
+        return _fill_gaps(df[df.index >= pd.Timestamp(start or DEFAULT_START)])
     start = start or DEFAULT_START
     today = today or datetime.now(ET).date()
 
@@ -137,6 +165,6 @@ def load_closes(tickers: list[str], start: date | None = None, *, today: date | 
             coverage[t] = min(start, date.fromisoformat(prev)).isoformat() if prev else start.isoformat()
         cols[t] = merged
     _save_meta(coverage)
-    df = pd.DataFrame(cols).sort_index()
+    df = pd.DataFrame({**cols, **extra}).sort_index()
     df = df[df.index >= pd.Timestamp(start)]
-    return df.ffill(limit=5)
+    return _fill_gaps(df)

@@ -68,7 +68,14 @@ export interface FilterNode extends Base {
   children: Node[];
 }
 
-export type Node = AssetNode | GroupNode | EqualNode | SpecifiedNode | InvVolNode | IfNode | FilterNode;
+export interface FeedNode extends Base {
+  step: "feed";
+  provider?: "pnlportfolio";
+  book: string;
+  name?: string | null;
+}
+
+export type Node = AssetNode | GroupNode | EqualNode | SpecifiedNode | InvVolNode | IfNode | FilterNode | FeedNode;
 export type Step = Node["step"];
 
 export interface Deploy {
@@ -206,4 +213,20 @@ export interface SchedulerState {
   last_error?: string | null;
   running_now?: string | null;
   upcoming?: { strategy: string; mode: string; next_check: string; cadence: string }[];
+}
+
+export interface FeedBook {
+  id: string;
+  label: string;
+  cagr: number | null;
+  sharpe: number | null;
+  num_positions: number | null;
+  date: string | null;
+  featured: boolean;
+}
+
+export interface FeedCatalog {
+  provider: string;
+  has_token: boolean;
+  books: FeedBook[];
 }

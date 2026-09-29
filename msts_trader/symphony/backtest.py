@@ -59,6 +59,20 @@ def metrics(equity: np.ndarray, dates: list[pd.Timestamp]) -> dict:
     }
 
 
+def last_common_date(syms: list[Symphony], closes: pd.DataFrame) -> pd.Timestamp | None:
+    """Last day on which EVERY series the strategies need has data. Series can
+    end early — a published feed NAV that lags its live book, a delisted
+    ticker — and the backtest must stop there instead of failing on a gap."""
+    ends = []
+    for s in syms:
+        for t in tickers(s):
+            if t in closes.columns:
+                lv = closes[t].last_valid_index()
+                if lv is not None:
+                    ends.append(lv)
+    return min(ends) if ends else None
+
+
 def first_tradable_index(sym: Symphony, closes: pd.DataFrame) -> int:
     firsts = []
     for t in tickers(sym):
@@ -83,6 +97,9 @@ def run(
     closes = closes.sort_index()
     if end is not None:
         closes = closes[closes.index <= pd.Timestamp(end)]
+    last = last_common_date([sym], closes)
+    if last is not None:
+        closes = closes[closes.index <= last]
     eng = Engine(sym, closes)
     dates = list(closes.index)
     t0 = first_tradable_index(sym, closes)
@@ -177,6 +194,9 @@ def compare(
     closes = closes.sort_index()
     if end is not None:
         closes = closes[closes.index <= pd.Timestamp(end)]
+    last = last_common_date(syms, closes)
+    if last is not None:
+        closes = closes[closes.index <= last]
     t0 = max(first_tradable_index(s, closes) for s in syms)
     if t0 >= len(closes.index) - 1:
         raise EvalError("these strategies share no common backtest window")

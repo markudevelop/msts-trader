@@ -29,6 +29,7 @@
   --c7: #4e5ba6;
   --c8: #b54708;
   --oos: #067647;
+  --feed: #0e9384;
   --radius: 10px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
   color-scheme: light;
@@ -70,6 +71,7 @@
     --c7: #8098f9;
     --c8: #fd853a;
     --oos: #47cd89;
+    --feed: #2ed3b7;
     color-scheme: dark;
   }
 }
@@ -1104,4 +1106,61 @@ input.num.wide {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 700;
+}
+
+/* ── feeds ────────────────────────────────────────── */
+.card-feed {
+  --c: var(--feed);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
+}
+.tag-feed {
+  --c: var(--feed);
+}
+.wide-seg {
+  align-self: flex-start;
+}
+.wide-seg button {
+  padding: 5px 12px;
+  font-size: 13px;
+}
+.token-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.token-row.ok {
+  background: color-mix(in srgb, var(--oos) 10%, transparent);
+  color: var(--oos);
+}
+.token-row input {
+  flex: 1;
+  min-width: 180px;
+}
+.book-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.book {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.book.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }

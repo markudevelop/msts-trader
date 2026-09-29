@@ -20,6 +20,18 @@ const BLEND_ID = "__blend__";
 const money = (v: number) => (v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : `$${Math.round(v).toLocaleString()}`);
 const pctFmt = (v: number) => `${v.toFixed(0)}%`;
 
+/** A backtest that ends >7 days ago stopped where some series' data ends (e.g. a feed's published NAV). */
+function StaleEnd({ end }: { end: string }) {
+  const days = (Date.now() - Date.parse(end + "T00:00:00Z")) / 86_400_000;
+  if (days <= 7) return null;
+  return (
+    <p className="muted small">
+      History ends {end}: the last day every series in this comparison has data. A pnlportfolio book's published NAV can lag its live
+      weights, which live runs still use.
+    </p>
+  );
+}
+
 function drawdown(eq: number[]) {
   let peak = -Infinity;
   return eq.map((v) => {
@@ -180,6 +192,7 @@ function Single({ res, name, log, setLog }: { res: BacktestResult; name: string;
             <input type="checkbox" checked={log} onChange={(e) => setLog(e.target.checked)} /> log scale
           </label>
         </div>
+        <StaleEnd end={res.end} />
         {cut > 0 && (
           <p className="muted small">
             Green is <b>out-of-sample</b>: the days since this strategy went live ({res.oos_start}). Everything before is in-sample, so the rules
@@ -223,6 +236,7 @@ function Compare({ cmp, log, setLog }: { cmp: CompareResult; log: boolean; setLo
             <input type="checkbox" checked={log} onChange={(e) => setLog(e.target.checked)} /> log scale
           </label>
         </div>
+        <StaleEnd end={cmp.end} />
         <LineChart dates={cmp.dates} series={equity} format={money} log={log} height={320} />
       </div>
       <div className="card-plain">

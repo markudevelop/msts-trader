@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import __version__
 from ..brokers import SUPPORTED
 from ..market_hours import market_status
-from ..symphony import backtest, composer_import, performance, prices, runner, store
+from ..symphony import backtest, composer_import, feeds, performance, prices, runner, store
 from ..symphony.evaluate import EvalError
 from ..symphony.model import INDICATORS, Symphony, combine, slugify, tickers
 
@@ -212,6 +212,64 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
             return backtest.compare(syms, closes, start=d0, end=d1, cost_bps=cost_bps, benchmark=bm)
         except (EvalError, prices.PriceError) as e:
             _bad(422, str(e))
+
+    # ── pnlportfolio books ──────────────────────────────────────────
+    @app.get("/api/feeds")
+    def feed_catalog():
+        """Public book list + whether a token is stored (never the token itself)."""
+        try:
+            books = feeds.catalog()
+        except feeds.FeedError as e:
+            _bad(502, str(e))
+        return {"provider": "pnlportfolio", "has_token": bool(feeds.get_token()), "books": books}
+
+    @app.put("/api/feeds/token")
+    def feed_token(token: str = Body(..., embed=True)):
+        """Validate against a live book, then keep it in the OS keychain."""
+        token = token.strip()
+        if not token:
+            _bad(422, "empty token")
+        try:
+            feeds.book_weights("unified", token=token)
+        except feeds.FeedError as e:
+            if "(401)" in str(e):
+                _bad(422, str(e))
+            # stale/unreachable: the token itself was accepted or can't be judged — keep it
+        feeds.set_token(token)
+        return {"has_token": True}
+
+    @app.delete("/api/feeds/token")
+    def feed_token_clear():
+        feeds.clear_token()
+        return {"has_token": bool(feeds.get_token())}
+
+    @app.post("/api/feeds/import")
+    def feed_import(books: list[str] = Body(..., embed=True)):
+        """One strategy per book, each a single feed block (edit/blend freely after)."""
+        if not books or len(books) > 20:
+            _bad(422, "pick 1 to 20 books")
+        try:
+            meta = {b["id"]: b for b in feeds.catalog()}
+        except feeds.FeedError:
+            meta = {}
+        created = []
+        for book in books:
+            label = (meta.get(book) or {}).get("label") or book
+            try:
+                s = Symphony.model_validate(
+                    {
+                        "id": store.unique_id(slugify(f"pnl-{book}")),
+                        "name": f"{label} (pnlportfolio)",
+                        "description": f"Holds the published pnlportfolio.com '{label}' book; backtests on its published NAV.",
+                        "rebalance": "daily",
+                        "children": [{"step": "feed", "book": book, "name": label}],
+                    }
+                )
+            except Exception as e:
+                _bad(422, f"bad book {book!r}: {e}")
+            store.save(s)
+            created.append(s.model_dump(by_alias=True))
+        return {"created": created}
 
     @app.post("/api/combine")
     def combine_strategies(

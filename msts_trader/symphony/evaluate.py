@@ -21,6 +21,7 @@ from . import indicators
 from .model import (
     Asset,
     Condition,
+    Feed,
     Filter,
     Group,
     If,
@@ -29,6 +30,7 @@ from .model import (
     WeightEqual,
     WeightInverseVol,
     WeightSpecified,
+    feed_key,
     walk,
 )
 
@@ -67,8 +69,14 @@ _CMP = {
 
 
 class Engine:
-    def __init__(self, sym: Symphony, closes: pd.DataFrame):
+    def __init__(self, sym: Symphony, closes: pd.DataFrame, feeds: dict[str, dict[str, float]] | None = None):
+        """`feeds` = {book: {ticker: weight}} — the LIVE books. When given, a
+        feed block expands to its real tickers on `live_t` (the evaluation
+        day); on every other day (backtests, ranking a group's history) it is
+        one position in the book's NAV series."""
         self.sym = sym
+        self.feeds = feeds
+        self.live_t: int | None = None
         self.closes = closes.sort_index()
         self.dates = list(self.closes.index)
         self._ind: dict[tuple, np.ndarray] = {}
@@ -132,6 +140,17 @@ class Engine:
             if pd.isna(v):
                 raise EvalError(f"{n.ticker} has no price on {self._day(t)}")
             return {n.ticker: 1.0}
+        if isinstance(n, Feed):
+            if self.feeds is not None and t == self.live_t:
+                book = self.feeds.get(n.book)
+                if book is None:
+                    raise EvalError(f"no live weights for feed {n.book!r}")
+                return dict(book)
+            key = feed_key(n.book)
+            v = self._series(key).iloc[t]
+            if pd.isna(v):
+                raise EvalError(f"feed {n.book} has no NAV on {self._day(t)}")
+            return {key: 1.0}
         if isinstance(n, (Group, WeightEqual)):
             return self.nodes_equal(n.children, t)
         if isinstance(n, WeightSpecified):
@@ -164,6 +183,8 @@ class Engine:
         synthetic equity curve over a trailing window."""
         if isinstance(c, Asset):
             return self.indicator(fn, c.ticker, window, t)
+        if isinstance(c, Feed):
+            return self.indicator(fn, feed_key(c.book), window, t)
         span = max(indicators.lookback(fn, window), 2)
         start = t - span
         if start < 1:
@@ -221,9 +242,13 @@ def to_csv(weights: Weights, *, asof: datetime | None = None, fallback: str | No
     return "\n".join(lines) + "\n"
 
 
-def evaluate(sym: Symphony, closes: pd.DataFrame, asof: date | None = None) -> tuple[Weights, str]:
-    """Weights for the last trading day on/before `asof` (default: latest)."""
-    eng = Engine(sym, closes)
+def evaluate(
+    sym: Symphony, closes: pd.DataFrame, asof: date | None = None, *, feeds: dict[str, dict[str, float]] | None = None
+) -> tuple[Weights, str]:
+    """Weights for the last trading day on/before `asof` (default: latest).
+
+    With `feeds`, feed blocks resolve to their live books (real tickers)."""
+    eng = Engine(sym, closes, feeds=feeds)
     if not eng.dates:
         raise EvalError("no price data")
     t = len(eng.dates) - 1
@@ -232,4 +257,5 @@ def evaluate(sym: Symphony, closes: pd.DataFrame, asof: date | None = None) -> t
         if not idx:
             raise EvalError(f"no price data on or before {asof}")
         t = idx[-1]
+    eng.live_t = t
     return eng.weights(t), eng._day(t)

@@ -177,6 +177,32 @@ The server can place orders, so:
 Keep the startup URL private. Anyone who has it can drive the UI while the
 process runs.
 
+## Importing pnlportfolio.com books
+
+**Import → pnlportfolio books** lists every runnable book from the public
+catalog. The Research desk books (Core, Apex, Hydra, Fusion, Unified) are
+listed first and pre-selected. Paste your API token once; it goes to the OS
+keychain and is never written into strategy files or sent back to the page.
+Headless runs can use `PNLPORTFOLIO_TOKEN` instead.
+
+Each book becomes a strategy with one **Feed** block:
+
+- **Live runs** fetch the book's current target weights
+  (`/v1/sleeves/<book>/weights`). The API refuses a book that isn't current
+  yet (pnlportfolio publishes near 15:45 ET), so the default 15:50 ET schedule
+  runs just after publication. Books must be long-only. Protective stops a
+  book publishes are not placed, because sleeves don't place stops yet; the
+  run log says so.
+- **Backtests** use the book's own published daily NAV
+  (`/v1/sleeves/<book>/nav.csv`). This is pnlportfolio's published history,
+  and most of it is their backtest rather than live results. The published NAV
+  can lag the live book by weeks; backtests then end on its last day.
+- A Feed is an ordinary block. Add one anywhere ("+ Add block → Feed"),
+  blend books with your own strategies, or rank books in a Filter by momentum.
+
+CLI equivalents: `msts-trader strategy feeds`, `strategy feed-token`,
+`strategy import-feed core apex hydra blend unified`.
+
 ## Importing from Composer
 
 Paste the symphony's EDN (from its editor's source view) or JSON into

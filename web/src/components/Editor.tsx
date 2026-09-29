@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ADDABLE, COMPARATOR_LABEL, INDICATORS, INDICATOR_LABEL, STEP_HINT, STEP_LABEL, newNode } from "../blocks";
+import { ADDABLE, COMPARATOR_LABEL, FEATURED_BOOKS, INDICATORS, INDICATOR_LABEL, STEP_HINT, STEP_LABEL, newNode } from "../blocks";
 import type { Comparator, Condition, IndicatorFn, Metric, Node, Step } from "../types";
 
 type ListProps = { nodes: Node[]; onChange: (nodes: Node[]) => void; parent: Step | "root"; depth: number };
@@ -84,6 +84,7 @@ function tagKind(s: Step) {
   if (s === "if") return "if";
   if (s === "filter") return "filter";
   if (s === "group") return "group";
+  if (s === "feed") return "feed";
   return "weight";
 }
 
@@ -122,6 +123,33 @@ function NodeCard({ node, parent, depth, onChange, onRemove, onUp, onDown, onDup
         {weightInput}
         <span className="tag tag-asset">Asset</span>
         <TickerInput value={node.ticker} onChange={(t) => onChange({ ...node, ticker: t })} />
+        {node.name && <span className="muted small">{node.name}</span>}
+        <span className="spacer" />
+        {actions}
+      </div>
+    );
+  }
+
+  if (node.step === "feed") {
+    return (
+      <div className="card card-feed">
+        {weightInput}
+        <span className="tag tag-feed">Feed</span>
+        <span className="muted small">pnlportfolio book</span>
+        <input
+          className="ticker"
+          list="pnl-books"
+          value={node.book}
+          spellCheck={false}
+          aria-label="Book id"
+          size={Math.max(8, node.book.length + 1)}
+          onChange={(e) => onChange({ ...node, book: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 64) })}
+        />
+        <datalist id="pnl-books">
+          {FEATURED_BOOKS.map((b) => (
+            <option key={b} value={b} />
+          ))}
+        </datalist>
         {node.name && <span className="muted small">{node.name}</span>}
         <span className="spacer" />
         {actions}
@@ -190,7 +218,7 @@ function Params({ node, onChange }: { node: Node; onChange: (n: Node) => void })
 }
 
 function Body({ node, onChange, depth }: { node: Node; onChange: (n: Node) => void; depth: number }) {
-  if (node.step === "asset") return null;
+  if (node.step === "asset" || node.step === "feed") return null;
   if (node.step === "if") {
     return (
       <div className="card-body">

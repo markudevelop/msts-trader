@@ -22,9 +22,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from ..market_hours import ET
-from . import prices, store
+from . import feeds, prices, store
 from .evaluate import EvalError, evaluate, max_lookback, to_csv
-from .model import Symphony, tickers
+from .model import FEED_PREFIX, Symphony, feed_books, tickers
 
 LIVE = "live"
 DRY = "dry"
@@ -46,10 +46,22 @@ def current_weights(sym: Symphony, closes=None) -> dict:
     """{'asof': 'YYYY-MM-DD', 'weights': {ticker: w}, 'csv': str}."""
     if closes is None:
         closes = prices.load_closes(tickers(sym), history_start(sym))
-    weights, asof = evaluate(sym, closes)
-    ts = tickers(sym)
-    csv = to_csv(weights, asof=datetime.now(timezone.utc), fallback=ts[0] if ts else None)
-    return {"asof": asof, "weights": {k: round(v, 6) for k, v in sorted(weights.items())}, "csv": csv}
+    books = {b: feeds.book_weights(b) for b in feed_books(sym)}
+    weights, asof = evaluate(sym, closes, feeds={b: v["weights"] for b, v in books.items()} or None)
+    real = [t for t in tickers(sym) if not t.startswith(FEED_PREFIX)]
+    real += [t for v in books.values() for t in sorted(v["weights"])]
+    csv = to_csv(weights, asof=datetime.now(timezone.utc), fallback=real[0] if real else None)
+    out = {"asof": asof, "weights": {k: round(v, 6) for k, v in sorted(weights.items())}, "csv": csv}
+    if books:
+        out["feeds"] = {b: v["date"] for b, v in books.items()}
+        # A feed's live book is newer than its published NAV series; report the book's date.
+        out["asof"] = max([asof] + [str(v["date"]) for v in books.values() if v.get("date")])
+        dropped = sorted(b for b, v in books.items() if v["stops"])
+        if dropped:
+            out["warnings"] = [
+                f"protective stops published with {', '.join(dropped)} are not placed (sleeves don't place stops yet)"
+            ]
+    return out
 
 
 def rebalance_cmd(sym: Symphony, csv_path: str, *, mode: str, force: bool = False) -> list[str]:
@@ -113,11 +125,14 @@ def run(
     entry: dict = {"strategy": sym.id, "mode": mode, "source": source, "broker": sym.deploy.broker, **(tags or {})}
     try:
         cur = current_weights(sym, closes)
-    except (EvalError, prices.PriceError) as e:
+    except (EvalError, prices.PriceError, feeds.FeedError) as e:
         entry.update(status="error", error=f"evaluation failed: {e}")
         return store.log_run(entry)
     entry["asof"] = cur["asof"]
     entry["weights"] = cur["weights"]
+    for k in ("feeds", "warnings"):
+        if k in cur:
+            entry[k] = cur[k]
 
     fd, path = tempfile.mkstemp(prefix=f"msts-{sym.id}-", suffix=".csv")
     try:

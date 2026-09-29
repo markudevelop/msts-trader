@@ -44,6 +44,14 @@ Rebalance = Literal["daily", "weekly", "monthly", "quarterly", "yearly"]
 # Same rule as `rebalance --sleeve`: the strategy id doubles as its sleeve name.
 ID_RE = re.compile(r"[A-Za-z0-9_-]{1,40}")
 _TICKER_RE = re.compile(r"[A-Za-z0-9.\-^=/]{1,20}")
+_BOOK_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+# Column name for a feed book's NAV series in the price table. "@" can never
+# be a real ticker (see _TICKER_RE), so it can't collide or reach an order.
+FEED_PREFIX = "@PNL:"
+
+
+def feed_key(book: str) -> str:
+    return f"{FEED_PREFIX}{book.upper()}"
 
 
 class _Base(BaseModel):
@@ -130,6 +138,23 @@ class If(_NodeBase):
     otherwise: list[Node] = Field(default_factory=list, alias="else")
 
 
+class Feed(_NodeBase):
+    """Hold a published external book (pnlportfolio.com) — see feeds.py."""
+
+    step: Literal["feed"] = "feed"
+    provider: Literal["pnlportfolio"] = "pnlportfolio"
+    book: str
+    name: str | None = None
+
+    @field_validator("book")
+    @classmethod
+    def _book(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not _BOOK_RE.fullmatch(v):
+            raise ValueError(f"invalid book id {v!r}")
+        return v
+
+
 class Filter(_NodeBase):
     step: Literal["filter"] = "filter"
     sort_fn: IndicatorFn
@@ -140,7 +165,7 @@ class Filter(_NodeBase):
 
 
 Node = Annotated[
-    Union[Asset, Group, WeightEqual, WeightSpecified, WeightInverseVol, If, Filter],
+    Union[Asset, Group, WeightEqual, WeightSpecified, WeightInverseVol, If, Filter, Feed],
     Field(discriminator="step"),
 ]
 
@@ -202,11 +227,17 @@ def tickers(sym: Symphony) -> list[str]:
     for n in walk(sym.children):
         if isinstance(n, Asset):
             seen.add(n.ticker)
+        elif isinstance(n, Feed):
+            seen.add(feed_key(n.book))  # its NAV series (backtests, indicators)
         elif isinstance(n, If):
             seen.add(n.condition.lhs.ticker)
             if n.condition.rhs is not None:
                 seen.add(n.condition.rhs.ticker)
     return sorted(seen)
+
+
+def feed_books(sym: Symphony) -> list[str]:
+    return sorted({n.book for n in walk(sym.children) if isinstance(n, Feed)})
 
 
 def slugify(name: str) -> str:

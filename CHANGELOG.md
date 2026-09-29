@@ -10,6 +10,24 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Studio: import pnlportfolio.com books as strategies.** Import → pnlportfolio
+  books lists the live catalog, with the Research books (Core, Apex, Hydra,
+  Fusion, Unified) first and pre-selected. Each import becomes a strategy
+  holding one **Feed** block:
+  - Live runs use the book's current weights from the API, with your token
+    kept in the OS keychain (or `PNLPORTFOLIO_TOKEN`).
+  - Backtests, compare and indicators use the book's published daily NAV.
+  - Feeds compose like any block, so you can blend a book with your own
+    strategies or filter between books.
+  - CLI: `strategy feeds`, `strategy feed-token`, `strategy import-feed BOOK...`.
+
+### Fixed
+- Backtests and comparisons end on the last day every series has data,
+  instead of failing when a series stops early (a lagging published NAV, a
+  delisted ticker). Short holiday gaps are still filled, but prices are no
+  longer padded past a series' real end.
+
 ## [0.36.0] — 2026-09-29
 
 ### Added

@@ -3388,6 +3388,68 @@ def strategy_run(sid: str, yes: bool, force: bool) -> None:
         sys.exit(1)
 
 
+@strategy.command("feeds")
+def strategy_feeds() -> None:
+    """List pnlportfolio.com books you can import (featured first)."""
+    try:
+        from .symphony import feeds
+    except ImportError as e:
+        _fail(f'strategies need the ui extra: pip install "msts-trader[ui]" ({e})')
+    try:
+        books = feeds.catalog()
+    except feeds.FeedError as e:
+        _fail(str(e))
+    t = Table(show_header=True, header_style="bold")
+    for col in ("book", "label", "positions", "as of"):
+        t.add_column(col)
+    for b in books:
+        t.add_row(
+            b["id"] + (" *" if b["featured"] else ""),
+            str(b["label"]),
+            str(b["num_positions"] or ""),
+            str(b["date"] or ""),
+        )
+    c.print(t)
+    say(f"[dim]token: {'stored' if feeds.get_token() else 'missing — run `msts-trader strategy feed-token`'}[/dim]")
+
+
+@strategy.command("feed-token")
+def strategy_feed_token() -> None:
+    """Store your pnlportfolio.com API token in the OS keychain."""
+    try:
+        from .symphony import feeds
+    except ImportError as e:
+        _fail(f'strategies need the ui extra: pip install "msts-trader[ui]" ({e})')
+    token = click.prompt("pnlportfolio token", hide_input=True).strip()
+    try:
+        feeds.book_weights("unified", token=token)
+    except feeds.FeedError as e:
+        if "401" in str(e):
+            _fail(str(e))
+    feeds.set_token(token)
+    say("[green]✓ token stored in the OS keychain[/green]")
+
+
+@strategy.command("import-feed")
+@click.argument("books", nargs=-1, required=True)
+def strategy_import_feed(books) -> None:
+    """Import pnlportfolio.com books as strategies, e.g. `import-feed core apex hydra blend unified`."""
+    *_, sst, _ = _symphony_mods()
+    from .symphony.model import Symphony, slugify
+
+    for book in books:
+        s = Symphony.model_validate(
+            {
+                "id": sst.unique_id(slugify(f"pnl-{book}")),
+                "name": f"{book} (pnlportfolio)",
+                "rebalance": "daily",
+                "children": [{"step": "feed", "book": book}],
+            }
+        )
+        sst.save(s)
+        say(f"[green]✓ imported {book} as {s.id}[/green]")
+
+
 @strategy.command("import")
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--id", "sid", default=None, help="Strategy id (default: from the symphony name).")
