@@ -244,9 +244,11 @@ export default function App() {
             </div>
             {err && <div className="alert error">{err}</div>}
             <div className="tab-body">
-              {route.tab === "build" && <Build draft={draft} setDraft={setDraft} />}
+              {route.tab === "build" && <Build key={saved.id} draft={draft} setDraft={setDraft} />}
               {route.tab === "backtest" && (
                 <BacktestPanel
+                  // Per-strategy panels: results from one strategy must never show under another.
+                  key={saved.id}
                   draft={draft}
                   others={rows.filter((x) => x.id !== draft.id)}
                   onSaved={async (s) => {
@@ -259,7 +261,7 @@ export default function App() {
                 />
               )}
               {route.tab === "deploy" && (
-                <DeployPanel draft={draft} saved={saved} dirty={dirty} meta={meta} onDeploy={(deploy) => setDraft({ ...draft, deploy })} onSave={save} />
+                <DeployPanel key={saved.id} draft={draft} saved={saved} dirty={dirty} meta={meta} onDeploy={(deploy) => setDraft({ ...draft, deploy })} onSave={save} />
               )}
             </div>
           </>

@@ -10,6 +10,11 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Fixed
+- Switching strategies in Studio could show the previous strategy's backtest
+  (and its Build-tab allocation). Each strategy now gets its own Build /
+  Backtest / Deploy panels.
+
 ## [0.40.0] — 2026-10-01
 
 ### Added
