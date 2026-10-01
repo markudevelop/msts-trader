@@ -3593,10 +3593,15 @@ def strategy_run_due() -> None:
     every few minutes; safe to run any time — it only acts inside a
     strategy's scheduled window, once per rebalance period.
     """
-    _symphony_mods()
-    from .ui.scheduler import Scheduler
+    from .ui import scheduler as _sched
 
-    results = Scheduler().tick()
+    # The OS task calls this every minute: decide "nothing to do" without
+    # importing the engine (pandas, numpy, brokers), so a no-op costs little.
+    if not _sched.anything_due():
+        say("[dim]nothing due[/dim]")
+        return
+    _symphony_mods()
+    results = _sched.Scheduler().tick()
     for r in results:
         say(
             f"{r.get('strategy')}: {r.get('status')} ({r.get('mode')})" + (f" — {r['error']}" if r.get("error") else "")
@@ -3621,6 +3626,11 @@ def strategy_schedule(action: str) -> None:
         _fail(st.get("detail") or "no task scheduler available on this system")
     state = "installed" if st["installed"] else "not installed"
     say(f"OS task '{os_schedule.TASK_NAME}': {state} ({st['platform']}, every {st['every_minutes']} min)")
+    if st.get("outdated"):
+        say(
+            f"[yellow]installed task checks every {st['installed_every_minutes']} min — run "
+            f"`msts-trader strategy schedule install` to update it to every {st['every_minutes']} min[/yellow]"
+        )
     say(f"[dim]{st['command']}[/dim]")
 
 

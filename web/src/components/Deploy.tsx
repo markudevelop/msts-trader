@@ -537,6 +537,8 @@ function etToLocal(hhmm: string) {
   return at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
 }
 
+const every = (m: number | null | undefined) => (m == null ? "periodically" : m === 1 ? "every minute" : `every ${m} minutes`);
+
 /** Run schedules with Studio closed: one OS task calling `strategy run-due`. */
 function OsTask() {
   const [st, setSt] = useState<OsSchedule | null>(null);
@@ -567,16 +569,30 @@ function OsTask() {
       ) : st.installed ? (
         <>
           <p className="small pos">
-            ✓ Installed in {where}: checks every {st.every_minutes} min and runs whatever is due, even with Studio closed{st.platform === "windows" ? " (while you're logged in)" : ""}.
+            ✓ Installed in {where}: checks {every(st.installed_every_minutes ?? st.every_minutes)} and runs whatever is due, even with Studio closed
+            {st.platform === "windows" ? " (while you're logged in)" : ""}.
           </p>
-          <button className="btn small ghost" disabled={busy} onClick={() => set(false)}>
-            {busy ? "Removing…" : "Remove task"}
-          </button>
+          {st.outdated && (
+            <div className="alert warn small">
+              This task was installed by an older version and checks {every(st.installed_every_minutes)}: a run can start up to that late, and a schedule
+              in the last minutes before the close can be missed. Update it to check {every(st.every_minutes)}.
+            </div>
+          )}
+          <div className="btn-row">
+            {st.outdated && (
+              <button className="btn small primary" disabled={busy} onClick={() => set(true)}>
+                {busy ? "Updating…" : `Update to ${every(st.every_minutes)}`}
+              </button>
+            )}
+            <button className="btn small ghost" disabled={busy} onClick={() => set(false)}>
+              {busy ? "Removing…" : "Remove task"}
+            </button>
+          </div>
         </>
       ) : (
         <>
           <p className="muted small">
-            Right now schedules only run while Studio is open. Install one {where} task that checks every {st.every_minutes} minutes and runs every strategy
+            Right now schedules only run while Studio is open. Install one {where} task that checks {every(st.every_minutes)} and runs every strategy
             that's due, with the same rules and the same once-per-period guard, so it never double-trades with an open Studio.
           </p>
           <button className="btn small" disabled={busy} onClick={() => set(true)}>

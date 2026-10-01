@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
 from ..market_hours import ET, close_time_for, is_holiday, is_weekend
-from ..symphony import runner, store
+from ..symphony import store  # runner (pandas & co.) is imported only to run
 from ..symphony.model import Symphony
 
 TICK_SECONDS = 20
@@ -82,6 +82,18 @@ def tz_status() -> dict:
     }
 
 
+def anything_due(now: datetime | None = None) -> bool:
+    """Cheap pre-check for the every-minute OS task: is any strategy due, or the
+    weekly digest? Reads strategy files and the run log only — no pandas, no
+    engine — so a no-op check exits fast."""
+    now = (now or datetime.now(ET)).astimezone(ET)
+    if any(due(s, now) for s in store.list_all()):
+        return True
+    from ..symphony import studio_meta
+
+    return studio_meta.digest_due(now)
+
+
 def lock_path():
     from pathlib import Path
 
@@ -142,6 +154,8 @@ class Scheduler:
             return results
 
     def _tick_locked(self, now: datetime) -> list[dict]:
+        from ..symphony import runner
+
         results = []
         for s in store.list_all():
             if not due(s, now) or now < self._retry_at.get(s.id, now):

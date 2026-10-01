@@ -1,7 +1,7 @@
 """Run scheduled strategies without Studio open: one OS task.
 
 Installs a single recurring task that runs `msts-trader strategy run-due`
-every 5 minutes. That command does exactly what Studio's in-process scheduler
+every minute. That command does exactly what Studio's in-process scheduler
 does (same `due()` rules, once per rebalance period, New York clock) under a
 shared lock, so the OS task and an open Studio can never double-trade.
 
@@ -16,6 +16,7 @@ Nothing is installed unless the user asks (Studio's Install button or
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -23,7 +24,10 @@ from pathlib import Path
 
 TASK_NAME = "msts-trader-strategies"
 MARKER = f"# {TASK_NAME}"
-EVERY_MINUTES = 5
+# Every minute: a strategy's window is schedule time -> close (10 min at the
+# default 15:50 ET), so a 1-minute check runs it on time and can't miss a
+# short window. `run-due` exits in well under a second when nothing is due.
+EVERY_MINUTES = 1
 
 
 class ScheduleError(RuntimeError):
@@ -59,7 +63,14 @@ def _win_tr() -> str:
 
 def _win_status() -> dict:
     r = _run(["schtasks", "/Query", "/TN", TASK_NAME, "/FO", "LIST"])
-    return {"installed": r.returncode == 0, "detail": (r.stdout or r.stderr).strip()[:400]}
+    out = {"installed": r.returncode == 0, "detail": (r.stdout or r.stderr).strip()[:400], "installed_every": None}
+    if out["installed"]:
+        # The XML export is locale-independent (the LIST view is translated).
+        x = _run(["schtasks", "/Query", "/TN", TASK_NAME, "/XML"])
+        m = re.search(r"<Interval>PT(?:(\d+)H)?(?:(\d+)M)?</Interval>", x.stdout or "")
+        if m:
+            out["installed_every"] = int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
+    return out
 
 
 def _win_install() -> None:
@@ -79,7 +90,8 @@ def _win_uninstall() -> None:
 
 # ── cron (macOS / Linux) ───────────────────────────────────────────────────
 def _cron_line() -> str:
-    return f"*/{EVERY_MINUTES} * * * * {shlex.join(command())} >/dev/null 2>&1 {MARKER}"
+    minute = "*" if EVERY_MINUTES == 1 else f"*/{EVERY_MINUTES}"
+    return f"{minute} * * * * {shlex.join(command())} >/dev/null 2>&1 {MARKER}"
 
 
 def _crontab() -> str:
@@ -95,7 +107,11 @@ def _cron_write(text: str) -> None:
 
 def _cron_status() -> dict:
     lines = [ln for ln in _crontab().splitlines() if ln.rstrip().endswith(MARKER)]
-    return {"installed": bool(lines), "detail": lines[0] if lines else ""}
+    every = None
+    if lines:
+        field = lines[0].split()[0]
+        every = 1 if field == "*" else int(field[2:]) if re.fullmatch(r"\*/\d+", field) else None
+    return {"installed": bool(lines), "detail": lines[0] if lines else "", "installed_every": every}
 
 
 def _cron_install() -> None:
@@ -119,6 +135,9 @@ def status() -> dict:
         "installed": st["installed"],
         "platform": "windows" if _windows() else "cron",
         "every_minutes": EVERY_MINUTES,
+        "installed_every_minutes": st.get("installed_every"),
+        # an install from an older version (e.g. every 5 min): reinstall to update
+        "outdated": bool(st["installed"] and st.get("installed_every") not in (None, EVERY_MINUTES)),
         "command": " ".join(command()),
         "detail": st["detail"],
     }

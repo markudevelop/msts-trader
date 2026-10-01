@@ -183,7 +183,7 @@ def test_os_schedule_windows_commands(monkeypatch):
     assert os_schedule.status()["installed"] is False
     st = os_schedule.install()
     create = next(c for c in calls if c[:2] == ["schtasks", "/Create"])
-    assert create[create.index("/SC") + 1] == "MINUTE" and create[create.index("/MO") + 1] == "5"
+    assert create[create.index("/SC") + 1] == "MINUTE" and create[create.index("/MO") + 1] == "1"
     assert "strategy run-due" in create[create.index("/TR") + 1] and st["installed"] is True
     assert os_schedule.uninstall()["installed"] is False
 
@@ -206,7 +206,7 @@ def test_os_schedule_cron_keeps_other_lines(monkeypatch):
     os_schedule.install()  # idempotent: still one line
     lines = tab["text"].splitlines()
     assert lines[0] == "0 9 * * 1 /usr/bin/backup" and sum(ln.endswith(os_schedule.MARKER) for ln in lines) == 1
-    assert lines[1].startswith("*/5 * * * * ") and "strategy run-due" in lines[1]
+    assert lines[1].startswith("* * * * * ") and "strategy run-due" in lines[1]
     os_schedule.uninstall()
     assert tab["text"] == "0 9 * * 1 /usr/bin/backup\n"
 
@@ -262,3 +262,75 @@ def test_weekly_digest_once_per_week_after_friday_close(client, sent):
     assert studio_meta.maybe_send_digest(fri) is True
     assert "weekly digest" in sent[-1] and "Momo: capital $10,000" in sent[-1]
     assert studio_meta.maybe_send_digest(fri.replace(hour=17)) is False  # once per week
+
+
+# ── every-minute task: outdated installs, cheap no-op check ───────────────
+def test_windows_outdated_install_detected_from_xml(monkeypatch):
+    xml = {"interval": "PT5M"}
+
+    def fake_run(args, input=None):
+        class R:
+            returncode, stderr = 0, ""
+            stdout = (
+                f"<Task><Repetition><Interval>{xml['interval']}</Interval></Repetition></Task>"
+                if "/XML" in args
+                else "ok"
+            )
+
+        return R()
+
+    monkeypatch.setattr(os_schedule, "_windows", lambda: True)
+    monkeypatch.setattr(os_schedule, "_run", fake_run)
+    st = os_schedule.status()
+    assert st["installed_every_minutes"] == 5 and st["outdated"] is True and st["every_minutes"] == 1
+    xml["interval"] = "PT1M"
+    assert os_schedule.status()["outdated"] is False
+    xml["interval"] = "PT1H"
+    assert os_schedule.status()["installed_every_minutes"] == 60
+
+
+def test_cron_outdated_install_detected(monkeypatch):
+    tab = {"text": "*/5 * * * * /x/python -m msts_trader strategy run-due >/dev/null 2>&1 # msts-trader-strategies\n"}
+
+    def fake_run(args, input=None):
+        class R:
+            returncode, stderr = 0, ""
+            stdout = tab["text"]
+
+        if args == ["crontab", "-"]:
+            tab["text"] = input
+        return R()
+
+    monkeypatch.setattr(os_schedule, "_windows", lambda: False)
+    monkeypatch.setattr(os_schedule, "_run", fake_run)
+    assert os_schedule.status()["outdated"] is True
+    st = os_schedule.install()  # reinstall replaces the old line
+    assert st["outdated"] is False and st["installed_every_minutes"] == 1
+    assert sum(1 for ln in tab["text"].splitlines() if ln.endswith(os_schedule.MARKER)) == 1
+
+
+def test_anything_due_matches_due_and_digest(sent):
+    tue = datetime(2026, 9, 29, 15, 55, tzinfo=ET)
+    assert sched.anything_due(tue) is False  # no strategies
+    store.save(make_sym(schedule_enabled=True, schedule_time="15:50"))
+    assert sched.anything_due(tue) is True and sched.anything_due(tue.replace(hour=15, minute=40)) is False
+    sched.Scheduler().tick(tue)
+    assert sched.anything_due(tue) is False  # ran this period
+    studio_meta.save_settings(notify_url="https://hook.example/x", weekly_digest=True)
+    fri = datetime(2026, 10, 2, 16, 20, tzinfo=ET)
+    assert sched.anything_due(fri) is True  # digest pending
+    studio_meta.maybe_send_digest(fri)
+    assert sched.anything_due(fri) is False
+
+
+def test_run_due_noop_does_not_load_the_engine():
+    import subprocess
+    import sys as _sys
+
+    code = (
+        "import sys; from msts_trader.__main__ import main; sys.argv=['msts-trader','strategy','run-due'];"
+        "main(standalone_mode=False); print('PANDAS', 'pandas' in sys.modules)"
+    )
+    r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, env=os.environ.copy())
+    assert r.returncode == 0, r.stderr
+    assert "nothing due" in r.stdout and "PANDAS False" in r.stdout

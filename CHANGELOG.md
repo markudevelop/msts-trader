@@ -10,6 +10,17 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Changed
+- **The OS task now checks every minute (was every 5).** With Studio closed, a
+  15:50 ET schedule now runs at 15:50 rather than up to 4 minutes late. A
+  schedule within the last 5 minutes before the close can no longer fall
+  between two checks. `strategy run-due` decides "nothing due" without loading
+  the engine, so a no-op check stays cheap.
+- Tasks installed by 0.40.x keep their 5-minute interval until updated:
+  Deploy → Automation shows an **Update** button, and
+  `strategy schedule status` explains how to update. `strategy schedule
+  install` replaces the old task.
+
 ## [0.40.1] — 2026-10-01
 
 ### Fixed

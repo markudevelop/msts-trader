@@ -166,7 +166,7 @@ shaped by that history.
 
 Deploy → Automation → **Install** registers one OS task: Windows Task
 Scheduler (runs while you're logged in, using `pythonw` so no window
-flashes), or a crontab line on macOS/Linux. Every 5 minutes it runs
+flashes), or a crontab line on macOS/Linux. Every minute it runs
 `msts-trader strategy run-due`, which applies exactly the scheduler's rules.
 It holds a shared lock (`~/.msts-trader/scheduler.lock`) and checks the
 once-per-period stamp, so it and an open Studio never run the same strategy

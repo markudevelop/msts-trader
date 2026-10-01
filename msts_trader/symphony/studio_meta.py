@@ -276,8 +276,13 @@ def funded_rows() -> list[dict]:
     return out
 
 
-def maybe_send_digest(now) -> bool:
-    """Fridays after 16:15 ET, once per ISO week, when enabled. Never raises."""
+def _week(now) -> str:
+    iso = now.isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+
+def digest_due(now) -> bool:
+    """Fridays after 16:15 ET, once per ISO week, when enabled and configured."""
     from datetime import time
 
     try:
@@ -285,10 +290,17 @@ def maybe_send_digest(now) -> bool:
             return False
         if now.weekday() != 4 or now.timetz().replace(tzinfo=None) < time(16, 15):
             return False
-        iso = now.isocalendar()
-        week = f"{iso[0]}-W{iso[1]:02d}"
-        if digest_week() == week:
+        return digest_week() != _week(now)
+    except Exception:
+        return False
+
+
+def maybe_send_digest(now) -> bool:
+    """Send the weekly digest if it's due. Never raises."""
+    try:
+        if not digest_due(now):
             return False
+        week = _week(now)
         sent, _ = send(build_digest(funded_rows()))
         if sent:
             set_digest_week(week)

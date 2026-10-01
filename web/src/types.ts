@@ -278,6 +278,8 @@ export interface OsSchedule {
   installed: boolean;
   platform?: string;
   every_minutes?: number;
+  installed_every_minutes?: number | null;
+  outdated?: boolean;
   command?: string;
   detail?: string;
 }
