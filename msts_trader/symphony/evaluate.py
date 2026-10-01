@@ -117,6 +117,10 @@ class Engine:
         return self.indicator(m.fn, m.ticker, m.window, t)
 
     def condition(self, c: Condition, t: int) -> bool:
+        if c.any is not None:
+            return any(self.condition(x, t) for x in c.any)
+        if c.all is not None:
+            return all(self.condition(x, t) for x in c.all)
         lhs = self.metric(c.lhs, t)
         rhs = self.metric(c.rhs, t) if c.rhs is not None else float(c.rhs_value)
         return _CMP[c.comparator](lhs, rhs)
@@ -215,9 +219,8 @@ def max_lookback(sym: Symphony) -> int:
     need = 1
     for n in walk(sym.children):
         if isinstance(n, If):
-            for m in (n.condition.lhs, n.condition.rhs):
-                if m is not None:
-                    need = max(need, indicators.lookback(m.fn, m.window))
+            for m in n.condition.metrics():
+                need = max(need, indicators.lookback(m.fn, m.window))
         elif isinstance(n, Filter):
             # Group children rank on a synthetic curve that itself needs history.
             need = max(need, indicators.lookback(n.sort_fn, n.window) * 2)

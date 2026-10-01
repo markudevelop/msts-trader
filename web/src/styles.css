@@ -1177,3 +1177,29 @@ input.num.wide {
 .modal .form-grid > label {
   min-width: 0;
 }
+
+/* ── compound conditions ──────────────────────────── */
+.condition-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cond-group {
+  border-left: 2px solid var(--if);
+  padding: 6px 0 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: color-mix(in srgb, var(--if) 4%, transparent);
+  border-radius: 0 8px 8px 0;
+}
+.cond-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cond-kids {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

@@ -13,6 +13,10 @@ in exported symphonies:
                          :comparator :gt :rhs-fixed-value? true :rhs-val "80" :children [...]}
                         {:step :if-child :is-else-condition? true :children [...]}]}
 
+Newer exports put the test in a structured `condition` instead (binary,
+multi-ticker "binary-compound" with a "%" placeholder, and any/all
+"compound"); it takes precedence over any legacy lhs-/rhs- fields.
+
 Anything unrecognised is reported with its path — never silently dropped,
 since a dropped branch changes what the strategy buys.
 """
@@ -167,7 +171,84 @@ def _children(node: dict, path: str, errors: list[str]) -> list[dict]:
     return out
 
 
+def _cmetric(spec, ticker_override: str | None, path: str, errors: list[str]) -> dict | None:
+    """Structured-condition operand: {"fn", "ticker", "params": {"window"}}."""
+    if not isinstance(spec, dict):
+        errors.append(f"{path}: condition operand is not a map")
+        return None
+    fn = _fn(spec.get("fn"), path, errors)
+    ticker = spec.get("ticker")
+    if ticker == "%":
+        ticker = ticker_override
+    if fn is None:
+        return None
+    if not isinstance(ticker, str) or not ticker:
+        errors.append(f"{path}: condition operand has no ticker")
+        return None
+    params = spec.get("params") or {}
+    win = params.get("window") if isinstance(params, dict) else None
+    w = _num(win, "window", path, errors) if win not in (None, "") else 1
+    return {"fn": fn, "ticker": ticker, "window": int(w or 1)}
+
+
+def _binary(c: dict, ticker: str | None, path: str, errors: list[str]) -> dict | None:
+    lhs = _cmetric(c.get("lhs"), ticker, path, errors)
+    cmp_ = _CMP.get(str(c.get("comparator") or ""))
+    if cmp_ is None:
+        errors.append(f"{path}: unsupported comparator {c.get('comparator')!r}")
+    rhs = c.get("rhs")
+    out: dict = {"lhs": lhs, "comparator": cmp_}
+    if isinstance(rhs, dict) and "constant" in rhs:
+        out["rhs_value"] = _num(rhs.get("constant"), "rhs constant", path, errors)
+    elif isinstance(rhs, dict) and "fn" in rhs:
+        out["rhs"] = _cmetric(rhs, ticker, path, errors)
+    else:
+        errors.append(f"{path}: unsupported right-hand side {rhs!r}")
+        return None
+    if lhs is None or cmp_ is None or (out.get("rhs") is None and out.get("rhs_value") is None):
+        return None
+    return out
+
+
+def _structured(c, path: str, errors: list[str]) -> dict | None:
+    """Composer's structured condition (newer editor):
+    binary          lhs <cmp> rhs
+    binary-compound the same test over `tickers` ("%" = each ticker), any/all
+    compound        any/all of nested conditions
+    """
+    if not isinstance(c, dict):
+        errors.append(f"{path}: condition is not a map")
+        return None
+    ctype = str(c.get("condition-type") or "binary")
+    op = str(c.get("operator") or "any")
+    if op not in ("any", "all"):
+        errors.append(f"{path}: unsupported condition operator {op!r}")
+        return None
+    if ctype == "compound":
+        parts = [_structured(x, f"{path}/{i}", errors) for i, x in enumerate(c.get("conditions") or [])]
+    elif ctype == "binary-compound":
+        tickers = [t for t in (c.get("tickers") or []) if isinstance(t, str) and t]
+        if not tickers:
+            errors.append(f"{path}: multi-ticker condition lists no tickers")
+            return None
+        parts = [_binary(c, t, path, errors) for t in tickers]
+    elif ctype == "binary":
+        return _binary(c, None, path, errors)
+    else:
+        errors.append(f"{path}: unsupported condition type {ctype!r}")
+        return None
+    parts = [p for p in parts if p is not None]
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else {op: parts}
+
+
 def _condition(ch: dict, path: str, errors: list[str]) -> dict | None:
+    # Newer Composer exports carry a structured `condition`; nodes edited in
+    # the new editor keep stale legacy lhs-/rhs- fields alongside it, so the
+    # structured one wins whenever it is present.
+    if isinstance(ch.get("condition"), dict):
+        return _structured(ch["condition"], path, errors)
     lhs = _metric(ch, "lhs", path, errors)
     cmp_ = _CMP.get(str(ch.get("comparator") or ""))
     if cmp_ is None:

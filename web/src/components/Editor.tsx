@@ -270,13 +270,111 @@ function Body({ node, onChange, depth }: { node: Node; onChange: (n: Node) => vo
   );
 }
 
+const DEFAULT_COMPARISON: Condition = {
+  lhs: { fn: "relative-strength-index", ticker: "SPY", window: 10 },
+  comparator: "gt",
+  rhs: null,
+  rhs_value: 70,
+};
+
+/** Top-level condition of an If block: a comparison, or an ANY/ALL group of them. */
 function ConditionEditor({ value, onChange }: { value: Condition; onChange: (c: Condition) => void }) {
-  const fixed = value.rhs === null;
+  return (
+    <div className="condition-wrap">
+      <ConditionNode value={value} onChange={onChange} first />
+    </div>
+  );
+}
+
+function ConditionNode({
+  value,
+  onChange,
+  onRemove,
+  first = false,
+}: {
+  value: Condition;
+  onChange: (c: Condition) => void;
+  onRemove?: () => void;
+  first?: boolean;
+}) {
+  const kids = value.any ?? value.all;
+  if (kids) {
+    const mode: "any" | "all" = value.any ? "any" : "all";
+    const setKids = (next: Condition[]) => {
+      if (next.length === 1 && first) return onChange(next[0]); // a group of one is just that condition
+      onChange(mode === "any" ? { any: next } : { all: next });
+    };
+    return (
+      <div className="cond-group">
+        <div className="cond-group-head">
+          {first && <span className="kw">if</span>}
+          <div className="seg" role="group" aria-label="Combine with">
+            <button className={mode === "all" ? "on" : ""} onClick={() => onChange({ all: kids })}>
+              ALL of
+            </button>
+            <button className={mode === "any" ? "on" : ""} onClick={() => onChange({ any: kids })}>
+              ANY of
+            </button>
+          </div>
+          <span className="spacer" />
+          {onRemove && (
+            <button className="icon-btn danger" onClick={onRemove} title="Remove group" aria-label="Remove group">
+              ✕
+            </button>
+          )}
+        </div>
+        <div className="cond-kids">
+          {kids.map((k, i) => (
+            <ConditionNode
+              key={i}
+              value={k}
+              onChange={(c) => setKids(kids.map((x, j) => (j === i ? c : x)))}
+              onRemove={kids.length > 1 ? () => setKids(kids.filter((_, j) => j !== i)) : undefined}
+            />
+          ))}
+          <div className="btn-row">
+            <button className="add-btn" onClick={() => setKids([...kids, { ...DEFAULT_COMPARISON }])}>
+              + condition
+            </button>
+            <button className="add-btn" onClick={() => setKids([...kids, { any: [{ ...DEFAULT_COMPARISON }] }])}>
+              + group
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <Comparison
+      value={value}
+      onChange={onChange}
+      onRemove={onRemove}
+      lead={first}
+      onGroup={first ? () => onChange({ all: [value, { ...DEFAULT_COMPARISON }] }) : undefined}
+    />
+  );
+}
+
+function Comparison({
+  value,
+  onChange,
+  onRemove,
+  onGroup,
+  lead,
+}: {
+  value: Condition;
+  onChange: (c: Condition) => void;
+  onRemove?: () => void;
+  onGroup?: () => void;
+  lead: boolean;
+}) {
+  const lhs = value.lhs ?? DEFAULT_COMPARISON.lhs!;
+  const fixed = !value.rhs;
   return (
     <div className="condition">
-      <span className="kw">if</span>
-      <MetricEditor value={value.lhs} onChange={(lhs) => onChange({ ...value, lhs })} />
-      <select className="cmp" value={value.comparator} onChange={(e) => onChange({ ...value, comparator: e.target.value as Comparator })} aria-label="Comparator">
+      {lead && <span className="kw">if</span>}
+      <MetricEditor value={lhs} onChange={(m) => onChange({ ...value, lhs: m })} />
+      <select className="cmp" value={value.comparator ?? "gt"} onChange={(e) => onChange({ ...value, comparator: e.target.value as Comparator })} aria-label="Comparator">
         {(Object.keys(COMPARATOR_LABEL) as Comparator[]).map((c) => (
           <option key={c} value={c}>
             {COMPARATOR_LABEL[c]}
@@ -287,10 +385,7 @@ function ConditionEditor({ value, onChange }: { value: Condition; onChange: (c: 
         <button className={fixed ? "on" : ""} onClick={() => onChange({ ...value, rhs: null, rhs_value: value.rhs_value ?? 0 })}>
           value
         </button>
-        <button
-          className={!fixed ? "on" : ""}
-          onClick={() => onChange({ ...value, rhs: value.rhs ?? { ...value.lhs }, rhs_value: null })}
-        >
+        <button className={!fixed ? "on" : ""} onClick={() => onChange({ ...value, rhs: value.rhs ?? { ...lhs }, rhs_value: null })}>
           indicator
         </button>
       </div>
@@ -298,6 +393,17 @@ function ConditionEditor({ value, onChange }: { value: Condition; onChange: (c: 
         <NumInput value={value.rhs_value ?? 0} onChange={(v) => onChange({ ...value, rhs_value: v })} step={0.1} wide />
       ) : (
         <MetricEditor value={value.rhs!} onChange={(rhs) => onChange({ ...value, rhs })} />
+      )}
+      <span className="spacer" />
+      {onGroup && (
+        <button className="add-btn" onClick={onGroup} title="Combine with another condition (AND / OR)">
+          + AND/OR
+        </button>
+      )}
+      {onRemove && (
+        <button className="icon-btn danger" onClick={onRemove} title="Remove condition" aria-label="Remove condition">
+          ✕
+        </button>
       )}
     </div>
   );

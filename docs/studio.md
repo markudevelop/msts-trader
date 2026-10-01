@@ -34,7 +34,7 @@ State lives next to the rest of msts-trader's:
 | Weight · Equal | Split evenly across children |
 | Weight · Specified | Fixed fraction per child. Under 100% leaves cash; over 100% is leverage |
 | Weight · Inverse volatility | Weight ∝ 1 / stdev of daily returns over N days |
-| If / Else | `indicator(ticker, N) <cmp> value` or `<cmp> indicator(ticker2, M)` |
+| If / Else | `indicator(ticker, N) <cmp> value` or `<cmp> indicator(ticker2, M)`, or ALL of / ANY of several such comparisons (nestable) |
 | Filter | Rank children by an indicator and keep the top or bottom N (equal weight) |
 | Group | A named container, equal-weighting its children |
 
@@ -247,7 +247,10 @@ Paste the symphony's EDN (from its editor's source view) or JSON into
   `filter`, `empty`
 - all nine indicators above, with `:window-days` or `:fn-params {:window}`
 
-Anything else (another indicator, `:rebalance :none` corridors, …) is
+Conditions from Composer's newer editor (the structured `condition`: binary,
+multi-ticker `%` conditions, any/all compounds) import as ALL of / ANY of
+groups and take precedence over the stale `lhs-`/`rhs-` fields edited nodes
+keep. Anything else (another indicator, `:rebalance :none` corridors, …) is
 reported with its path. Corridors fall back to daily with a warning;
 unknown blocks and indicators stop the import rather than being dropped.
 

@@ -20,11 +20,14 @@ export interface Metric {
   window: number;
 }
 
+/** A comparison (lhs/comparator/rhs|rhs_value) or a compound: any (OR) / all (AND). */
 export interface Condition {
-  lhs: Metric;
-  comparator: Comparator;
-  rhs: Metric | null;
-  rhs_value: number | null;
+  lhs?: Metric | null;
+  comparator?: Comparator | null;
+  rhs?: Metric | null;
+  rhs_value?: number | null;
+  any?: Condition[] | null;
+  all?: Condition[] | null;
 }
 
 interface Base {

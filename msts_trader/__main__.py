@@ -1393,6 +1393,7 @@ def rebalance(
     threshold_mode = config.pick(threshold_mode, cfg, "threshold_mode", "nav")
     rebalance_scope = config.pick(rebalance_scope, cfg, "rebalance_scope", "whole-book")
     sweep = bool(config.pick(sweep, cfg, "sweep", True))
+    allocation_cli = allocation  # an explicit --allocation, vs the config-file default
     allocation = config.pick(allocation, cfg, "allocation")
     sleeve_name = config.pick(sleeve_opt, cfg, "sleeve")
     if sleeve_name is not None:
@@ -1563,11 +1564,20 @@ def rebalance(
     # fenced sub-book must not do.
     sizing_allocation = Decimal(str(allocation)) if allocation is not None else None
     if sleeve_name and ledger.configured(sleeve_name):
-        if allocation is not None:
+        if allocation_cli is not None:
             _fail(
                 f"sleeve '{sleeve_name}' has its own sizing (cash and/or a policy) — drop --allocation and "
                 f"manage its capital with `msts-trader sleeve invest/divest/base/cap`."
             )
+        if allocation is not None:
+            # A config-file `allocation` is a default for plain account runs; a
+            # sleeve with its own capital ignores it rather than refusing to run
+            # (Studio and scheduled strategy runs never pass --allocation).
+            say(
+                f"[dim]sleeve '{sleeve_name}' has its own capital — ignoring allocation = {allocation} from config[/dim]"
+            )
+            allocation = None
+            sizing_allocation = None
         sized = sleeves.sizing_base(ledger, sleeve_name, account_nav=bal.nav, positions=pos, quotes=quotes)
         sizing_allocation, base_desc = sized
         if sizing_allocation <= 0:

@@ -10,6 +10,28 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Fixed
+- **Studio strategies failed with "sleeve … has its own sizing — drop
+  --allocation"** when `~/.msts-trader/config.toml` set `allocation`. That
+  affected every funded strategy, both on "Preview orders" and at the
+  scheduled time. A config-file `allocation` is a default for plain account
+  runs; a strategy with its own capital now ignores it with a note. An explicit
+  `--allocation` on the command line is still refused, because there it really
+  conflicts.
+- **Composer imports from the newer editor failed** with "unsupported
+  indicator ''" / "unsupported comparator None". Composer now stores
+  conditions as a structured `condition` (`binary`, multi-ticker
+  `binary-compound` with the `%` placeholder, and any/all `compound`). These
+  import faithfully and take precedence over the stale legacy `lhs-`/`rhs-`
+  fields that edited nodes keep. A real 1,800-block "Collective" symphony
+  (161 if-blocks, 56 compound conditions) now imports, evaluates and
+  backtests.
+
+### Added
+- Compound conditions in Studio: an If block can test **ALL of** (AND) or
+  **ANY of** (OR) several comparisons, nested freely. In the editor, use
+  "+ AND/OR" on a condition, then "+ condition" / "+ group".
+
 ## [0.39.0] — 2026-09-29
 
 ### Added

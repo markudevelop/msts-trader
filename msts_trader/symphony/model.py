@@ -88,17 +88,38 @@ class Metric(_Base):
 
 
 class Condition(_Base):
-    lhs: Metric
-    comparator: Comparator
+    """Either a comparison (`lhs <comparator> rhs|rhs_value`) or a compound:
+    `any` (OR) / `all` (AND) of nested conditions — Composer's compound and
+    multi-ticker ("any of / all of") conditions."""
+
+    lhs: Metric | None = None
+    comparator: Comparator | None = None
     # Exactly one of rhs (another metric) / rhs_value (a fixed number).
     rhs: Metric | None = None
     rhs_value: float | None = None
+    any: list[Condition] | None = None
+    all: list[Condition] | None = None
 
     @model_validator(mode="after")
-    def _one_rhs(self) -> Condition:
+    def _shape(self) -> Condition:
+        compound = [x for x in (self.any, self.all) if x is not None]
+        if compound:
+            if len(compound) > 1 or self.lhs is not None or self.comparator is not None:
+                raise ValueError("a condition is either a comparison or one of any/all, not both")
+            if not compound[0]:
+                raise ValueError("an any/all condition needs at least one condition")
+            return self
+        if self.lhs is None or self.comparator is None:
+            raise ValueError("a comparison needs lhs and comparator")
         if (self.rhs is None) == (self.rhs_value is None):
             raise ValueError("condition needs exactly one of rhs (metric) or rhs_value (number)")
         return self
+
+    def metrics(self) -> list[Metric]:
+        """Every indicator this condition reads, nested ones included."""
+        if self.any is not None or self.all is not None:
+            return [m for c in (self.any or self.all or []) for m in c.metrics()]
+        return [m for m in (self.lhs, self.rhs) if m is not None]
 
 
 class _NodeBase(_Base):
@@ -233,6 +254,7 @@ Node = Annotated[
     Field(discriminator="step"),
 ]
 
+Condition.model_rebuild()
 for _cls in (Group, WeightEqual, WeightSpecified, WeightInverseVol, If, Filter):
     _cls.model_rebuild()
 
@@ -294,9 +316,7 @@ def tickers(sym: Symphony) -> list[str]:
         elif isinstance(n, Feed):
             seen.add(n.series_key)  # its history series (backtests, indicators)
         elif isinstance(n, If):
-            seen.add(n.condition.lhs.ticker)
-            if n.condition.rhs is not None:
-                seen.add(n.condition.rhs.ticker)
+            seen.update(m.ticker for m in n.condition.metrics())
     return sorted(seen)
 
 

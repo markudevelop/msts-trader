@@ -1,4 +1,4 @@
-import type { Comparator, IndicatorFn, Node, Step, Strategy } from "./types";
+import type { Comparator, Condition, IndicatorFn, Node, Step, Strategy } from "./types";
 
 export const INDICATOR_LABEL: Record<IndicatorFn, string> = {
   "current-price": "Current price",
@@ -159,6 +159,13 @@ export const TEMPLATES: Template[] = [
   },
 ];
 
+/** Tickers a (possibly compound) condition reads. */
+export function conditionTickers(c: Condition): string[] {
+  const kids = c.any ?? c.all;
+  if (kids) return kids.flatMap(conditionTickers);
+  return [c.lhs?.ticker, c.rhs?.ticker].filter((t): t is string => !!t);
+}
+
 /** Every ticker referenced anywhere in the tree. */
 export function treeTickers(nodes: Node[]): string[] {
   const out = new Set<string>();
@@ -167,8 +174,7 @@ export function treeTickers(nodes: Node[]): string[] {
       if (n.step === "asset") out.add(n.ticker);
       else if (n.step === "feed") out.add(n.provider === "url" ? `feed:${n.name ?? "url"}` : `pnl:${n.book}`);
       else if (n.step === "if") {
-        out.add(n.condition.lhs.ticker);
-        if (n.condition.rhs) out.add(n.condition.rhs.ticker);
+        conditionTickers(n.condition).forEach((t) => out.add(t));
         walk(n.then);
         walk(n.else);
       } else walk(n.children);
