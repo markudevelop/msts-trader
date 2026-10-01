@@ -120,21 +120,35 @@ def _subprocess_env() -> dict:
 
 
 def run(
-    sym: Symphony, *, mode: str = DRY, force: bool = False, source: str = "cli", closes=None, tags: dict | None = None
+    sym: Symphony,
+    *,
+    mode: str = DRY,
+    force: bool = False,
+    source: str = "cli",
+    closes=None,
+    tags: dict | None = None,
+    target: dict | None = None,
 ) -> dict:
     """Evaluate + rebalance. Never raises for trading outcomes: the result
-    (and the run log entry) carries status/error instead."""
+    (and the run log entry) carries status/error instead.
+
+    `target` skips evaluation and trades the sleeve to these weights instead —
+    `{}` is "go to cash" (sell everything this strategy's sleeve holds), which
+    is allowed even when live trading is otherwise off for the strategy."""
     if mode not in (DRY, LIVE):
         raise RunError(f"invalid mode {mode!r}")
-    if mode == LIVE and not sym.deploy.live_enabled:
+    if mode == LIVE and not sym.deploy.live_enabled and target is None:
         raise RunError(f"strategy '{sym.id}' is not enabled for live trading (deploy.live_enabled = false)")
 
     entry: dict = {"strategy": sym.id, "mode": mode, "source": source, "broker": sym.deploy.broker, **(tags or {})}
+    if target is not None:
+        entry["target"] = "cash" if not target else "override"
+        return _finish(sym, entry, _run_target(sym, entry, target, mode=mode, force=force))
     try:
         cur = current_weights(sym, closes)
     except (EvalError, prices.PriceError, feeds.FeedError) as e:
         entry.update(status="error", error=f"evaluation failed: {e}")
-        return store.log_run(entry)
+        return _finish(sym, entry, store.log_run(entry))
     entry["asof"] = cur["asof"]
     entry["weights"] = cur["weights"]
     for k in ("feeds", "warnings"):
@@ -184,4 +198,62 @@ def run(
         from .performance import snapshot  # local: performance imports runner's siblings
 
         snapshot(sym, event="run")
+    return _finish(sym, entry, store.log_run(entry))
+
+
+def _finish(sym: Symphony, entry: dict, logged: dict) -> dict:
+    from . import studio_meta
+
+    studio_meta.notify_run(logged, sym.name)
+    return logged
+
+
+def _run_target(sym: Symphony, entry: dict, target: dict, *, mode: str, force: bool) -> dict:
+    """Trade the sleeve straight to `target` weights (no evaluation)."""
+    from .performance import _pick, sleeve_ledgers, snapshot
+
+    led = _pick(sleeve_ledgers(sym.id, sym.deploy.broker), sym.deploy.account)
+    held = sorted((led or {}).get("holdings") or {})
+    entry["weights"] = {k: round(v, 6) for k, v in sorted(target.items())}
+    if not target and not held:
+        entry["status"] = "nothing-to-do"
+        entry["detail"] = "the strategy's sleeve holds nothing"
+        return store.log_run(entry)
+    csv = to_csv(target, asof=datetime.now(timezone.utc), fallback=held[0] if held else None)
+    fd, path = tempfile.mkstemp(prefix=f"msts-{sym.id}-", suffix=".csv")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(csv)
+        proc = subprocess.run(
+            rebalance_cmd(sym, path, mode=mode, force=True if not target else force),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=_TIMEOUT,
+            env=_subprocess_env(),
+        )
+    finally:
+        Path(path).unlink(missing_ok=True)
+    payloads = _parse_json_lines(proc.stdout)
+    preview = next((p for p in payloads if "orders" in p and "executed" not in p), None)
+    executed = next((p for p in payloads if p.get("executed")), None)
+    error = next((p["error"] for p in payloads if "error" in p), None)
+    entry["preview"] = preview
+    if executed:
+        entry["execution"] = executed
+    if error:
+        entry.update(status="error", error=error)
+    elif preview and preview.get("blockers"):
+        entry.update(status="blocked", error="; ".join(preview["blockers"]))
+    elif executed:
+        entry["status"] = "executed" if not executed.get("failed") else "partial"
+    elif preview and not preview.get("orders"):
+        entry["status"] = "nothing-to-do"
+    elif proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-5:]
+        entry.update(status="error", error="rebalance failed: " + " | ".join(tail))
+    else:
+        entry["status"] = "preview"
+    if mode == LIVE and entry.get("status") in ("executed", "partial"):
+        snapshot(sym, event="cash" if not target else "run")
     return store.log_run(entry)

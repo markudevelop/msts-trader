@@ -101,6 +101,7 @@ export interface Strategy {
   rebalance: Cadence;
   children: Node[];
   deploy: Deploy;
+  tags?: string[];
 }
 
 export interface StrategySummary {
@@ -247,4 +248,36 @@ export interface UrlFeedTest {
   history: { start: string; end: string; days: number } | null;
   history_error?: string;
   token_stored: boolean;
+}
+
+export interface DashRow {
+  id: string;
+  name: string;
+  tags: string[];
+  rebalance: Cadence;
+  deploy: Deploy;
+  funded: boolean;
+  contributed: string | null;
+  cash: string | null;
+  positions: number;
+  last_viewed: string | null;
+  last_backtest: { ts: string; start: string; end: string; cost_bps: number; metrics: Metrics; benchmark: { ticker: string; metrics: Metrics } | null } | null;
+  last_run: { ts: string; status: string; mode: string; source: string; error?: string } | null;
+}
+
+export interface StudioSettings {
+  notify_on: "off" | "live" | "all";
+  telegram_chat_id: string;
+  weekly_digest: boolean;
+  has_notify_url: boolean;
+  has_telegram_token: boolean;
+}
+
+export interface OsSchedule {
+  supported: boolean;
+  installed: boolean;
+  platform?: string;
+  every_minutes?: number;
+  command?: string;
+  detail?: string;
 }

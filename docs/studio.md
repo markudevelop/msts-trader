@@ -26,6 +26,24 @@ State lives next to the rest of msts-trader's:
 | price cache | `~/.msts-trader/prices/` (finalized daily closes only) |
 | sleeve capital and holdings | `~/.msts-trader/sleeves/` (the existing ledger) |
 
+## Home and library
+
+Opening Studio shows the **Funded** strategies: capital, cash, positions,
+schedule, last run, and the CAGR / max drawdown / Sharpe from each
+strategy's last full-history backtest. That's saved whenever you run one, so
+nothing is recomputed daily. **All strategies** is the whole library as a
+compact table. You can search, filter by tag, sort, and select rows for bulk
+actions:
+- tag / untag
+- pause / resume schedules
+- export JSON (a zip)
+- delete
+- **go to cash**: sells everything the strategy's sleeve holds and pauses it.
+  It needs a typed `CASH` confirmation; real orders on real brokers.
+
+Tags are edited under each strategy's name. The sidebar lists Funded and the
+20 most recently opened strategies, plus a search box for everything else.
+
 ## Blocks
 
 | Block | Meaning |
@@ -143,6 +161,26 @@ on the **Deploy** tab shows:
 On the **Backtest** tab, the part of the curve after go-live is drawn as
 out-of-sample. The earlier part is in-sample, because the rules may have been
 shaped by that history.
+
+### Running schedules without Studio open
+
+Deploy → Automation → **Install** registers one OS task: Windows Task
+Scheduler (runs while you're logged in, using `pythonw` so no window
+flashes), or a crontab line on macOS/Linux. Every 5 minutes it runs
+`msts-trader strategy run-due`, which applies exactly the scheduler's rules.
+It holds a shared lock (`~/.msts-trader/scheduler.lock`) and checks the
+once-per-period stamp, so it and an open Studio never run the same strategy
+twice. **Remove** uninstalls it. The CLI equivalent is
+`msts-trader strategy schedule install|uninstall|status`.
+
+### Notifications
+
+Sidebar → **Notifications**: a webhook URL (Discord, Slack or any JSON
+endpoint) and/or a Telegram bot token plus chat id. Secrets go to the OS
+keychain. Choose to be notified after live runs and errors (the default),
+every run, or never. The message names the strategy and lists its orders, or
+the error. The optional **weekly digest** goes out on Fridays after the close
+and lists each funded strategy's capital, value, P&L and last run.
 
 ### Scheduler
 

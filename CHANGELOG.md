@@ -10,6 +10,35 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Studio home dashboard.** Opening Studio shows your **funded** strategies:
+  capital, cash, positions, schedule, last run, and CAGR / max drawdown /
+  Sharpe from each strategy's last full backtest. That's stored when you
+  backtest, not recomputed daily.
+- **All-strategies library.** One compact row per strategy, with search, a
+  tag filter and sorting by CAGR, Sharpe, drawdown, capital or recently
+  viewed. Bulk actions: tag, untag, pause/resume schedules, export JSON (a
+  zip), delete, and **go to cash**, which sells everything a strategy's sleeve
+  holds and pauses it, behind a typed `CASH` confirmation. It's also on each
+  strategy's Deploy tab.
+- **Tags** on strategies, editable under the strategy name. A folder is just
+  a tag, and a strategy can carry several.
+- **Compact sidebar:** Home, search across every strategy, **Funded**, and
+  the 20 most **recent** strategies, instead of one large card per strategy.
+- **Run schedules without Studio open.** Deploy → Automation → Install adds
+  one OS task (Windows Task Scheduler, or cron on macOS/Linux) that runs the
+  new `msts-trader strategy run-due` every 5 minutes. It uses the same
+  due/once-per-period rules as Studio's scheduler, and a shared lock means an
+  open Studio and the OS task never double-trade. CLI:
+  `strategy schedule install|uninstall|status`.
+- **Import files:** pick or drag-and-drop Composer `.json`/`.edn` files,
+  several at once, with per-file results. Pasting still works.
+- **Notifications:** Studio settings (sidebar → Notifications) for a
+  Discord/Slack/JSON webhook and Telegram. Secrets live in the OS keychain.
+  After each live run (or every run), you get a message naming the strategy
+  and its orders or error. Optional **weekly digest** of funded strategies
+  (capital, value, P&L, last run) on Fridays after the close.
+
 ## [0.39.1] — 2026-10-01
 
 ### Fixed

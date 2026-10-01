@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import __version__
 from ..brokers import SUPPORTED
 from ..market_hours import market_status
-from ..symphony import backtest, composer_import, feeds, performance, prices, runner, store
+from ..symphony import backtest, composer_import, feeds, performance, prices, runner, store, studio_meta
 from ..symphony.evaluate import EvalError
 from ..symphony.model import INDICATORS, Feed, Symphony, combine, slugify, tickers
 
@@ -133,7 +133,9 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
 
     @app.get("/api/strategies/{sid}")
     def get_strategy(sid: str):
-        return _get(sid).model_dump(by_alias=True)
+        s = _get(sid)
+        studio_meta.mark_viewed(sid)
+        return s.model_dump(by_alias=True)
 
     @app.put("/api/strategies/{sid}")
     def put_strategy(sid: str, data: dict = Body(...)):
@@ -151,6 +153,7 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
             store.delete(sid)
         except store.StoreError as e:
             _bad(404, str(e))
+        studio_meta.forget(sid)
         return {"deleted": sid}
 
     # ── evaluate / backtest (work on unsaved drafts too) ──────────────
@@ -185,6 +188,8 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
         # In-sample vs out-of-sample split: everything after go-live is OOS.
         live = performance.go_live(s.id, s.deploy.broker) if store.exists(s.id) else None
         res["oos_start"] = live.isoformat() if live else None
+        if store.exists(s.id) and not start and not end:
+            studio_meta.record_backtest(s.id, res)  # full-history runs feed the dashboard
         return res
 
     @app.post("/api/compare")
@@ -449,6 +454,160 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
     @app.get("/api/runs")
     def runs(strategy: str | None = None, limit: int = 50):
         return store.read_runs(strategy, limit=min(max(limit, 1), 500))
+
+    # ── dashboard / library ─────────────────────────────────────────
+    @app.get("/api/dashboard")
+    def dashboard():
+        """One row per strategy: capital, last run, last backtest, tags, recency."""
+        meta = studio_meta.all_meta()
+        last_run: dict = {}
+        for e in reversed(store.read_runs(limit=100000)):
+            last_run[e.get("strategy")] = e
+        rows = []
+        for s in store.list_all():
+            led = performance._pick(performance.sleeve_ledgers(s.id, s.deploy.broker), s.deploy.account)
+            m = meta.get(s.id, {})
+            lr = last_run.get(s.id)
+            contributed = (led or {}).get("contributed")
+            rows.append(
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "tags": s.tags,
+                    "rebalance": s.rebalance,
+                    "deploy": s.deploy.model_dump(),
+                    "funded": bool(led and (led.get("contributed") or led.get("cash") or led.get("holdings"))),
+                    "contributed": contributed,
+                    "cash": (led or {}).get("cash"),
+                    "positions": len((led or {}).get("holdings") or {}),
+                    "last_viewed": m.get("last_viewed"),
+                    "last_backtest": m.get("last_backtest"),
+                    "last_run": {k: lr.get(k) for k in ("ts", "status", "mode", "source", "error")} if lr else None,
+                }
+            )
+        return {"strategies": rows, "settings": studio_meta.get_settings()}
+
+    @app.post("/api/strategies/bulk")
+    def bulk(ids: list[str] = Body(...), action: str = Body(...), tag: str | None = Body(None)):
+        if action not in ("tag", "untag", "delete", "pause", "resume"):
+            _bad(422, "action must be tag, untag, delete, pause or resume")
+        if action in ("tag", "untag") and not (tag or "").strip():
+            _bad(422, "give a tag")
+        done, failed = [], []
+        for sid in dict.fromkeys(ids):
+            try:
+                s = store.get(sid)
+                if action == "delete":
+                    store.delete(sid)
+                    studio_meta.forget(sid)
+                else:
+                    if action == "tag":
+                        s = s.model_copy(update={"tags": [*s.tags, tag]})
+                        s = Symphony.model_validate(s.model_dump(by_alias=True))
+                    elif action == "untag":
+                        s = s.model_copy(update={"tags": [t for t in s.tags if t.lower() != tag.strip().lower()]})
+                    elif action in ("pause", "resume"):
+                        s = s.model_copy(
+                            update={"deploy": s.deploy.model_copy(update={"schedule_enabled": action == "resume"})}
+                        )
+                    store.save(s)
+                done.append(sid)
+            except Exception as e:
+                failed.append({"id": sid, "error": str(e)})
+        return {"done": done, "failed": failed}
+
+    @app.post("/api/strategies/export")
+    def export(ids: list[str] = Body(..., embed=True)):
+        import io
+        import zipfile
+
+        from fastapi.responses import Response
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for sid in dict.fromkeys(ids):
+                try:
+                    z.writestr(f"{sid}.json", store.get(sid).model_dump_json(by_alias=True, indent=2))
+                except store.StoreError:
+                    continue
+        return Response(
+            buf.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="msts-strategies.zip"'},
+        )
+
+    @app.post("/api/strategies/cash")
+    def go_to_cash(ids: list[str] = Body(...), confirm: str = Body(...), mode: str = Body("live")):
+        """Sell everything each strategy's sleeve holds and pause its schedule.
+        Real orders on real brokers: needs the typed confirmation CASH."""
+        if confirm != "CASH":
+            _bad(403, "type CASH to confirm")
+        if mode not in (runner.DRY, runner.LIVE):
+            _bad(422, "mode must be dry or live")
+        if not run_lock.acquire(blocking=False):
+            _bad(409, "another run is in progress")
+        out = []
+        try:
+            for sid in dict.fromkeys(ids):
+                try:
+                    s = store.get(sid)
+                except store.StoreError as e:
+                    out.append({"strategy": sid, "status": "error", "error": str(e)})
+                    continue
+                if mode == runner.LIVE:
+                    s = s.model_copy(update={"deploy": s.deploy.model_copy(update={"schedule_enabled": False})})
+                    store.save(s)
+                out.append(runner.run(s, mode=mode, source="ui", target={}))
+        finally:
+            run_lock.release()
+        return {"results": out}
+
+    # ── settings: notifications ──────────────────────────────────────
+    @app.get("/api/settings")
+    def settings_get():
+        return studio_meta.get_settings()
+
+    @app.put("/api/settings")
+    def settings_put(
+        notify_on: str | None = Body(None),
+        telegram_chat_id: str | None = Body(None),
+        weekly_digest: bool | None = Body(None),
+        notify_url: str | None = Body(None),
+        telegram_token: str | None = Body(None),
+    ):
+        try:
+            return studio_meta.save_settings(
+                notify_on=notify_on,
+                telegram_chat_id=telegram_chat_id,
+                weekly_digest=weekly_digest,
+                notify_url=notify_url,
+                telegram_token=telegram_token,
+            )
+        except ValueError as e:
+            _bad(422, str(e))
+
+    @app.post("/api/settings/test")
+    def settings_test():
+        if not studio_meta.configured():
+            _bad(422, "no notification channel configured")
+        sent, failed = studio_meta.send("msts-trader Studio · test notification ✓")
+        return {"sent": sent, "failed": failed}
+
+    # ── OS task: run schedules without Studio open ───────────────────
+    @app.get("/api/os-schedule")
+    def os_schedule_status():
+        from . import os_schedule
+
+        return os_schedule.status()
+
+    @app.post("/api/os-schedule")
+    def os_schedule_set(install: bool = Body(..., embed=True)):
+        from . import os_schedule
+
+        try:
+            return os_schedule.install() if install else os_schedule.uninstall()
+        except os_schedule.ScheduleError as e:
+            _bad(422, str(e))
 
     @app.get("/api/scheduler")
     def scheduler_state():

@@ -285,6 +285,20 @@ class Symphony(_Base):
     rebalance: Rebalance = "daily"
     children: list[Node] = Field(default_factory=list)
     deploy: Deploy = Field(default_factory=Deploy)
+    # Free-form labels for grouping a large library (a "folder" is just a tag).
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("tags")
+    @classmethod
+    def _tags(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for t in v:
+            t = " ".join(str(t).split())[:40]
+            if t and t.lower() not in {x.lower() for x in out}:
+                out.append(t)
+        if len(out) > 30:
+            raise ValueError("at most 30 tags per strategy")
+        return out
 
     @field_validator("id")
     @classmethod

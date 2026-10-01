@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { Deploy, Meta, OosResult, RunEntry, SchedulerState, SleeveLedger, Strategy } from "../types";
+import { CashModal } from "./Home";
+import type { Deploy, Meta, OosResult, OsSchedule, RunEntry, SchedulerState, SleeveLedger, Strategy } from "../types";
 import { LineChart, cssColor, type Series } from "./Chart";
 import { NumInput } from "./Editor";
 
@@ -26,6 +27,7 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [cashOpen, setCashOpen] = useState(false);
   const [tick, setTick] = useState(0);
 
   const refresh = useCallback(async () => {
@@ -154,6 +156,15 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
             >
               {busy === "live" ? "Executing…" : isPaper ? "Execute on paper" : `Execute LIVE on ${saved.deploy.broker}`}
             </button>
+            <span className="spacer" />
+            <button
+              className="btn ghost danger-text"
+              onClick={() => setCashOpen(true)}
+              disabled={!!busy || !sleeve?.some((l) => Object.keys(l.holdings).length)}
+              title="Sell everything this strategy holds and pause its schedule"
+            >
+              Go to cash…
+            </button>
           </div>
           {err && <div className="alert error">{err}</div>}
           {last && <RunResult run={last} />}
@@ -228,14 +239,20 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
               {u.mode === "live" ? "LIVE" : "dry-run"} · {u.cadence}
             </p>
           ))}
-          <p className="muted small">
-            The scheduler only runs while <code>msts-trader ui</code> is open. To trade unattended, schedule this instead (cron, Task Scheduler, or
-            GitHub Actions):
-          </p>
-          <pre className="code">msts-trader strategy run {saved.id} --yes</pre>
+          <OsTask />
         </section>
       </div>
       {confirming && <ConfirmLive strategy={saved} onCancel={() => setConfirming(false)} onConfirm={executeLive} />}
+      {cashOpen && (
+        <CashModal
+          rows={[{ id: saved.id, name: saved.name, deploy: saved.deploy, tags: [], rebalance: saved.rebalance, funded: true, contributed: null, cash: null, positions: 0, last_viewed: null, last_backtest: null, last_run: null }]}
+          onClose={() => setCashOpen(false)}
+          onDone={async () => {
+            setCashOpen(false);
+            await refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -518,4 +535,56 @@ function etToLocal(hhmm: string) {
   if (diff < -720) diff += 1440;
   const at = new Date(d.getTime() + diff * 60_000);
   return at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
+}
+
+/** Run schedules with Studio closed: one OS task calling `strategy run-due`. */
+function OsTask() {
+  const [st, setSt] = useState<OsSchedule | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    api<OsSchedule>("/os-schedule").then(setSt).catch((e) => setErr(e.message));
+  }, []);
+  const set = async (install: boolean) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      setSt(await api<OsSchedule>("/os-schedule", { body: { install } }));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const where = st?.platform === "windows" ? "Windows Task Scheduler" : "cron";
+  return (
+    <div className="os-task">
+      <h4>Run without Studio open</h4>
+      {!st ? (
+        <p className="muted small">{err ?? "Checking…"}</p>
+      ) : !st.supported ? (
+        <p className="muted small">No task scheduler found on this system. Use cron, Task Scheduler or GitHub Actions with <code>msts-trader strategy run-due</code>.</p>
+      ) : st.installed ? (
+        <>
+          <p className="small pos">
+            ✓ Installed in {where}: checks every {st.every_minutes} min and runs whatever is due, even with Studio closed{st.platform === "windows" ? " (while you're logged in)" : ""}.
+          </p>
+          <button className="btn small ghost" disabled={busy} onClick={() => set(false)}>
+            {busy ? "Removing…" : "Remove task"}
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="muted small">
+            Right now schedules only run while Studio is open. Install one {where} task that checks every {st.every_minutes} minutes and runs every strategy
+            that's due, with the same rules and the same once-per-period guard, so it never double-trades with an open Studio.
+          </p>
+          <button className="btn small" disabled={busy} onClick={() => set(true)}>
+            {busy ? "Installing…" : `Install ${where} task`}
+          </button>
+        </>
+      )}
+      {err && st && <div className="alert error small">{err}</div>}
+    </div>
+  );
 }

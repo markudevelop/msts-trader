@@ -58,3 +58,25 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
 }
 
 export const hasToken = () => token.length > 0;
+
+/** POST and return the raw response body (e.g. a zip download). */
+export async function apiBlob(path: string, body: unknown): Promise<Blob> {
+  const res = await fetch(`/api${path}`, {
+    method: "POST",
+    headers: { "X-MSTS-Token": token, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(res.status, (await res.text()) || res.statusText);
+  return res.blob();
+}
+
+export function download(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

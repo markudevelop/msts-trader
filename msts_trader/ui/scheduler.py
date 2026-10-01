@@ -13,7 +13,9 @@ It only runs while the UI process is up. For unattended trading use cron:
 
 from __future__ import annotations
 
+import os
 import threading
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
 from ..market_hours import ET, close_time_for, is_holiday, is_weekend
@@ -80,6 +82,34 @@ def tz_status() -> dict:
     }
 
 
+def lock_path():
+    from pathlib import Path
+
+    return Path(os.environ.get("MSTS_SCHEDULER_LOCK") or os.path.expanduser("~/.msts-trader/scheduler.lock"))
+
+
+STALE_LOCK = timedelta(minutes=30)  # a run can take minutes; a crashed holder can't block forever
+
+
+@contextmanager
+def tick_lock():
+    p = lock_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if p.exists() and datetime.now().timestamp() - p.stat().st_mtime > STALE_LOCK.total_seconds():
+            p.unlink(missing_ok=True)
+        fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        yield False
+        return
+    try:
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        yield True
+    finally:
+        p.unlink(missing_ok=True)
+
+
 class Scheduler:
     def __init__(self):
         self._stop = threading.Event()
@@ -99,6 +129,19 @@ class Scheduler:
     def tick(self, now: datetime | None = None) -> list[dict]:
         now = (now or datetime.now(ET)).astimezone(ET)
         self.last_tick = now.isoformat(timespec="seconds")
+        # One scheduler at a time across processes (an open Studio and the OS
+        # task): whoever holds the lock runs; the other skips this tick and the
+        # period stamp in the run log stops a second run afterwards.
+        with tick_lock() as got:
+            if not got:
+                return []
+            results = self._tick_locked(now)
+            from ..symphony import studio_meta
+
+            studio_meta.maybe_send_digest(now)
+            return results
+
+    def _tick_locked(self, now: datetime) -> list[dict]:
         results = []
         for s in store.list_all():
             if not due(s, now) or now < self._retry_at.get(s.id, now):

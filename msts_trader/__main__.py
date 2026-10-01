@@ -3585,6 +3585,45 @@ def strategy_import_url(name, weights_url, nav_url, auth, token_param, token_pro
     say(f"[green]✓ imported '{name}' as {s.id} — {len(w['weights'])} positions[/green]")
 
 
+@strategy.command("run-due")
+def strategy_run_due() -> None:
+    """Run every strategy that is due now (what Studio's scheduler does), then exit.
+
+    This is what the OS task installed by `strategy schedule install` calls
+    every few minutes; safe to run any time — it only acts inside a
+    strategy's scheduled window, once per rebalance period.
+    """
+    _symphony_mods()
+    from .ui.scheduler import Scheduler
+
+    results = Scheduler().tick()
+    for r in results:
+        say(
+            f"{r.get('strategy')}: {r.get('status')} ({r.get('mode')})" + (f" — {r['error']}" if r.get("error") else "")
+        )
+    if not results:
+        say("[dim]nothing due[/dim]")
+
+
+@strategy.command("schedule")
+@click.argument("action", type=click.Choice(["status", "install", "uninstall"]))
+def strategy_schedule(action: str) -> None:
+    """Install/remove the OS task that runs scheduled strategies without Studio open."""
+    from .ui import os_schedule
+
+    try:
+        st = {"status": os_schedule.status, "install": os_schedule.install, "uninstall": os_schedule.uninstall}[
+            action
+        ]()
+    except os_schedule.ScheduleError as e:
+        _fail(str(e))
+    if not st.get("supported"):
+        _fail(st.get("detail") or "no task scheduler available on this system")
+    state = "installed" if st["installed"] else "not installed"
+    say(f"OS task '{os_schedule.TASK_NAME}': {state} ({st['platform']}, every {st['every_minutes']} min)")
+    say(f"[dim]{st['command']}[/dim]")
+
+
 @strategy.command("import")
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--id", "sid", default=None, help="Strategy id (default: from the symphony name).")

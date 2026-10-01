@@ -1,0 +1,129 @@
+"""Run scheduled strategies without Studio open: one OS task.
+
+Installs a single recurring task that runs `msts-trader strategy run-due`
+every 5 minutes. That command does exactly what Studio's in-process scheduler
+does (same `due()` rules, once per rebalance period, New York clock) under a
+shared lock, so the OS task and an open Studio can never double-trade.
+
+  Windows       Task Scheduler (schtasks), current user, runs while logged on;
+                uses pythonw.exe when present so no console window flashes.
+  macOS/Linux   a crontab line tagged `# msts-trader-strategies`.
+
+Nothing is installed unless the user asks (Studio's Install button or
+`msts-trader strategy schedule install`).
+"""
+
+from __future__ import annotations
+
+import os
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+TASK_NAME = "msts-trader-strategies"
+MARKER = f"# {TASK_NAME}"
+EVERY_MINUTES = 5
+
+
+class ScheduleError(RuntimeError):
+    pass
+
+
+def _python() -> str:
+    exe = Path(sys.executable)
+    if os.name == "nt":
+        w = exe.with_name("pythonw.exe")
+        if w.exists():
+            return str(w)
+    return str(exe)
+
+
+def command() -> list[str]:
+    return [_python(), "-m", "msts_trader", "strategy", "run-due"]
+
+
+def _run(args: list[str], input: str | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(args, capture_output=True, text=True, input=input)
+
+
+# ── Windows ────────────────────────────────────────────────────────────────
+def _win_tr() -> str:
+    return " ".join(f'"{a}"' if " " in a or a.endswith(".exe") else a for a in command())
+
+
+def _win_status() -> dict:
+    r = _run(["schtasks", "/Query", "/TN", TASK_NAME, "/FO", "LIST"])
+    return {"installed": r.returncode == 0, "detail": (r.stdout or r.stderr).strip()[:400]}
+
+
+def _win_install() -> None:
+    tr = _win_tr()
+    if len(tr) > 261:
+        raise ScheduleError("the command line is too long for Task Scheduler (install msts-trader to a shorter path)")
+    r = _run(["schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", str(EVERY_MINUTES), "/TN", TASK_NAME, "/TR", tr])
+    if r.returncode != 0:
+        raise ScheduleError((r.stderr or r.stdout).strip() or "schtasks /Create failed")
+
+
+def _win_uninstall() -> None:
+    r = _run(["schtasks", "/Delete", "/F", "/TN", TASK_NAME])
+    if r.returncode != 0 and "cannot find" not in (r.stderr + r.stdout).lower():
+        raise ScheduleError((r.stderr or r.stdout).strip() or "schtasks /Delete failed")
+
+
+# ── cron (macOS / Linux) ───────────────────────────────────────────────────
+def _cron_line() -> str:
+    return f"*/{EVERY_MINUTES} * * * * {shlex.join(command())} >/dev/null 2>&1 {MARKER}"
+
+
+def _crontab() -> str:
+    r = _run(["crontab", "-l"])
+    return r.stdout if r.returncode == 0 else ""
+
+
+def _cron_write(text: str) -> None:
+    r = _run(["crontab", "-"], input=text)
+    if r.returncode != 0:
+        raise ScheduleError((r.stderr or r.stdout).strip() or "crontab update failed")
+
+
+def _cron_status() -> dict:
+    lines = [ln for ln in _crontab().splitlines() if ln.rstrip().endswith(MARKER)]
+    return {"installed": bool(lines), "detail": lines[0] if lines else ""}
+
+
+def _cron_install() -> None:
+    keep = [ln for ln in _crontab().splitlines() if not ln.rstrip().endswith(MARKER)]
+    _cron_write("\n".join([*keep, _cron_line()]) + "\n")
+
+
+def _cron_uninstall() -> None:
+    keep = [ln for ln in _crontab().splitlines() if not ln.rstrip().endswith(MARKER)]
+    _cron_write(("\n".join(keep) + "\n") if keep else "")
+
+
+# ── public ─────────────────────────────────────────────────────────────────
+def status() -> dict:
+    try:
+        st = _win_status() if os.name == "nt" else _cron_status()
+    except FileNotFoundError:
+        return {"supported": False, "installed": False, "platform": sys.platform, "detail": "no task scheduler found"}
+    return {
+        "supported": True,
+        "installed": st["installed"],
+        "platform": "windows" if os.name == "nt" else "cron",
+        "every_minutes": EVERY_MINUTES,
+        "command": " ".join(command()),
+        "detail": st["detail"],
+    }
+
+
+def install() -> dict:
+    (_win_install if os.name == "nt" else _cron_install)()
+    return status()
+
+
+def uninstall() -> dict:
+    (_win_uninstall if os.name == "nt" else _cron_uninstall)()
+    return status()

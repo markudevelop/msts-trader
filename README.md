@@ -539,8 +539,15 @@ A local, open-source take on Composer.trade on top of the same rebalancer:
   supported broker. Live orders need a per-strategy opt-in plus a typed
   confirmation. A built-in scheduler runs strategies at a set ET time
   (daily / weekly / monthly) while the UI is open.
-- **Import.** Paste a Composer symphony (EDN or JSON). Blocks that can't
-  be mapped are listed, never silently dropped.
+- **Import.** Drop or paste Composer symphonies (EDN or JSON), several
+  files at once. Blocks that can't be mapped are listed, never silently
+  dropped.
+- **Home and library.** A dashboard of funded strategies, plus a taggable,
+  sortable table of all of them with bulk actions (tag, pause, export,
+  delete, go to cash).
+- **Unattended.** One click installs an OS task (Task Scheduler or cron) so
+  schedules run without Studio open. Webhook/Telegram notifications after
+  runs, plus an optional weekly digest.
 
 Headless (cron / GitHub Actions) uses the same engine:
 

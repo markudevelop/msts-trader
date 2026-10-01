@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { api } from "../api";
-import type { BacktestResult, CompareResult, Metrics, Strategy, StrategySummary } from "../types";
+import type { BacktestResult, CompareResult, Metrics, Strategy } from "../types";
 import { LineChart, PALETTE, cssColor, type Series } from "./Chart";
 import { NumInput, TickerInput } from "./Editor";
 
@@ -46,7 +46,7 @@ export function BacktestPanel({
   onSaved,
 }: {
   draft: Strategy;
-  others: StrategySummary[];
+  others: { id: string; name: string }[];
   onSaved: (s: Strategy) => void;
 }) {
   const [start, setStart] = useState("");

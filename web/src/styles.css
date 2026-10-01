@@ -1203,3 +1203,170 @@ input.num.wide {
   flex-direction: column;
   gap: 6px;
 }
+
+/* ── dashboard / library ──────────────────────────── */
+.nav-home {
+  text-align: left;
+  border: 0;
+  background: none;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.nav-home:hover,
+.nav-home.active {
+  background: var(--accent-soft);
+}
+.side-search {
+  width: 100%;
+}
+.side-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 10px;
+}
+.side-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 4px 10px;
+}
+.strategy-item.compact {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 6px;
+}
+.strategy-item.compact .strategy-name {
+  flex: 1;
+  font-weight: 500;
+  font-size: 13px;
+  min-width: 0;
+}
+.strategy-item.compact .strategy-meta {
+  margin-top: 0;
+}
+.settings-btn {
+  align-self: flex-start;
+}
+.home-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.home-head h2 {
+  font-size: 22px;
+}
+.tabs.compact {
+  margin: 0;
+  border-bottom: 0;
+}
+.table.dash tr.clickable {
+  cursor: pointer;
+}
+.table.dash tr.clickable:hover td {
+  background: var(--surface-2);
+}
+.table.dash tr.selected td {
+  background: var(--accent-soft);
+}
+.table.dash td {
+  vertical-align: middle;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11.5px;
+  padding: 1px 7px;
+  margin: 1px 4px 1px 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.tag-chip button {
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 0 0 2px;
+  font-size: 13px;
+  line-height: 1;
+}
+.tag-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding-left: 0;
+  margin-top: 4px;
+}
+.tag-input {
+  border: 1px dashed var(--border);
+  background: transparent;
+  min-height: 24px;
+  padding: 1px 8px;
+  font-size: 12px;
+  width: 90px;
+  border-radius: 999px;
+}
+.toolbar.flat {
+  border: 0;
+  padding: 0;
+}
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+.drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 22px;
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: center;
+}
+.drop-zone.over,
+.drop-zone:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.import-results {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.alert.ok {
+  background: color-mix(in srgb, var(--oos) 12%, transparent);
+  color: var(--oos);
+}
+
+.os-task {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.os-task h4 {
+  margin: 0;
+  font-size: 13px;
+}

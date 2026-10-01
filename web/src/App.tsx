@@ -4,7 +4,9 @@ import { TEMPLATES, treeTickers } from "./blocks";
 import { BacktestPanel } from "./components/Backtest";
 import { DeployPanel } from "./components/Deploy";
 import { NodeList } from "./components/Editor";
-import type { Cadence, EvalResult, FeedCatalog, Meta, Strategy, StrategySummary, UrlFeedTest } from "./types";
+import { Home } from "./components/Home";
+import { SettingsModal, TagEditor } from "./components/Settings";
+import type { Cadence, DashRow, EvalResult, FeedCatalog, Meta, Strategy, UrlFeedTest } from "./types";
 
 type Tab = "build" | "backtest" | "deploy";
 
@@ -15,13 +17,14 @@ function parseHash(): { id: string | null; tab: Tab } {
 
 export default function App() {
   const [meta, setMeta] = useState<Meta | null>(null);
-  const [list, setList] = useState<StrategySummary[]>([]);
+  const [rows, setRows] = useState<DashRow[]>([]);
+  const [q, setQ] = useState("");
   const [route, setRoute] = useState(parseHash);
   const [saved, setSaved] = useState<Strategy | null>(null);
   const [draft, setDraft] = useState<Strategy | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [modal, setModal] = useState<"new" | "import" | null>(null);
+  const [modal, setModal] = useState<"new" | "import" | "settings" | null>(null);
   const [saving, setSaving] = useState(false);
 
   const dirty = useMemo(() => !!draft && !!saved && JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved]);
@@ -48,7 +51,22 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
 
-  const loadList = useCallback(async () => setList(await api<StrategySummary[]>("/strategies")), []);
+  const loadList = useCallback(async () => setRows((await api<{ strategies: DashRow[] }>("/dashboard")).strategies), []);
+
+  const fundedRows = useMemo(() => rows.filter((r) => r.funded).sort((a, b) => a.name.localeCompare(b.name)), [rows]);
+  const recentRows = useMemo(
+    () =>
+      rows
+        .filter((r) => !r.funded && r.last_viewed)
+        .sort((a, b) => (b.last_viewed ?? "").localeCompare(a.last_viewed ?? ""))
+        .slice(0, 20),
+    [rows],
+  );
+  const matches = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    return ql ? rows.filter((r) => r.name.toLowerCase().includes(ql) || r.tags.some((t) => t.toLowerCase().includes(ql))) : [];
+  }, [rows, q]);
+  const allTags = useMemo(() => [...new Set(rows.flatMap((r) => r.tags))].sort(), [rows]);
 
   useEffect(() => {
     if (!hasToken()) {
@@ -74,6 +92,7 @@ export default function App() {
         setSaved(s);
         setDraft(s);
         setErr(null);
+        loadList().catch(() => undefined);
       })
       .catch((e) => setErr(e.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -153,27 +172,33 @@ export default function App() {
             Import
           </button>
         </div>
+        <button className={`nav-home ${!route.id ? "active" : ""}`} onClick={() => go(null)}>
+          ⌂ Home <span className="muted small">· {rows.length} strateg{rows.length === 1 ? "y" : "ies"}</span>
+        </button>
+        <input className="side-search" placeholder="Search strategies…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search strategies" />
         <nav className="strategy-list">
-          {list.length === 0 && <p className="muted small pad">No strategies yet.</p>}
-          {list.map((s) => (
-            <button key={s.id} className={`strategy-item ${route.id === s.id ? "active" : ""}`} onClick={() => go(s.id, route.tab)}>
-              <div className="strategy-name">{s.name}</div>
-              <div className="strategy-meta">
-                <span>{s.deploy.broker}</span>
-                {s.deploy.live_enabled && <span className="pill pill-live">live</span>}
-                {s.deploy.schedule_enabled && <span className="pill">⏱ {s.deploy.schedule_time}</span>}
-              </div>
-            </button>
-          ))}
+          {q.trim() ? (
+            <SideSection title={`Matches (${matches.length})`} rows={matches.slice(0, 50)} active={route.id} onOpen={(id) => go(id, route.tab)} />
+          ) : (
+            <>
+              <SideSection title="Funded" rows={fundedRows} active={route.id} onOpen={(id) => go(id, route.tab)} empty="Invest in a strategy to pin it here." />
+              <SideSection title="Recent" rows={recentRows} active={route.id} onOpen={(id) => go(id, route.tab)} empty="Strategies you open show up here." />
+            </>
+          )}
         </nav>
+        <button className="btn ghost small settings-btn" onClick={() => setModal("settings")}>
+          ⚙ Notifications
+        </button>
         <div className={`market market-${meta?.market.status ?? "unknown"}`}>
           <span className="dot" /> Market {meta?.market.status ?? "…"}
         </div>
       </aside>
 
       <main className="main">
-        {!draft || !saved ? (
-          <Welcome onNew={() => setModal("new")} onImport={() => setModal("import")} error={err} />
+        {!route.id ? (
+          <Home rows={rows} onOpen={(id) => go(id)} onChanged={loadList} onNew={() => setModal("new")} onImport={() => setModal("import")} />
+        ) : !draft || !saved ? (
+          err ? <div className="alert error">{err}</div> : <p className="muted">Loading…</p>
         ) : (
           <>
             <header className="header">
@@ -186,6 +211,7 @@ export default function App() {
                   onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                   aria-label="Description"
                 />
+                <TagEditor tags={draft.tags ?? []} onChange={(tags) => setDraft({ ...draft, tags })} suggestions={allTags} />
               </div>
               <div className="header-actions">
                 <label className="inline small">
@@ -222,7 +248,7 @@ export default function App() {
               {route.tab === "backtest" && (
                 <BacktestPanel
                   draft={draft}
-                  others={list.filter((x) => x.id !== draft.id)}
+                  others={rows.filter((x) => x.id !== draft.id)}
                   onSaved={async (s) => {
                     await loadList();
                     if (dirty && !window.confirm("Open the new blend? Unsaved changes to this strategy will be discarded.")) return;
@@ -240,6 +266,7 @@ export default function App() {
         )}
       </main>
       {modal === "new" && <NewModal onClose={() => setModal(null)} onCreate={create} />}
+      {modal === "settings" && <SettingsModal onClose={() => setModal(null)} />}
       {modal === "import" && (
         <ImportModal
           onClose={() => setModal(null)}
@@ -332,38 +359,6 @@ function Build({ draft, setDraft }: { draft: Strategy; setDraft: (s: Strategy) =
           </p>
         </section>
       </aside>
-    </div>
-  );
-}
-
-function Welcome({ onNew, onImport, error }: { onNew: () => void; onImport: () => void; error: string | null }) {
-  return (
-    <div className="welcome">
-      {error && <div className="alert error">{error}</div>}
-      <h1>Build strategies. Backtest them. Trade them on your own broker.</h1>
-      <p className="muted">
-        Compose blocks such as weights, if/else on indicators, and top-N filters into a strategy. Every day it resolves to a set of target weights, and
-        msts-trader's rebalancer executes them in an isolated sleeve of your account.
-      </p>
-      <div className="btn-row">
-        <button className="btn primary" onClick={onNew}>
-          Start from a template
-        </button>
-        <button className="btn" onClick={onImport}>
-          Import a Composer symphony
-        </button>
-      </div>
-      <ol className="steps">
-        <li>
-          <b>Build</b>: nest blocks and see today's allocation live.
-        </li>
-        <li>
-          <b>Backtest</b>: compare against SPY, with costs.
-        </li>
-        <li>
-          <b>Deploy</b>: fund a sleeve, preview orders on paper, go live when you're ready.
-        </li>
-      </ol>
     </div>
   );
 }
@@ -643,6 +638,27 @@ function CustomFeedImport({ onClose, onDone }: { onClose: () => void; onDone: (s
 
 function ComposerImport({ onClose, onDone }: { onClose: () => void; onDone: (s: Strategy) => Promise<void> }) {
   const [text, setText] = useState("");
+  const [drag, setDrag] = useState(false);
+  const [results, setResults] = useState<{ file: string; ok: boolean; detail: string; strategy?: Strategy }[]>([]);
+  const importFiles = async (files: FileList | File[]) => {
+    const list = [...files].filter((f) => /\.(json|edn|txt)$/i.test(f.name) || f.type.includes("json"));
+    if (!list.length) return setErr("Pick .json or .edn files");
+    setBusy(true);
+    setErr(null);
+    const out: typeof results = [];
+    for (const f of list) {
+      try {
+        const r = await api<{ strategy: Strategy; warnings: string[] }>("/import", { body: { text: await f.text() } });
+        out.push({ file: f.name, ok: true, detail: r.warnings.length ? r.warnings.join("; ") : r.strategy.name, strategy: r.strategy });
+      } catch (e) {
+        out.push({ file: f.name, ok: false, detail: (e as Error).message.split("\n").slice(0, 3).join(" ") });
+      }
+      setResults([...out]);
+    }
+    setBusy(false);
+    const ok = out.filter((x) => x.ok);
+    if (list.length === 1 && ok.length === 1 && !ok[0].detail.includes(";")) await onDone(ok[0].strategy!);
+  };
   const [err, setErr] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -667,7 +683,39 @@ function ComposerImport({ onClose, onDone }: { onClose: () => void; onDone: (s: 
           Paste a Composer symphony (the EDN from its editor's source view, or its JSON), or a msts-trader strategy file. Blocks that can't be
           mapped are listed rather than silently dropped.
         </p>
-        <textarea className="code-input" rows={14} value={text} onChange={(e) => setText(e.target.value)} placeholder='{:step :root :name "My symphony" :children [...]}' spellCheck={false} />
+        <label
+          className={`drop-zone ${drag ? "over" : ""}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDrag(true);
+          }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDrag(false);
+            importFiles(e.dataTransfer.files);
+          }}
+        >
+          <input type="file" accept=".json,.edn,.txt,application/json" multiple hidden onChange={(e) => e.target.files && importFiles(e.target.files)} />
+          <b>Drop Composer .json files here</b> or <u>choose files</u>
+          <span className="muted small">several at once is fine; each becomes a strategy</span>
+        </label>
+        {results.length > 0 && (
+          <div className="import-results">
+            {results.map((r, i) => (
+              <div key={i} className={`small ${r.ok ? "pos" : "neg"}`}>
+                {r.ok ? "✓" : "✗"} {r.file}: {r.detail}
+              </div>
+            ))}
+            {results.some((r) => r.ok) && (
+              <button className="btn small" onClick={() => onDone(results.find((r) => r.ok)!.strategy!)}>
+                Open {results.find((r) => r.ok)!.strategy!.name}
+              </button>
+            )}
+          </div>
+        )}
+        <p className="muted small">…or paste the JSON / EDN:</p>
+        <textarea className="code-input" rows={8} value={text} onChange={(e) => setText(e.target.value)} placeholder='{:step :root :name "My symphony" :children [...]}' spellCheck={false} />
         {err && <pre className="alert error pre">{err}</pre>}
         {warnings.map((w, i) => (
           <div className="alert warn small" key={i}>
@@ -683,5 +731,35 @@ function ComposerImport({ onClose, onDone }: { onClose: () => void; onDone: (s: 
           </button>
         </div>
     </>
+  );
+}
+
+function SideSection({
+  title,
+  rows,
+  active,
+  onOpen,
+  empty,
+}: {
+  title: string;
+  rows: DashRow[];
+  active: string | null;
+  onOpen: (id: string) => void;
+  empty?: string;
+}) {
+  return (
+    <div className="side-section">
+      <div className="side-title">{title}</div>
+      {rows.length === 0 && empty && <p className="muted small pad">{empty}</p>}
+      {rows.map((r) => (
+        <button key={r.id} className={`strategy-item compact ${active === r.id ? "active" : ""}`} onClick={() => onOpen(r.id)} title={r.name}>
+          <span className="strategy-name">{r.name}</span>
+          <span className="strategy-meta">
+            {r.deploy.live_enabled && <span className="pill pill-live">live</span>}
+            {r.deploy.schedule_enabled && <span title={`runs ${r.deploy.schedule_time} ET`}>⏱</span>}
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
