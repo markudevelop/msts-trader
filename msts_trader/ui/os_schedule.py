@@ -30,9 +30,14 @@ class ScheduleError(RuntimeError):
     pass
 
 
+def _windows() -> bool:
+    """One seam for the platform choice (tests patch this, never os.name)."""
+    return os.name == "nt"
+
+
 def _python() -> str:
     exe = Path(sys.executable)
-    if os.name == "nt":
+    if _windows():
         w = exe.with_name("pythonw.exe")
         if w.exists():
             return str(w)
@@ -106,13 +111,13 @@ def _cron_uninstall() -> None:
 # ── public ─────────────────────────────────────────────────────────────────
 def status() -> dict:
     try:
-        st = _win_status() if os.name == "nt" else _cron_status()
+        st = _win_status() if _windows() else _cron_status()
     except FileNotFoundError:
         return {"supported": False, "installed": False, "platform": sys.platform, "detail": "no task scheduler found"}
     return {
         "supported": True,
         "installed": st["installed"],
-        "platform": "windows" if os.name == "nt" else "cron",
+        "platform": "windows" if _windows() else "cron",
         "every_minutes": EVERY_MINUTES,
         "command": " ".join(command()),
         "detail": st["detail"],
@@ -120,10 +125,10 @@ def status() -> dict:
 
 
 def install() -> dict:
-    (_win_install if os.name == "nt" else _cron_install)()
+    (_win_install if _windows() else _cron_install)()
     return status()
 
 
 def uninstall() -> dict:
-    (_win_uninstall if os.name == "nt" else _cron_uninstall)()
+    (_win_uninstall if _windows() else _cron_uninstall)()
     return status()

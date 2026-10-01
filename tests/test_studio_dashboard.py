@@ -178,7 +178,7 @@ def test_os_schedule_windows_commands(monkeypatch):
 
         return R()
 
-    monkeypatch.setattr(os_schedule.os, "name", "nt")
+    monkeypatch.setattr(os_schedule, "_windows", lambda: True)
     monkeypatch.setattr(os_schedule, "_run", fake_run)
     assert os_schedule.status()["installed"] is False
     st = os_schedule.install()
@@ -200,7 +200,7 @@ def test_os_schedule_cron_keeps_other_lines(monkeypatch):
             tab["text"] = input
         return R()
 
-    monkeypatch.setattr(os_schedule.os, "name", "posix")
+    monkeypatch.setattr(os_schedule, "_windows", lambda: False)
     monkeypatch.setattr(os_schedule, "_run", fake_run)
     os_schedule.install()
     os_schedule.install()  # idempotent: still one line
