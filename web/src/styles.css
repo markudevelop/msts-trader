@@ -1370,3 +1370,20 @@ input.num.wide {
   margin: 0;
   font-size: 13px;
 }
+
+/* ── combined portfolio ───────────────────────────── */
+.weight-bar-col {
+  width: 22%;
+  min-width: 90px;
+}
+tr.breakdown td {
+  background: var(--surface-2);
+}
+.chip.link {
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+.chip.link:hover {
+  background: var(--accent-soft);
+}

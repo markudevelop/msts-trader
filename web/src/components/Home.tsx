@@ -1,12 +1,17 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { api, apiBlob, download } from "../api";
-import type { DashRow } from "../types";
+import type { DashRow, Rollup } from "../types";
 
 const pct = (v: number | null | undefined, dp = 1) => (v == null ? "–" : `${(v * 100).toFixed(dp)}%`);
 const num = (v: number | null | undefined) => (v == null ? "–" : v.toFixed(2));
 const money = (v: string | number | null | undefined) =>
   v == null || v === "" ? "–" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 const day = (ts: string | null | undefined) => (ts ? ts.slice(0, 10) : "–");
+const when = (ts: string | null | undefined) => {
+  if (!ts) return "–";
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? ts : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+};
 
 type Sort = "name" | "cagr" | "sharpe" | "mdd" | "viewed" | "capital";
 
@@ -19,12 +24,30 @@ function schedule(r: DashRow) {
   );
 }
 
+/** The last rebalance check (scheduled or manual) — not a backtest. */
 function RunCell({ r }: { r: DashRow }) {
   const lr = r.last_run;
-  if (!lr) return <span className="muted">–</span>;
+  if (!lr) return <span className="muted">never</span>;
+  const label = lr.target === "cash" ? "went to cash" : lr.status === "preview" ? "preview only" : lr.status;
+  const detail =
+    lr.status === "preview"
+      ? `${lr.orders} order(s) previewed, none placed (live orders are off)`
+      : lr.status === "executed"
+        ? `${lr.orders} order(s) placed`
+        : lr.error ?? lr.status;
   return (
-    <span title={lr.error ?? ""}>
-      <span className={`status status-${lr.status}`}>{lr.status}</span> <span className="muted small">{day(lr.ts)}</span>
+    <span title={`${lr.source === "scheduler" ? "Scheduled" : "Manual"} check · ${detail}`}>
+      <span className={`status status-${lr.status}`}>{label}</span> <span className="muted small">{when(lr.ts)}</span>
+    </span>
+  );
+}
+
+function HeldCell({ r }: { r: DashRow }) {
+  const t = r.target_positions;
+  return (
+    <span title={`holds ${r.positions} ticker(s)${t != null ? `; latest target has ${t}` : ""}`}>
+      <b>{r.positions}</b>
+      <span className="muted"> / {t ?? "–"}</span>
     </span>
   );
 }
@@ -43,12 +66,14 @@ function Tags({ tags }: { tags: string[] }) {
 
 export function Home({
   rows,
+  rollup,
   onOpen,
   onChanged,
   onNew,
   onImport,
 }: {
   rows: DashRow[];
+  rollup: Rollup | null;
   onOpen: (id: string) => void;
   onChanged: () => Promise<void>;
   onNew: () => void;
@@ -92,7 +117,14 @@ export function Home({
           </button>
         </div>
       </div>
-      {view === "funded" ? <Funded rows={funded} onOpen={onOpen} /> : <Library rows={rows} onOpen={onOpen} onChanged={onChanged} />}
+      {view === "funded" ? (
+        <>
+          <Funded rows={funded} onOpen={onOpen} />
+          {rollup && funded.length > 0 && <Combined rollup={rollup} onOpen={onOpen} />}
+        </>
+      ) : (
+        <Library rows={rows} onOpen={onOpen} onChanged={onChanged} />
+      )}
     </div>
   );
 }
@@ -106,23 +138,31 @@ function Funded({ rows, onOpen }: { rows: DashRow[]; onOpen: (id: string) => voi
       </div>
     );
   }
+  const previewOnly = rows.filter((r) => !r.deploy.live_enabled);
   return (
     <div className="card-plain">
       <div className="section-head">
         <span className="muted small">
-          {rows.length} funded · {money(total)} allocated · stats are from each strategy's last full backtest
+          {rows.length} funded · {money(total)} allocated · CAGR / Max DD / Sharpe are from each strategy's last full backtest
         </span>
       </div>
+      {previewOnly.length > 0 && (
+        <div className="alert warn small">
+          <b>{previewOnly.length === rows.length ? "All" : previewOnly.length} of these strateg{previewOnly.length === 1 ? "y is" : "ies are"} preview-only.</b> "Allow
+          live orders" is off, so each scheduled check only previews the orders and places none, which is why <b>Held</b> stays at 0. Turn it on in the
+          strategy's Deploy tab to trade (paper is simulated; real brokers place real orders).
+        </div>
+      )}
       <div className="table-scroll">
         <table className="table dash">
           <thead>
             <tr>
               <th>Strategy</th>
               <th className="num">Capital</th>
-              <th className="num">Cash</th>
-              <th className="num">Pos.</th>
+              <th className="num" title="cash + holdings at the latest cached close">Value</th>
+              <th className="num" title="tickers held now / tickers in the latest target">Held / target</th>
               <th>Schedule</th>
-              <th>Last run</th>
+              <th title="the last rebalance check, scheduled or manual">Last check</th>
               <th className="num">CAGR</th>
               <th className="num">Max DD</th>
               <th className="num">Sharpe</th>
@@ -141,8 +181,10 @@ function Funded({ rows, onOpen }: { rows: DashRow[]; onOpen: (id: string) => voi
                     </div>
                   </td>
                   <td className="num mono">{money(r.contributed)}</td>
-                  <td className="num mono">{money(r.cash)}</td>
-                  <td className="num mono">{r.positions}</td>
+                  <td className="num mono">{money(r.nav ?? r.cash)}</td>
+                  <td className="num mono">
+                    <HeldCell r={r} />
+                  </td>
                   <td className="small">{schedule(r)}</td>
                   <td>
                     <RunCell r={r} />
@@ -309,7 +351,7 @@ function Library({ rows, onOpen, onChanged }: { rows: DashRow[]; onOpen: (id: st
               <th className="num">Sharpe</th>
               <th className="num">Capital</th>
               <th>Schedule</th>
-              <th>Last run</th>
+              <th title="the last rebalance check, scheduled or manual">Last check</th>
               <th>Viewed</th>
             </tr>
           </thead>
@@ -399,6 +441,87 @@ export function CashModal({ rows, onClose, onDone }: { rows: DashRow[]; onClose:
             {busy ? "Selling…" : "Go to cash"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Combined portfolio: every funded strategy's latest target x its capital, by ticker. */
+function Combined({ rollup, onOpen }: { rollup: Rollup; onOpen: (id: string) => void }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const anyHeld = rollup.total_held > 0;
+  if (!rollup.tickers.length) {
+    return (
+      <div className="card-plain">
+        <h3>Combined portfolio</h3>
+        <p className="muted small">Appears after the funded strategies' first rebalance check (Preview orders, or the scheduled run).</p>
+      </div>
+    );
+  }
+  return (
+    <div className="card-plain">
+      <div className="section-head">
+        <h3>Combined portfolio</h3>
+        <span className="muted small">
+          target {money(rollup.total_target)} of {money(rollup.total_capital)}
+          {rollup.unallocated > 0.5 ? ` · ${money(rollup.unallocated)} held as cash by design` : ""}
+          {anyHeld ? ` · held now ${money(rollup.total_held)}` : " · nothing held yet"}
+        </span>
+      </div>
+      <p className="muted small">
+        Each funded strategy's latest target ({rollup.with_targets} of {rollup.strategies} have one) times its capital, summed by ticker. Click a row
+        to see which strategies hold it.
+      </p>
+      <div className="table-scroll">
+        <table className="table dash">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th className="num">Target $</th>
+              <th className="num">Target %</th>
+              <th className="weight-bar-col" />
+              <th className="num">Held $</th>
+              <th className="num">Held shares</th>
+              <th className="num">Strategies</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rollup.tickers.map((t) => (
+              <Fragment key={t.ticker}>
+                <tr className="clickable" onClick={() => setOpen(open === t.ticker ? null : t.ticker)}>
+                  <td className="mono">
+                    <b>{t.ticker}</b>
+                  </td>
+                  <td className="num mono">{money(t.target_value)}</td>
+                  <td className="num mono">{pct(t.target_weight)}</td>
+                  <td className="weight-bar-col">
+                    <div className="bar">
+                      <div style={{ width: `${Math.min(100, (t.target_weight ?? 0) * 100)}%` }} />
+                    </div>
+                  </td>
+                  <td className="num mono">{t.held_qty ? (t.priced ? money(t.held_value) : "no price") : "–"}</td>
+                  <td className="num mono">{t.held_qty ? t.held_qty.toLocaleString(undefined, { maximumFractionDigits: 4 }) : "–"}</td>
+                  <td className="num">{t.by.length}</td>
+                </tr>
+                {open === t.ticker && (
+                  <tr className="breakdown">
+                    <td />
+                    <td colSpan={6}>
+                      {t.by
+                        .slice()
+                        .sort((a, b) => b.value - a.value)
+                        .map((b) => (
+                          <button key={b.id} className="chip link" onClick={() => onOpen(b.id)}>
+                            {b.name} <b>{money(b.value)}</b> <span className="muted">({pct(b.weight)} of it)</span>
+                          </button>
+                        ))}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

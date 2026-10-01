@@ -28,9 +28,17 @@ State lives next to the rest of msts-trader's:
 
 ## Home and library
 
-Opening Studio shows the **Funded** strategies: capital, cash, positions,
-schedule, last run, and the CAGR / max drawdown / Sharpe from each
-strategy's last full-history backtest. That's saved whenever you run one, so
+Opening Studio shows the **Funded** strategies:
+- capital, and current value (cash + holdings at the latest cached close)
+- **held / target** positions
+- schedule
+- the **last check**: the last scheduled or manual rebalance check, labelled
+  *preview only* when "Allow live orders" is off, so no orders were placed
+- the CAGR / max drawdown / Sharpe from each strategy's last full-history
+  backtest
+
+Below it, the **Combined portfolio** sums every funded strategy's latest
+target, times its capital, by ticker, next to what the sleeves actually hold. That's saved whenever you run one, so
 nothing is recomputed daily. **All strategies** is the whole library as a
 compact table. You can search, filter by tag, sort, and select rows for bulk
 actions:

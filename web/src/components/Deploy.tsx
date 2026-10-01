@@ -245,7 +245,7 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
       {confirming && <ConfirmLive strategy={saved} onCancel={() => setConfirming(false)} onConfirm={executeLive} />}
       {cashOpen && (
         <CashModal
-          rows={[{ id: saved.id, name: saved.name, deploy: saved.deploy, tags: [], rebalance: saved.rebalance, funded: true, contributed: null, cash: null, positions: 0, last_viewed: null, last_backtest: null, last_run: null }]}
+          rows={[{ id: saved.id, name: saved.name, deploy: saved.deploy, tags: [], rebalance: saved.rebalance, funded: true, contributed: null, cash: null, nav: null, positions: 0, target_positions: null, last_viewed: null, last_backtest: null, last_run: null }]}
           onClose={() => setCashOpen(false)}
           onDone={async () => {
             setCashOpen(false);

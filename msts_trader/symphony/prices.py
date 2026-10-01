@@ -68,6 +68,17 @@ def _read_cache(ticker: str) -> pd.Series | None:
     return pd.Series(df["close"].to_numpy(dtype=float), index=pd.DatetimeIndex(df["date"]), name=ticker)
 
 
+def cached_last_close(tickers) -> dict[str, float]:
+    """Latest cached close per ticker, from disk only (never the network) — for
+    quick valuations like the Studio dashboard. Missing tickers are omitted."""
+    out = {}
+    for t in {str(x).upper() for x in tickers}:
+        s = _read_cache(t)
+        if s is not None and not s.dropna().empty:
+            out[t] = float(s.dropna().iloc[-1])
+    return out
+
+
 def _write_cache(ticker: str, s: pd.Series, today: date) -> None:
     s = s.dropna()
     s = s[s.index.date < today]

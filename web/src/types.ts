@@ -260,9 +260,11 @@ export interface DashRow {
   contributed: string | null;
   cash: string | null;
   positions: number;
+  nav: number | null;
+  target_positions: number | null;
   last_viewed: string | null;
   last_backtest: { ts: string; start: string; end: string; cost_bps: number; metrics: Metrics; benchmark: { ticker: string; metrics: Metrics } | null } | null;
-  last_run: { ts: string; status: string; mode: string; source: string; error?: string } | null;
+  last_run: { ts: string; status: string; mode: string; source: string; error?: string; target?: string; orders: number } | null;
 }
 
 export interface StudioSettings {
@@ -282,4 +284,22 @@ export interface OsSchedule {
   outdated?: boolean;
   command?: string;
   detail?: string;
+}
+
+export interface Rollup {
+  strategies: number;
+  with_targets: number;
+  total_capital: number;
+  total_target: number;
+  unallocated: number;
+  total_held: number;
+  tickers: {
+    ticker: string;
+    target_value: number;
+    target_weight: number | null;
+    held_qty: number;
+    held_value: number;
+    priced: boolean;
+    by: { id: string; name: string; weight: number; value: number }[];
+  }[];
 }

@@ -334,3 +334,67 @@ def test_run_due_noop_does_not_load_the_engine():
     r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, env=os.environ.copy())
     assert r.returncode == 0, r.stderr
     assert "nothing due" in r.stdout and "PANDAS False" in r.stdout
+
+
+# ── dashboard: held vs target, last check, combined portfolio ─────────────
+def test_dashboard_rollup_targets_holdings_and_last_check(client):
+    from msts_trader.symphony import prices
+
+    # two funded strategies: momo (60% SPY / 40% TLT) previews only; bond is live and holds TLT
+    store.save(make_sym("momo"))
+    bond = Symphony.model_validate(
+        {
+            "id": "bond",
+            "name": "Bond",
+            "children": [{"step": "asset", "ticker": "TLT"}],
+            "deploy": {"broker": "paper", "live_enabled": True},
+        }
+    )
+    store.save(bond)
+    store.save(make_sym("idle"))  # unfunded: not in the roll-up
+    for sid, amt in (("momo", "10000"), ("bond", "5000")):
+        client.post(f"/api/strategies/{sid}/capital", json={"action": "invest", "amount": amt}, headers=H())
+    client.post("/api/strategies/momo/run", json={"mode": "dry"}, headers=H())
+    client.post("/api/strategies/bond/run", json={"mode": "live", "confirm": "bond"}, headers=H())
+
+    d = client.get("/api/dashboard", headers=H()).json()
+    rows = {r["id"]: r for r in d["strategies"]}
+    assert rows["momo"]["positions"] == 0 and rows["momo"]["target_positions"] == 2
+    assert rows["momo"]["last_run"]["status"] == "preview" and rows["momo"]["last_run"]["orders"] == 2
+    assert rows["bond"]["positions"] == 1 and rows["bond"]["last_run"]["status"] == "executed"
+
+    r = d["rollup"]
+    assert r["strategies"] == 2 and r["with_targets"] == 2
+    t = {x["ticker"]: x for x in r["tickers"]}
+    # no cached prices in this isolated home -> capital falls back to contributed
+    assert t["SPY"]["target_value"] == pytest.approx(0.6 * 10000)
+    assert t["TLT"]["target_value"] == pytest.approx(0.4 * 10000 + 1.0 * 5000)
+    assert {b["id"] for b in t["TLT"]["by"]} == {"momo", "bond"}
+    assert t["TLT"]["held_qty"] > 0 and t["TLT"]["priced"] is False
+    assert r["total_capital"] == pytest.approx(15000)
+
+    # with a cached close, holdings are valued and capital becomes sleeve NAV
+    held = t["TLT"]["held_qty"]
+    cache = prices.cache_dir()
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "TLT.csv").write_text("date,close\n2026-09-30,100.0\n", encoding="utf-8")
+    d2 = client.get("/api/dashboard", headers=H()).json()
+    t2 = {x["ticker"]: x for x in d2["rollup"]["tickers"]}
+    assert t2["TLT"]["held_value"] == pytest.approx(held * 100.0) and t2["TLT"]["priced"] is True
+    bond_nav = {x["id"]: x for x in d2["strategies"]}["bond"]["nav"]
+    assert bond_nav == pytest.approx(
+        float({x["id"]: x for x in d2["strategies"]}["bond"]["cash"]) + held * 100.0, abs=0.01
+    )
+    assert t2["TLT"]["target_value"] == pytest.approx(0.4 * 10000 + bond_nav, abs=0.01)
+
+
+def test_rollup_after_go_to_cash_targets_cash(client):
+    store.save(make_sym("a", live_enabled=True))
+    client.post("/api/strategies/a/capital", json={"action": "invest", "amount": "10000"}, headers=H())
+    client.post("/api/strategies/a/run", json={"mode": "live", "confirm": "a"}, headers=H())
+    client.post("/api/strategies/cash", json={"ids": ["a"], "confirm": "CASH"}, headers=H())
+    d = client.get("/api/dashboard", headers=H()).json()
+    row = d["strategies"][0]
+    assert row["positions"] == 0 and row["target_positions"] == 0 and row["last_run"]["target"] == "cash"
+    assert d["rollup"]["tickers"] == [] and d["rollup"]["total_target"] == 0
+    assert d["rollup"]["unallocated"] == pytest.approx(d["rollup"]["total_capital"])

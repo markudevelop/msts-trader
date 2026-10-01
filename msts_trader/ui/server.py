@@ -458,17 +458,34 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
     # ── dashboard / library ─────────────────────────────────────────
     @app.get("/api/dashboard")
     def dashboard():
-        """One row per strategy: capital, last run, last backtest, tags, recency."""
+        """One row per strategy (capital, held vs target positions, last
+        rebalance check, last backtest, tags, recency) plus a combined-portfolio
+        roll-up of the funded ones. Offline: values use cached closes only."""
         meta = studio_meta.all_meta()
         last_run: dict = {}
-        for e in reversed(store.read_runs(limit=100000)):
-            last_run[e.get("strategy")] = e
+        last_target: dict = {}
+        for e in reversed(store.read_runs(limit=100000)):  # oldest -> newest
+            sid = e.get("strategy")
+            last_run[sid] = e
+            if e.get("weights") or e.get("target") == "cash":  # going to cash = an all-cash target
+                last_target[sid] = e
+        strategies = store.list_all()
+        ledgers = {}
+        for s in strategies:
+            ledgers[s.id] = performance._pick(performance.sleeve_ledgers(s.id, s.deploy.broker), s.deploy.account)
+        held_tickers = {t for led in ledgers.values() if led for t in led.get("holdings") or {}}
+        px = prices.cached_last_close(held_tickers) if held_tickers else {}
+
         rows = []
-        for s in store.list_all():
-            led = performance._pick(performance.sleeve_ledgers(s.id, s.deploy.broker), s.deploy.account)
+        for s in strategies:
+            led = ledgers[s.id] or {}
             m = meta.get(s.id, {})
             lr = last_run.get(s.id)
-            contributed = (led or {}).get("contributed")
+            lt = last_target.get(s.id)
+            holdings = {t: float(q) for t, q in (led.get("holdings") or {}).items()}
+            cash = float(led["cash"]) if led.get("cash") not in (None, "") else None
+            priced = all(t in px for t in holdings)
+            nav = (cash or 0.0) + sum(q * px[t] for t, q in holdings.items()) if priced else None
             rows.append(
                 {
                     "id": s.id,
@@ -476,16 +493,78 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
                     "tags": s.tags,
                     "rebalance": s.rebalance,
                     "deploy": s.deploy.model_dump(),
-                    "funded": bool(led and (led.get("contributed") or led.get("cash") or led.get("holdings"))),
-                    "contributed": contributed,
-                    "cash": (led or {}).get("cash"),
-                    "positions": len((led or {}).get("holdings") or {}),
+                    "funded": bool(led.get("contributed") or led.get("cash") or led.get("holdings")),
+                    "contributed": led.get("contributed"),
+                    "cash": led.get("cash"),
+                    "nav": None if nav is None else round(nav, 2),
+                    "positions": len(holdings),
+                    "target_positions": len(lt.get("weights") or {}) if lt else None,
                     "last_viewed": m.get("last_viewed"),
                     "last_backtest": m.get("last_backtest"),
-                    "last_run": {k: lr.get(k) for k in ("ts", "status", "mode", "source", "error")} if lr else None,
+                    "last_run": (
+                        {
+                            **{k: lr.get(k) for k in ("ts", "status", "mode", "source", "error", "target")},
+                            "orders": len((lr.get("preview") or {}).get("orders") or []),
+                        }
+                        if lr
+                        else None
+                    ),
+                    "_holdings": holdings,
+                    "_weights": (lt or {}).get("weights") or {},
+                    "_target_ts": (lt or {}).get("ts"),
                 }
             )
-        return {"strategies": rows, "settings": studio_meta.get_settings()}
+        rollup = _rollup([r for r in rows if r["funded"]], px)
+        for r in rows:
+            for k in ("_holdings", "_weights", "_target_ts"):
+                r.pop(k)
+        return {"strategies": rows, "rollup": rollup, "settings": studio_meta.get_settings()}
+
+    def _rollup(funded: list[dict], px: dict) -> dict:
+        """Combined portfolio of the funded strategies, per ticker:
+        target $ = sum(latest target weight x strategy capital) and held $ =
+        shares the sleeves own x cached close. Capital = sleeve NAV (cash +
+        holdings), else contributed when a holding has no cached price."""
+        by: dict = {}
+        total_capital = 0.0
+        unallocated = 0.0
+        for r in funded:
+            capital = r["nav"] if r["nav"] is not None else float(r["contributed"] or 0)
+            total_capital += capital
+            w = r["_weights"]
+            unallocated += capital * max(0.0, 1.0 - sum(w.values()))
+            for t, wt in w.items():
+                e = by.setdefault(t, {"ticker": t, "target_value": 0.0, "held_qty": 0.0, "held_value": 0.0, "by": []})
+                e["target_value"] += wt * capital
+                e["by"].append({"id": r["id"], "name": r["name"], "weight": wt, "value": round(wt * capital, 2)})
+            for t, q in r["_holdings"].items():
+                e = by.setdefault(t, {"ticker": t, "target_value": 0.0, "held_qty": 0.0, "held_value": 0.0, "by": []})
+                e["held_qty"] += q
+                if t in px:
+                    e["held_value"] += q * px[t]
+        total_target = sum(e["target_value"] for e in by.values())
+        total_held = sum(e["held_value"] for e in by.values())
+        tickers = []
+        for e in sorted(by.values(), key=lambda x: (-x["target_value"], -x["held_value"], x["ticker"])):
+            tickers.append(
+                {
+                    **e,
+                    "target_value": round(e["target_value"], 2),
+                    "target_weight": (e["target_value"] / total_capital) if total_capital else None,
+                    "held_qty": round(e["held_qty"], 6),
+                    "held_value": round(e["held_value"], 2),
+                    "priced": e["ticker"] in px or e["held_qty"] == 0,
+                }
+            )
+        return {
+            "strategies": len(funded),
+            "with_targets": sum(1 for r in funded if r["_target_ts"]),
+            "total_capital": round(total_capital, 2),
+            "total_target": round(total_target, 2),
+            "unallocated": round(unallocated, 2),
+            "total_held": round(total_held, 2),
+            "tickers": tickers,
+        }
 
     @app.post("/api/strategies/bulk")
     def bulk(ids: list[str] = Body(...), action: str = Body(...), tag: str | None = Body(None)):

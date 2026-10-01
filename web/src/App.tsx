@@ -6,7 +6,7 @@ import { DeployPanel } from "./components/Deploy";
 import { NodeList } from "./components/Editor";
 import { Home } from "./components/Home";
 import { SettingsModal, TagEditor } from "./components/Settings";
-import type { Cadence, DashRow, EvalResult, FeedCatalog, Meta, Strategy, UrlFeedTest } from "./types";
+import type { Cadence, DashRow, EvalResult, FeedCatalog, Meta, Rollup, Strategy, UrlFeedTest } from "./types";
 
 type Tab = "build" | "backtest" | "deploy";
 
@@ -18,6 +18,7 @@ function parseHash(): { id: string | null; tab: Tab } {
 export default function App() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [rows, setRows] = useState<DashRow[]>([]);
+  const [rollup, setRollup] = useState<Rollup | null>(null);
   const [q, setQ] = useState("");
   const [route, setRoute] = useState(parseHash);
   const [saved, setSaved] = useState<Strategy | null>(null);
@@ -51,7 +52,11 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
 
-  const loadList = useCallback(async () => setRows((await api<{ strategies: DashRow[] }>("/dashboard")).strategies), []);
+  const loadList = useCallback(async () => {
+    const d = await api<{ strategies: DashRow[]; rollup: Rollup }>("/dashboard");
+    setRows(d.strategies);
+    setRollup(d.rollup);
+  }, []);
 
   const fundedRows = useMemo(() => rows.filter((r) => r.funded).sort((a, b) => a.name.localeCompare(b.name)), [rows]);
   const recentRows = useMemo(
@@ -196,7 +201,7 @@ export default function App() {
 
       <main className="main">
         {!route.id ? (
-          <Home rows={rows} onOpen={(id) => go(id)} onChanged={loadList} onNew={() => setModal("new")} onImport={() => setModal("import")} />
+          <Home rows={rows} rollup={rollup} onOpen={(id) => go(id)} onChanged={loadList} onNew={() => setModal("new")} onImport={() => setModal("import")} />
         ) : !draft || !saved ? (
           err ? <div className="alert error">{err}</div> : <p className="muted">Loading…</p>
         ) : (

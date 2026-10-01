@@ -10,6 +10,23 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- **Combined portfolio** on the Studio home page. Each funded strategy's latest
+  target, times its capital, is summed by ticker: target $ and % of total, what
+  the sleeves actually hold, and a click-through to which strategies make up
+  each ticker. Cash a strategy holds by design (including after "go to cash")
+  is shown as unallocated. It's computed from the run log and cached closes,
+  with no network calls.
+
+### Changed
+- Funded dashboard: **Last run** is now **Last check**, the last rebalance
+  check (scheduled or manual), shown with date and time and labelled "preview
+  only", "executed" or "went to cash". **Pos.** is now **Held / target**: the
+  tickers held now against the tickers in the latest target. **Value** shows
+  cash plus holdings at the latest close.
+- A banner explains when funded strategies are preview-only ("Allow live
+  orders" off): scheduled checks only preview orders, so nothing is held.
+
 ## [0.40.2] — 2026-10-01
 
 ### Changed
