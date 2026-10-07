@@ -267,9 +267,24 @@ export interface DashRow {
   positions: number;
   nav: number | null;
   target_positions: number | null;
+  /** MOC only: target tickers worth less than one whole share (they round to 0 and are never bought). */
+  below_one_share?: string[];
+  /** Out-of-sample stats since go-live (null = never executed live). */
+  live?: LiveStats | null;
   last_viewed: string | null;
   last_backtest: { ts: string; start: string; end: string; cost_bps: number; metrics: Metrics; benchmark: { ticker: string; metrics: Metrics } | null } | null;
   last_run: { ts: string; status: string; mode: string; source: string; error?: string; target?: string; orders: number } | null;
+}
+
+export interface LiveStats {
+  since: string;
+  asof?: string | null;
+  days?: number;
+  reason?: string;
+  total_return?: number | null;
+  cagr?: number | null;
+  sharpe?: number | null;
+  max_drawdown?: number | null;
 }
 
 export interface StudioSettings {

@@ -398,3 +398,118 @@ def test_rollup_after_go_to_cash_targets_cash(client):
     assert row["positions"] == 0 and row["target_positions"] == 0 and row["last_run"]["target"] == "cash"
     assert d["rollup"]["tickers"] == [] and d["rollup"]["total_target"] == 0
     assert d["rollup"]["unallocated"] == pytest.approx(d["rollup"]["total_capital"])
+
+
+# ── live (out-of-sample) stats per funded row ─────────────────────────────
+def _go_live(sid, d0, holdings, contributed="10000", cash="0"):
+    import pandas as pd
+
+    ts = (d0 + pd.Timedelta(hours=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    store._append(
+        store.snapshots_log(),
+        {"ts": ts, "strategy": sid, "broker": "paper", "event": "run", "cash": cash,
+         "holdings": {k: str(v) for k, v in holdings.items()}, "contributed": contributed},
+    )  # fmt: skip
+    store._append(
+        store.runs_log(), {"ts": ts, "strategy": sid, "mode": "live", "broker": "paper", "status": "executed"}
+    )
+
+
+def test_live_stats_match_backtest_metrics_on_the_sleeve_index():
+    import numpy as np
+
+    from msts_trader.symphony import backtest, performance
+    from tests.test_studio import _closes
+
+    store.save(make_sym(live_enabled=True))
+    closes = _closes(["SPY", "TLT"])
+    d0 = closes.index[-120]
+    _go_live("momo", d0, {"SPY": 6000 / closes.loc[d0, "SPY"], "TLT": 4000 / closes.loc[d0, "TLT"]})
+    r = performance.live_stats("momo", "paper", closes)
+    assert r["since"] == d0.date().isoformat() and r["days"] == 120
+    nav = 6000 / closes.loc[d0, "SPY"] * closes["SPY"][d0:] + 4000 / closes.loc[d0, "TLT"] * closes["TLT"][d0:]
+    m = backtest.metrics(nav.to_numpy() / 10000, list(nav.index))
+    for k in ("cagr", "sharpe", "max_drawdown", "total_return"):
+        assert r[k] == pytest.approx(m[k], rel=1e-9), k
+    assert r["max_drawdown"] > 0 and np.isfinite(r["sharpe"])
+
+
+def test_live_stats_short_history_skips_annualised_numbers():
+    from msts_trader.symphony import performance
+    from tests.test_studio import _closes
+
+    store.save(make_sym(live_enabled=True))
+    closes = _closes(["SPY"])
+    d0 = closes.index[-10]
+    _go_live("momo", d0, {"SPY": 10000 / closes.loc[d0, "SPY"]})
+    r = performance.live_stats("momo", "paper", closes)
+    assert r["cagr"] is None and r["sharpe"] is None  # 9 days annualised would be noise
+    assert r["total_return"] == pytest.approx(closes["SPY"].iloc[-1] / closes.loc[d0, "SPY"] - 1)
+    assert performance.live_stats("other", "paper", closes) is None  # never went live
+
+
+def test_live_stats_strip_deposits_from_returns():
+    import pandas as pd
+
+    from msts_trader.symphony import performance
+
+    idx = pd.date_range("2026-01-01", periods=60, freq="D")
+    closes = pd.DataFrame({"SPY": [100.0] * 60}, index=idx)  # flat price: zero performance
+    store.save(make_sym(live_enabled=True))
+    _go_live("momo", idx[0], {"SPY": 100})
+    # doubled capital on day 30 (all cash): NAV jumps, return must not
+    _go_live("momo", idx[30], {"SPY": 100}, contributed="20000", cash="10000")
+    r = performance.live_stats("momo", "paper", closes)
+    assert r["total_return"] == pytest.approx(0.0) and r["max_drawdown"] == pytest.approx(0.0)
+
+
+def test_dashboard_live_columns_use_the_price_cache_only(client, tmp_path, monkeypatch):
+    import pandas as pd
+
+    from msts_trader.symphony import prices
+    from tests.test_studio import _closes
+
+    monkeypatch.setenv("MSTS_PRICES_DIR", str(tmp_path / "prices"))
+    monkeypatch.setattr(prices, "fetch", lambda *a, **k: pytest.fail("dashboard must not hit the network"))
+    store.save(make_sym(live_enabled=True))
+    store.save(make_sym("idle"))
+    closes = _closes(["SPY", "TLT"])
+    d0 = closes.index[-60]
+    _go_live("momo", d0, {"SPY": 50, "TLT": 40})
+    # no cache yet -> a reason, not numbers
+    rows = {r["id"]: r for r in client.get("/api/dashboard", headers=H()).json()["strategies"]}
+    assert rows["idle"]["live"] is None
+    assert (
+        rows["momo"]["live"]["since"] == d0.date().isoformat() and "no cached prices" in rows["momo"]["live"]["reason"]
+    )
+    tomorrow = (pd.Timestamp(closes.index[-1]) + pd.Timedelta(days=1)).date()
+    for t in ("SPY", "TLT"):
+        prices._write_cache(t, closes[t], tomorrow)
+    live = {r["id"]: r for r in client.get("/api/dashboard", headers=H()).json()["strategies"]}["momo"]["live"]
+    assert live["days"] == 60 and live["cagr"] is not None and live["sharpe"] is not None
+    assert 0 <= live["max_drawdown"] < 1 and live["asof"] == closes.index[-1].date().isoformat()
+
+
+def test_dashboard_flags_moc_targets_below_one_whole_share(client, tmp_path, monkeypatch):
+    import pandas as pd
+
+    from msts_trader.symphony import prices
+
+    monkeypatch.setenv("MSTS_PRICES_DIR", str(tmp_path / "prices"))
+    idx = pd.date_range("2026-01-01", periods=5, freq="D")
+    for t, px in {"SPY": 700.0, "TLT": 90.0}.items():
+        prices._write_cache(t, pd.Series(px, index=idx), date_after(idx))
+    for sid, order_type in (("moc", "moc"), ("mkt", "market")):
+        store.save(make_sym(sid, order_type=order_type))
+        client.post(f"/api/strategies/{sid}/capital", json={"action": "invest", "amount": "1000"}, headers=H())
+        store._append(store.runs_log(), {"ts": "2026-01-06T20:00:00Z", "strategy": sid, "mode": "dry",
+                                         "status": "nothing-to-do", "weights": {"SPY": 0.5, "TLT": 0.5}})  # fmt: skip
+    rows = {r["id"]: r for r in client.get("/api/dashboard", headers=H()).json()["strategies"]}
+    assert rows["moc"]["below_one_share"] == ["SPY"]  # $500 of a $700 share rounds to 0
+    assert rows["mkt"]["below_one_share"] == []  # fractional market orders buy it
+
+
+def date_after(idx):
+    import pandas as pd
+
+    return (idx[-1] + pd.Timedelta(days=1)).date()

@@ -79,6 +79,23 @@ def cached_last_close(tickers) -> dict[str, float]:
     return out
 
 
+def cached_closes(tickers, start: date | None = None) -> pd.DataFrame:
+    """Aligned closes from the disk cache only (never the network), from
+    `start` on — for cheap offline stats like the dashboard's live columns.
+    Tickers with no cache are left out; callers decide what that means."""
+    cols = {}
+    for t in sorted({str(x).upper() for x in tickers}):
+        s = _read_cache(t)
+        if s is not None and not s.dropna().empty:
+            cols[t] = s[~s.index.duplicated(keep="last")]
+    if not cols:
+        return pd.DataFrame()
+    df = pd.DataFrame(cols).sort_index()
+    if start is not None:
+        df = df[df.index >= pd.Timestamp(start)]
+    return _fill_gaps(df)
+
+
 def _write_cache(ticker: str, s: pd.Series, today: date) -> None:
     s = s.dropna()
     s = s[s.index.date < today]

@@ -30,12 +30,22 @@ State lives next to the rest of msts-trader's:
 
 Opening Studio shows the **Funded** strategies:
 - capital, and current value (cash + holdings at the latest cached close)
-- **held / target** positions
+- **held / target** positions. For market-on-close strategies it also flags
+  targets worth less than one share (*N < 1 share*): MOC orders are whole
+  shares, so those round to 0 and are never bought. Switch the order type to
+  Market (fractional) or add capital.
 - schedule
 - the **last check**: the last scheduled or manual rebalance check, labelled
   *preview only* when "Allow live orders" is off, so no orders were placed
-- the CAGR / max drawdown / Sharpe from each strategy's last full-history
-  backtest
+- **Live**: the sleeve's own out-of-sample record since go-live (the first
+  executed live or paper run). Shows *Since* (the OOS start date), CAGR, max
+  drawdown and Sharpe from the time-weighted sleeve index, so deposits and
+  withdrawals are not returns. Under 30 days live it shows the total return
+  instead of an annualised CAGR or Sharpe. It is computed from cached closes
+  only; a ⚠ means a held ticker has no cached price yet (opening the strategy's
+  Performance tab fetches it).
+- **Backtest**: the CAGR / max drawdown / Sharpe from each strategy's last
+  full-history backtest
 
 Below it, the **Combined portfolio** sums every funded strategy's latest
 target, times its capital, by ticker, next to what the sleeves actually hold. That's saved whenever you run one, so

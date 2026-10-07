@@ -50,11 +50,62 @@ function RunCell({ r }: { r: DashRow }) {
 
 function HeldCell({ r }: { r: DashRow }) {
   const t = r.target_positions;
+  const small = r.below_one_share ?? [];
   return (
     <span title={`holds ${r.positions} ticker(s)${t != null ? `; latest target has ${t}` : ""}`}>
       <b>{r.positions}</b>
       <span className="muted"> / {t ?? "–"}</span>
+      {small.length > 0 && (
+        <div
+          className="small warn-text"
+          title={`Market-on-close orders are whole shares. At this capital, these targets are worth less than one share, so they round to 0 and are never bought: ${small.join(", ")}. Switch the order type to Market (fractional) or add capital.`}
+        >
+          {small.length} &lt; 1 share
+        </div>
+      )}
     </span>
+  );
+}
+
+function LiveCells({ r }: { r: DashRow }) {
+  const l = r.live;
+  if (!l) {
+    return (
+      <>
+        <td className="muted small" title="out-of-sample tracking starts at the first executed live (or paper) run">
+          not live yet
+        </td>
+        <td className="num mono muted">–</td>
+        <td className="num mono muted">–</td>
+        <td className="num mono muted">–</td>
+      </>
+    );
+  }
+  const short = l.cagr == null && l.total_return != null;
+  return (
+    <>
+      <td className="small mono" title={l.reason ?? `out-of-sample since go-live · ${l.days ?? 0} trading day(s)${l.asof ? ` · marked at the ${l.asof} close` : ""}`}>
+        {l.since}
+        {l.reason && <span className="warn-text"> ⚠</span>}
+      </td>
+      <td
+        className="num mono"
+        title={short ? "under 30 days live: an annualised CAGR would be noise, so this is the total return since go-live" : "annualised, time-weighted (deposits/withdrawals excluded)"}
+      >
+        {short ? (
+          <>
+            {pct(l.total_return)}
+            <span className="muted small"> total</span>
+          </>
+        ) : (
+          pct(l.cagr)
+        )}
+      </td>
+      <td className="num mono">{pct(l.max_drawdown)}</td>
+      <td className="num mono" title={l.sharpe == null && l.total_return != null ? "needs 30+ days live" : "daily returns, rf = 0, annualised"}>
+        {num(l.sharpe)}
+      </td>
+    </>
   );
 }
 
@@ -149,7 +200,7 @@ function Funded({ rows, onOpen }: { rows: DashRow[]; onOpen: (id: string) => voi
     <div className="card-plain">
       <div className="section-head">
         <span className="muted small">
-          {rows.length} funded · {money(total)} allocated · CAGR / Max DD / Sharpe are from each strategy's last full backtest
+          {rows.length} funded · {money(total)} allocated · Live = the sleeve's own out-of-sample record since go-live · Backtest = the last full backtest
         </span>
       </div>
       {previewOnly.length > 0 && (
@@ -162,6 +213,15 @@ function Funded({ rows, onOpen }: { rows: DashRow[]; onOpen: (id: string) => voi
       <div className="table-scroll">
         <table className="table dash">
           <thead>
+            <tr className="group-head">
+              <th colSpan={6} />
+              <th colSpan={4} className="group" title="actual sleeve performance since go-live (out-of-sample), time-weighted">
+                Live
+              </th>
+              <th colSpan={4} className="group" title="the strategy's last full backtest (in-sample)">
+                Backtest
+              </th>
+            </tr>
             <tr>
               <th>Strategy</th>
               <th className="num">Capital</th>
@@ -169,10 +229,16 @@ function Funded({ rows, onOpen }: { rows: DashRow[]; onOpen: (id: string) => voi
               <th className="num" title="tickers held now / tickers in the latest target">Held / target</th>
               <th>Schedule</th>
               <th title="the last rebalance check, scheduled or manual">Last check</th>
+              <th className="group-start" title="out-of-sample start: the first executed live run">
+                Since
+              </th>
               <th className="num">CAGR</th>
               <th className="num">Max DD</th>
               <th className="num">Sharpe</th>
-              <th>Backtest</th>
+              <th className="num group-start">CAGR</th>
+              <th className="num">Max DD</th>
+              <th className="num">Sharpe</th>
+              <th>Period</th>
             </tr>
           </thead>
           <tbody>
@@ -195,7 +261,8 @@ function Funded({ rows, onOpen }: { rows: DashRow[]; onOpen: (id: string) => voi
                   <td>
                     <RunCell r={r} />
                   </td>
-                  <td className="num mono">{pct(m?.cagr)}</td>
+                  <LiveCells r={r} />
+                  <td className="num mono group-start">{pct(m?.cagr)}</td>
                   <td className="num mono">{pct(m?.max_drawdown)}</td>
                   <td className="num mono">{num(m?.sharpe)}</td>
                   <td className="muted small">{r.last_backtest ? `${r.last_backtest.start.slice(0, 4)}–${r.last_backtest.end.slice(0, 4)} · ${day(r.last_backtest.ts)}` : "not run"}</td>

@@ -1279,6 +1279,24 @@ input.num.wide {
 .table.dash td {
   vertical-align: middle;
 }
+.table.dash tr.group-head th {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.table.dash th.group {
+  text-align: center;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.table.dash .group-start {
+  border-left: 1px solid var(--border);
+}
+.warn-text {
+  color: var(--warn);
+}
 .tag-chip {
   display: inline-flex;
   align-items: center;

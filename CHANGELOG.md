@@ -10,6 +10,16 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- Studio Home: funded rows show **live (out-of-sample) stats** next to the
+  backtest ones: the OOS start date, CAGR, max drawdown and Sharpe of the
+  sleeve's time-weighted index since go-live. Computed offline from cached
+  closes; under 30 days live it shows the total return instead of annualised
+  numbers.
+- Studio Home: market-on-close rows flag targets worth less than one whole
+  share (*N < 1 share*). They round to 0 and are never bought, which is the
+  usual reason **Held** is below **target**.
+
 ## [0.42.0] — 2026-10-03
 
 ### Added

@@ -25,7 +25,7 @@ import pandas as pd
 
 from .. import sleeves
 from ..market_hours import ET
-from . import backtest, store
+from . import backtest, prices, store
 from .evaluate import EvalError
 from .model import Symphony
 
@@ -140,6 +140,48 @@ def nav_series(snaps: list[dict], closes: pd.DataFrame, start: date) -> pd.DataF
         twr.append(twr[-1] * (1.0 + r))
     df["twr"] = twr
     return df
+
+
+LIVE_MIN_DAYS = 30  # below this, annualised CAGR / Sharpe are noise — report the plain return
+
+
+def live_stats(sid: str, broker: str, closes: pd.DataFrame | None = None) -> dict | None:
+    """Out-of-sample stats of the sleeve since go-live, from the time-weighted
+    index (deposits / withdrawals stripped out): CAGR, max drawdown, Sharpe,
+    total return. None when the strategy never executed live. `closes` defaults
+    to the disk cache only, so the dashboard stays offline and fast; a held
+    ticker with no cached close gives `reason` instead of numbers."""
+    live = go_live(sid, broker)
+    if live is None:
+        return None
+    out: dict = {"since": live.isoformat()}
+    snaps = [s for s in store.read_snapshots(sid) if s.get("broker") == broker]
+    if not snaps:
+        return {**out, "reason": "no sleeve snapshots yet"}
+    held = {t for s in snaps for t in (s.get("holdings") or {})}
+    if closes is None:
+        closes = prices.cached_closes(held, live)
+    missing = sorted(held - set(closes.columns))
+    if missing or closes.empty:
+        return {**out, "reason": "no cached prices for " + (", ".join(missing[:5]) or "the sleeve") + " yet"}
+    try:
+        nav = nav_series(snaps, closes, live)
+    except ValueError as e:
+        return {**out, "reason": str(e)}
+    if len(nav) < 2:
+        return {**out, "days": len(nav), "asof": nav.index[-1].date().isoformat() if len(nav) else None}
+    m = backtest.metrics(nav["twr"].to_numpy(dtype=float), list(nav.index))
+    span = (nav.index[-1] - nav.index[0]).days
+    short = span < LIVE_MIN_DAYS
+    return {
+        **out,
+        "asof": nav.index[-1].date().isoformat(),
+        "days": len(nav),
+        "total_return": m["total_return"],
+        "cagr": None if short else m["cagr"],
+        "sharpe": None if short else m["sharpe"],
+        "max_drawdown": m["max_drawdown"],
+    }
 
 
 def _ret(series) -> float | None:
