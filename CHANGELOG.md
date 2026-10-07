@@ -10,6 +10,23 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Fixed
+- Studio: `whole_shares = true` or `min_weight` in `~/.msts-trader/config.toml`
+  no longer leak into strategy runs. They kept small targets from ever being
+  bought, even on Market orders ("held < target"). Studio now passes
+  `--fractional` (or `--whole-shares` for market-on-close) and
+  `--min-weight 0` explicitly.
+- Studio: the Performance panel no longer fails with "no close for TICKER"
+  when one holding lacks the latest bar; it is marked at its last close.
+
+### Changed
+- Studio Home: the *N < 1 share* estimate is replaced by *N not bought*, taken
+  from what the rebalance engine actually reported on the latest run (ticker,
+  weight and reason), so the count always matches **held / target**.
+- `rebalance --json` reports `not_bought` (targets not held and not ordered,
+  with the reason) and `sizing` (whole shares, min weight, threshold, MOC).
+- `rebalance --fractional` overrides `whole_shares = true` in the config file.
+
 ## [0.43.0] — 2026-10-07
 
 ### Added

@@ -267,8 +267,9 @@ export interface DashRow {
   positions: number;
   nav: number | null;
   target_positions: number | null;
-  /** MOC only: target tickers worth less than one whole share (they round to 0 and are never bought). */
-  below_one_share?: string[];
+  /** Targets the latest run did not buy, with the engine's reason (null = run predates 0.43.1). */
+  not_bought?: { ticker: string; target_pct: string; note: string }[] | null;
+  sizing?: { whole_shares: boolean; min_weight: number | null; threshold: number; moc: boolean } | null;
   /** Out-of-sample stats since go-live (null = never executed live). */
   live?: LiveStats | null;
   last_viewed: string | null;

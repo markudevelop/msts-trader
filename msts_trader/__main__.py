@@ -104,8 +104,11 @@ def _do_notify(text, *, notify_url, tg_token, tg_chat) -> None:
         say(f"[yellow]notify failed (check URL/token, see channel): {', '.join(failed)}[/yellow]")
 
 
-def _emit_json(broker, preview, *, dry_run: bool, duplicate: bool, sleeve: str | None = None) -> None:
+def _emit_json(
+    broker, preview, *, dry_run: bool, duplicate: bool, sleeve: str | None = None, sizing: dict | None = None
+) -> None:
     gross = sum((row.target_pct for row in preview.rows), Decimal(0))
+    ordered = {o.ticker for o in preview.orders}
     payload = {
         "broker": broker.name,
         "account_id": broker.account_id,
@@ -129,7 +132,17 @@ def _emit_json(broker, preview, *, dry_run: bool, duplicate: bool, sleeve: str |
             }
             for o in preview.orders
         ],
+        # Targets not held and not being bought, with the engine's reason
+        # (rounds to 0 at whole shares, below --min-weight, no quote, ...):
+        # the "held < target" gap, explained by the code that made it.
+        "not_bought": [
+            {"ticker": r.ticker, "target_pct": str(r.target_pct), "note": r.note or "no order"}
+            for r in preview.rows
+            if r.target_pct > 0 and r.current_pct == 0 and r.ticker not in ordered
+        ],
     }
+    if sizing is not None:
+        payload["sizing"] = sizing
     print(json.dumps(payload, default=str))
 
 
@@ -1269,10 +1282,9 @@ def liquidate(
     help="Submit market-on-close orders (fill in the closing auction). Alpaca / IBKR / Schwab / paper; whole shares; submit before ~15:50 ET. --no-moc overrides `moc = true` in the config file.",
 )
 @click.option(
-    "--whole-shares",
-    is_flag=True,
+    "--whole-shares/--fractional",
     default=None,
-    help="Round every order down to whole shares. Use for IBKR/accounts without fractional-API permission (avoids error 10243 'fractional order cannot be placed via API').",
+    help="Round every order down to whole shares. Use for IBKR/accounts without fractional-API permission (avoids error 10243 'fractional order cannot be placed via API'). --fractional overrides `whole_shares = true` in the config file (brokers that can't trade fractions still round down).",
 )
 @click.option(
     "--order-type",
@@ -1411,7 +1423,7 @@ def rebalance(
     tg_chat = config.pick(None, cfg, "telegram_chat_id")
     margin_aware = bool(config.pick(margin_aware, cfg, "margin_aware", True))
     moc = bool(config.pick(moc, cfg, "moc", False))
-    whole_shares = bool(config.pick(True if whole_shares else None, cfg, "whole_shares", False))
+    whole_shares = bool(config.pick(whole_shares, cfg, "whole_shares", False))
     quiet = bool(config.pick(True if quiet else None, cfg, "quiet", False))
 
     order_type = str(config.pick(order_type, cfg, "order_type", "market"))
@@ -1677,7 +1689,14 @@ def rebalance(
     # blockers, dry_run, duplicate); decide exit purely on those flags so we
     # never print a second JSON object.
     if json_out:
-        _emit_json(b, preview, dry_run=dry_run, duplicate=duplicate, sleeve=sleeve_name)
+        _emit_json(
+            b,
+            preview,
+            dry_run=dry_run,
+            duplicate=duplicate,
+            sleeve=sleeve_name,
+            sizing={"whole_shares": whole_shares, "min_weight": min_weight, "threshold": threshold, "moc": moc},
+        )
         if preview.has_blockers:
             sys.exit(1)
         if dry_run or not preview.orders or duplicate:

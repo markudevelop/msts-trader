@@ -490,26 +490,62 @@ def test_dashboard_live_columns_use_the_price_cache_only(client, tmp_path, monke
     assert 0 <= live["max_drawdown"] < 1 and live["asof"] == closes.index[-1].date().isoformat()
 
 
-def test_dashboard_flags_moc_targets_below_one_whole_share(client, tmp_path, monkeypatch):
+def _config_leftovers(home):
+    # what Ron's config.toml can carry from CLI use: whole shares + a min weight
+    (home / ".msts-trader" / "config.toml").write_text("whole_shares = true\nmin_weight = 0.5\n", encoding="utf-8")
+
+
+def test_config_whole_shares_and_min_weight_do_not_leak_into_studio_runs(client):
+    import subprocess
+
+    from msts_trader.symphony import runner
+
+    home = Path(os.environ["USERPROFILE"])  # the autouse fixture's temp home
+    _config_leftovers(home)
+    s = make_sym()  # SPY 60% / TLT 40%, market orders; paper SPY $500, TLT $90
+    store.save(s)
+    client.post("/api/strategies/momo/capital", json={"action": "invest", "amount": "400"}, headers=H())
+    # The bare CLI honours config.toml: SPY's $240 < one $500 share -> 0; TLT 40% < min_weight
+    cmd = [a for a in runner.rebalance_cmd(s, "x", mode="dry") if a not in ("--fractional", "--min-weight", "0")]
+    csv = home / "t.csv"
+    csv.write_text("ticker,weight\nSPY,0.6\nTLT,0.4\n", encoding="utf-8")
+    cmd[cmd.index("x")] = str(csv)
+    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=runner._subprocess_env())
+    pv = next(p for p in runner._parse_json_lines(out.stdout) if "orders" in p)
+    assert pv["orders"] == [] and pv["sizing"]["whole_shares"] is True
+    assert {x["ticker"]: x["note"] for x in pv["not_bought"]} == {
+        "SPY": "qty rounds to 0 (whole-share)",
+        "TLT": "below min weight 0.5 — ignored",
+    }
+    # A Studio run of a Market strategy uses the strategy's settings: fractional, no min weight
+    res = runner.run(s, mode="dry")
+    assert {o["ticker"]: o["quantity"] for o in res["preview"]["orders"]} == {"SPY": "0.48", "TLT": "1.77"}
+    assert res["preview"]["sizing"]["whole_shares"] is False and res["preview"]["not_bought"] == []
+
+
+def test_dashboard_reports_targets_the_engine_did_not_buy(client):
+    store.save(make_sym())
+    client.post("/api/strategies/momo/capital", json={"action": "invest", "amount": "400"}, headers=H())
+    nb = [{"ticker": "SPY", "target_pct": "0.6", "note": "qty rounds to 0 (whole-share)"}]
+    store._append(store.runs_log(), {"ts": "2026-01-06T20:00:00Z", "strategy": "momo", "mode": "dry",
+                                     "status": "preview", "weights": {"SPY": 0.6, "TLT": 0.4},
+                                     "preview": {"orders": [], "not_bought": nb,
+                                                 "sizing": {"whole_shares": True, "moc": True}}})  # fmt: skip
+    row = client.get("/api/dashboard", headers=H()).json()["strategies"][0]
+    assert row["not_bought"] == nb and row["sizing"]["whole_shares"] is True
+    store._append(store.runs_log(), {"ts": "2026-01-07T20:00:00Z", "strategy": "momo", "mode": "dry",
+                                     "status": "preview", "weights": {"SPY": 1.0}, "preview": {"orders": []}})  # fmt: skip
+    row = client.get("/api/dashboard", headers=H()).json()["strategies"][0]
+    assert row["not_bought"] is None  # a run from an older version: no data, no guess
+
+
+def test_nav_series_marks_a_ticker_missing_todays_bar_at_its_last_close():
     import pandas as pd
 
-    from msts_trader.symphony import prices
+    from msts_trader.symphony import performance
 
-    monkeypatch.setenv("MSTS_PRICES_DIR", str(tmp_path / "prices"))
-    idx = pd.date_range("2026-01-01", periods=5, freq="D")
-    for t, px in {"SPY": 700.0, "TLT": 90.0}.items():
-        prices._write_cache(t, pd.Series(px, index=idx), date_after(idx))
-    for sid, order_type in (("moc", "moc"), ("mkt", "market")):
-        store.save(make_sym(sid, order_type=order_type))
-        client.post(f"/api/strategies/{sid}/capital", json={"action": "invest", "amount": "1000"}, headers=H())
-        store._append(store.runs_log(), {"ts": "2026-01-06T20:00:00Z", "strategy": sid, "mode": "dry",
-                                         "status": "nothing-to-do", "weights": {"SPY": 0.5, "TLT": 0.5}})  # fmt: skip
-    rows = {r["id"]: r for r in client.get("/api/dashboard", headers=H()).json()["strategies"]}
-    assert rows["moc"]["below_one_share"] == ["SPY"]  # $500 of a $700 share rounds to 0
-    assert rows["mkt"]["below_one_share"] == []  # fractional market orders buy it
-
-
-def date_after(idx):
-    import pandas as pd
-
-    return (idx[-1] + pd.Timedelta(days=1)).date()
+    idx = pd.date_range("2026-10-05", periods=3, freq="D")
+    closes = pd.DataFrame({"SPY": [100.0, 101.0, 102.0], "DECO": [10.0, 11.0, float("nan")]}, index=idx)
+    snaps = [{"ts": "2026-10-05T20:00:00Z", "cash": "0", "holdings": {"SPY": "1", "DECO": "10"}, "contributed": "200"}]
+    nav = performance.nav_series(snaps, closes, idx[0].date())
+    assert list(nav["nav"]) == [200.0, 211.0, 212.0]  # DECO marked at 11 on the 7th, no "no close" error

@@ -50,17 +50,21 @@ function RunCell({ r }: { r: DashRow }) {
 
 function HeldCell({ r }: { r: DashRow }) {
   const t = r.target_positions;
-  const small = r.below_one_share ?? [];
+  const nb = r.not_bought ?? [];
+  const whole = r.sizing?.whole_shares;
+  const why = nb.map((x) => `${x.ticker} (${(Number(x.target_pct) * 100).toFixed(2)}%): ${x.note}`).join("\n");
+  const hint = whole
+    ? r.deploy.order_type === "moc"
+      ? "\n\nMarket-on-close orders are whole shares. Switch the order type to Market or add capital."
+      : "\n\nThis run sized to whole shares: the broker can't trade fractions."
+    : "";
   return (
     <span title={`holds ${r.positions} ticker(s)${t != null ? `; latest target has ${t}` : ""}`}>
       <b>{r.positions}</b>
       <span className="muted"> / {t ?? "–"}</span>
-      {small.length > 0 && (
-        <div
-          className="small warn-text"
-          title={`Market-on-close orders are whole shares. At this capital, these targets are worth less than one share, so they round to 0 and are never bought: ${small.join(", ")}. Switch the order type to Market (fractional) or add capital.`}
-        >
-          {small.length} &lt; 1 share
+      {nb.length > 0 && (
+        <div className="small warn-text" title={`Not bought on the latest run:\n${why}${hint}`}>
+          {nb.length} not bought
         </div>
       )}
     </span>

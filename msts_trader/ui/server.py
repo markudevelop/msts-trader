@@ -476,8 +476,7 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
         for s in strategies:
             ledgers[s.id] = performance._pick(performance.sleeve_ledgers(s.id, s.deploy.broker), s.deploy.account)
         held_tickers = {t for led in ledgers.values() if led for t in led.get("holdings") or {}}
-        target_tickers = {t for e in last_target.values() for t in e.get("weights") or {}}
-        px = prices.cached_last_close(held_tickers | target_tickers) if held_tickers | target_tickers else {}
+        px = prices.cached_last_close(held_tickers) if held_tickers else {}
 
         rows = []
         for s in strategies:
@@ -490,14 +489,12 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
             priced = all(t in px for t in holdings)
             nav = (cash or 0.0) + sum(q * px[t] for t, q in holdings.items()) if priced else None
             weights = (lt or {}).get("weights") or {}
-            # Market-on-close orders are whole shares: a target worth less than
-            # one share rounds to 0 and is never bought ("held < target").
-            base = nav if nav is not None else float(led.get("contributed") or 0)
-            below_share = (
-                sorted(t for t, w in weights.items() if t in px and 0 < w * base < px[t])
-                if s.deploy.order_type == "moc" and base > 0
-                else []
-            )
+            # Why targets aren't held, as the rebalance engine reported it on
+            # the latest target run (rounds to 0 at whole shares, no quote, ...).
+            # Runs from before 0.43.1 don't carry it -> None, not a guess.
+            nb = ((lt or {}).get("preview") or {}).get("not_bought")
+            not_bought = None if nb is None else [x for x in nb if x.get("ticker") not in holdings]
+            sizing = ((lt or {}).get("preview") or {}).get("sizing")
             rows.append(
                 {
                     "id": s.id,
@@ -511,7 +508,8 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
                     "nav": None if nav is None else round(nav, 2),
                     "positions": len(holdings),
                     "target_positions": len(lt.get("weights") or {}) if lt else None,
-                    "below_one_share": below_share,
+                    "not_bought": not_bought,
+                    "sizing": sizing,
                     "live": performance.live_stats(s.id, s.deploy.broker),
                     "last_viewed": m.get("last_viewed"),
                     "last_backtest": m.get("last_backtest"),

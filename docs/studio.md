@@ -28,12 +28,18 @@ State lives next to the rest of msts-trader's:
 
 ## Home and library
 
+Studio runs use each strategy's own settings: its order type, threshold,
+fractional or whole shares (whole only for market-on-close or brokers that
+can't trade fractions) and no minimum weight. Defaults such as `whole_shares`,
+`min_weight` or `moc` in `~/.msts-trader/config.toml` apply to plain CLI
+`rebalance` runs only.
+
 Opening Studio shows the **Funded** strategies:
 - capital, and current value (cash + holdings at the latest cached close)
-- **held / target** positions. For market-on-close strategies it also flags
-  targets worth less than one share (*N < 1 share*): MOC orders are whole
-  shares, so those round to 0 and are never bought. Switch the order type to
-  Market (fractional) or add capital.
+- **held / target** positions. When the latest run left targets unbought it
+  shows *N not bought*; hover for each ticker and the rebalance engine's
+  reason, e.g. "qty rounds to 0 (whole-share)" for market-on-close orders
+  worth less than one share (switch the order type to Market or add capital).
 - schedule
 - the **last check**: the last scheduled or manual rebalance check, labelled
   *preview only* when "Allow live orders" is off, so no orders were placed

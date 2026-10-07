@@ -109,6 +109,9 @@ def nav_series(snaps: list[dict], closes: pd.DataFrame, start: date) -> pd.DataF
     the first day).
     """
     snaps = sorted(snaps, key=lambda s: s["ts"])
+    # A ticker can miss a day other tickers have (today's bar not published
+    # yet, a listing-venue holiday): mark it at its last close, up to 5 days.
+    closes = closes.ffill(limit=5)
     idx = closes.index[closes.index >= pd.Timestamp(start)]
     rows = []
     k = -1

@@ -92,6 +92,13 @@ def rebalance_cmd(sym: Symphony, csv_path: str, *, mode: str, force: bool = Fals
         # Explicit either way: a `moc = true` in config.toml must not turn a
         # market strategy into MOC (and get it refused near the close).
         "--moc" if d.order_type == "moc" else "--no-moc",
+        # Same for whole-share rounding and the min-weight filter: a
+        # `whole_shares = true` / `min_weight = 0.02` left in config.toml would
+        # silently stop small targets from ever being bought ("held < target").
+        # MOC and brokers without fractional trading still round to whole shares.
+        "--whole-shares" if d.order_type == "moc" else "--fractional",
+        "--min-weight",
+        "0",
     ]
     if d.account:
         cmd += ["--account", d.account]
