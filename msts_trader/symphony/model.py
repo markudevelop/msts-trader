@@ -40,10 +40,19 @@ IndicatorFn = Literal[
 ]
 Comparator = Literal["gt", "gte", "lt", "lte"]
 Rebalance = Literal["daily", "weekly", "monthly", "quarterly", "yearly"]
-OrderType = Literal["market", "moc"]
+OrderType = Literal["market", "moc", "limit-chase", "extended"]
+RebalanceScope = Literal["whole-book", "per-ticker"]
 # The rebalance CLI refuses MOC with < 12 min to the close; a scheduled MOC run
 # starts this many minutes before the close so evaluation has time to finish.
 MOC_LEAD_MINUTES = 15
+# A limit-chase works each leg for ~30s (5 rungs x 5s) before its market
+# fallback, legs run one after another, and self-heal may chase again — so a
+# scheduled chase run also starts early enough to finish inside the session.
+CHASE_LEAD_MINUTES = 15
+# Extended-hours strategies trade premarket (04:00 ET) through after-hours
+# (20:00 ET); a scheduled run starts no later than this before 20:00.
+EXTENDED_OPEN = "04:00"
+EXTENDED_LEAD_MINUTES = 10
 
 # Same rule as `rebalance --sleeve`: the strategy id doubles as its sleeve name.
 ID_RE = re.compile(r"[A-Za-z0-9_-]{1,40}")
@@ -273,12 +282,29 @@ class Deploy(_Base):
     schedule_time: str = "15:50"  # US/Eastern, HH:MM
     # Drift threshold passed to `rebalance --threshold` (fraction of position).
     threshold: float = Field(default=0.02, ge=0, le=1)
-    # "market" fills now; "moc" (market-on-close) fills in the closing auction.
-    # Always passed explicitly to `rebalance` (--moc / --no-moc), so a
-    # `moc = true` in config.toml never silently changes a strategy's orders.
-    # Exchanges stop taking MOC ~15:50 ET, so MOC scheduled runs are pulled to
-    # MOC_LEAD_MINUTES before the close (see ui/scheduler.run_time).
+    # "market" fills now; "moc" (market-on-close) fills in the closing auction;
+    # "limit-chase" works each order as a limit near the mid, then market;
+    # "extended" is a limit-only chase (no market fallback) that may also run
+    # premarket / after-hours (04:00-20:00 ET).
+    # Always passed explicitly to `rebalance` (--moc / --no-moc, --order-type,
+    # --extended-hours), so config.toml never silently changes a strategy's
+    # orders. Exchanges stop taking MOC ~15:50 ET, so MOC (and chase) scheduled
+    # runs are pulled earlier before the close (see ui/scheduler.run_time).
     order_type: OrderType = "market"
+    # Execution options mirroring `rebalance` flags, all passed explicitly.
+    # whole-book: any breaching line snaps the whole book to target;
+    # per-ticker: trade only the breaching lines.
+    rebalance_scope: RebalanceScope = "whole-book"
+    # Ignore targets with 0 < weight < min_weight (0 = trade every target).
+    min_weight: float = Field(default=0.0, ge=0, le=1)
+    # Round every order down to whole shares (MOC always does).
+    whole_shares: bool = False
+    # Refuse the run if gross buys exceed this many dollars (None = no cap).
+    max_notional: float | None = Field(default=None, gt=0)
+    # Limit-chase / extended-hours pacing; None = config.toml or the default.
+    chase_retries: int | None = Field(default=None, ge=1, le=50)
+    chase_interval: float | None = Field(default=None, gt=0, le=120)
+    chase_aggression: float | None = Field(default=None, ge=0, le=0.05)
     # The broker account is a paper / sandbox one (Alpaca paper, Tradier
     # sandbox, ...): no real money, so Home lists it under Incubation. The
     # `paper` broker always is; this flag is only for real brokers' test accounts.
@@ -297,11 +323,16 @@ class Deploy(_Base):
 
     @model_validator(mode="after")
     def _moc_broker(self) -> "Deploy":
-        from ..brokers import MOC_SUPPORTED  # registry only — no broker SDK imports
+        from ..brokers import EXTENDED_SUPPORTED, MOC_SUPPORTED  # registry only — no broker SDK imports
 
         if self.order_type == "moc" and self.broker not in MOC_SUPPORTED:
             raise ValueError(
                 f"{self.broker} has no market-on-close order type (MOC works on: {', '.join(MOC_SUPPORTED)}) — use market"
+            )
+        if self.order_type == "extended" and self.broker not in EXTENDED_SUPPORTED:
+            raise ValueError(
+                f"{self.broker} has no extended-hours equity orders "
+                f"(works on: {', '.join(EXTENDED_SUPPORTED)}) — use market or limit-chase"
             )
         return self
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { CashModal } from "./Home";
-import type { Deploy, Meta, OosResult, OrderType, OsSchedule, RunEntry, SchedulerState, SleeveLedger, Strategy } from "../types";
+import type { Deploy, Meta, OosResult, OrderType, OsSchedule, RunEntry, SchedulerState, SleeveAmount, SleeveLedger, Strategy } from "../types";
 import { LineChart, cssColor, type Series } from "./Chart";
 import { NumInput } from "./Editor";
 
@@ -75,12 +75,24 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
   const liveReady = saved.deploy.live_enabled && !dirty;
   const mocBrokers = meta?.moc_brokers ?? ["alpaca", "ibkr", "schwab", "paper"];
   const mocOk = mocBrokers.includes(d.broker);
+  const extBrokers = meta?.extended_brokers ?? ["tastytrade", "alpaca", "tradier", "ibkr", "schwab", "paper"];
+  const extOk = extBrokers.includes(d.broker);
   const orderType: OrderType = d.order_type ?? "market";
-  // Latest scheduled start for MOC on a regular 16:00 ET close.
-  const mocLatest = useMemo(() => {
-    const m = 16 * 60 - (meta?.moc_lead_minutes ?? 15);
+  const chasing = orderType === "limit-chase" || orderType === "extended";
+  // Latest scheduled start: before a regular 16:00 ET close for MOC / limit
+  // chase, before the 20:00 ET end of after-hours for extended hours.
+  const lead =
+    orderType === "moc"
+      ? (meta?.moc_lead_minutes ?? 15)
+      : orderType === "limit-chase"
+        ? (meta?.chase_lead_minutes ?? 15)
+        : orderType === "extended"
+          ? (meta?.extended_lead_minutes ?? 10)
+          : null;
+  const latest = useMemo(() => {
+    const m = (orderType === "extended" ? 20 : 16) * 60 - (lead ?? 10);
     return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-  }, [meta?.moc_lead_minutes]);
+  }, [lead, orderType]);
 
   return (
     <div className="deploy-grid">
@@ -94,8 +106,10 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
                 value={d.broker}
                 onChange={(e) => {
                   const broker = e.target.value;
-                  // A broker without MOC can't keep a MOC order type.
-                  set({ broker, live_enabled: false, ...(mocBrokers.includes(broker) ? {} : { order_type: "market" }) });
+                  // A broker without MOC / extended hours can't keep that order type.
+                  const keep =
+                    (orderType !== "moc" || mocBrokers.includes(broker)) && (orderType !== "extended" || extBrokers.includes(broker));
+                  set({ broker, live_enabled: false, ...(keep ? {} : { order_type: "market" }) });
                 }}
               >
                 {(meta?.brokers ?? ["paper"]).map((b) => (
@@ -122,11 +136,19 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
                 <option value="moc" disabled={!mocOk}>
                   Market-on-close (fills in the closing auction){mocOk ? "" : ` (not supported on ${d.broker})`}
                 </option>
+                <option value="limit-chase">Limit chase (limit near the mid, then market)</option>
+                <option value="extended" disabled={!extOk}>
+                  Extended hours (limit only, premarket and after-hours){extOk ? "" : ` (not supported on ${d.broker})`}
+                </option>
               </select>
               <span className="muted small">
                 {orderType === "moc"
-                  ? `Exchanges stop accepting MOC orders around 15:50 ET, so scheduled runs start no later than ${mocLatest} ET (earlier on half-days). Whole shares only.`
-                  : "Recommended for scheduled runs near the close."}
+                  ? `Exchanges stop accepting MOC orders around 15:50 ET, so scheduled runs start no later than ${latest} ET (earlier on half-days). Whole shares only.`
+                  : orderType === "limit-chase"
+                    ? `Each order is a limit at the mid, repriced a few times, then a market order for anything unfilled. Pays less spread but takes about 30 s per order, so scheduled runs start no later than ${latest} ET (earlier on half-days).`
+                    : orderType === "extended"
+                      ? `Runs any time from 04:00 to ${latest} ET on trading days, including premarket and after-hours. Limit orders only: anything still unfilled after the last reprice is cancelled, not sent at market. Your broker's own extended session and permissions apply.`
+                      : "Recommended for scheduled runs near the close."}
               </span>
             </label>
             <label className="check">
@@ -139,10 +161,22 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
                 = {etToLocal(d.schedule_time)} your time
               </span>
             </label>
-            {d.schedule_enabled && orderType === "moc" && d.schedule_time > mocLatest && (
+            {d.schedule_enabled && lead !== null && d.schedule_time > latest && (
               <div className="alert warn small">
-                Market-on-close: this strategy will run at {mocLatest} ET instead of {d.schedule_time}, the latest time MOC orders are still
-                accepted with margin. Pick Market to keep {d.schedule_time}.
+                {orderType === "moc"
+                  ? `Market-on-close: this strategy will run at ${latest} ET instead of ${d.schedule_time}, the latest time MOC orders are still accepted with margin. Pick Market to keep ${d.schedule_time}.`
+                  : orderType === "limit-chase"
+                    ? `Limit chase: this strategy will run at ${latest} ET instead of ${d.schedule_time}, so every order can finish before the close. Pick Market to keep ${d.schedule_time}.`
+                    : `Extended hours: this strategy will run at ${latest} ET instead of ${d.schedule_time}, before after-hours trading ends at 20:00 ET.`}
+              </div>
+            )}
+            {d.schedule_enabled && orderType === "extended" && d.schedule_time < "04:00" && (
+              <div className="alert warn small">Extended hours: this strategy will run at 04:00 ET, when premarket trading opens.</div>
+            )}
+            {d.schedule_enabled && orderType !== "extended" && (d.schedule_time < "09:30" || d.schedule_time >= "16:00") && (
+              <div className="alert warn small">
+                {d.schedule_time} ET is outside regular trading hours (09:30–16:00), so this strategy's orders would be refused. Pick Extended hours to trade
+                premarket or after-hours.
               </div>
             )}
           </div>
@@ -173,6 +207,68 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
               </button>
             </div>
           )}
+        </section>
+
+        <section className="card-plain">
+          <h3>Execution</h3>
+          <div className="form-grid">
+            <label>
+              Rebalance scope
+              <select value={d.rebalance_scope ?? "whole-book"} onChange={(e) => set({ rebalance_scope: e.target.value as Deploy["rebalance_scope"] })}>
+                <option value="whole-book">Whole book (any drift snaps every position to target)</option>
+                <option value="per-ticker">Per ticker (trade only the positions that drifted)</option>
+              </select>
+              <span className="muted small">Per ticker trades less often; whole book tracks the strategy more closely.</span>
+            </label>
+            <label>
+              Minimum weight
+              <span className="inline">
+                <NumInput value={Math.round((d.min_weight ?? 0) * 10000) / 100} onChange={(v) => set({ min_weight: v / 100 })} min={0} max={100} step={0.5} />% —
+                skip smaller targets (0 = trade all)
+              </span>
+            </label>
+            <label>
+              Max buys per run <span className="muted small">(optional safety cap)</span>
+              <span className="inline">
+                $<OptNum value={d.max_notional ?? null} onChange={(v) => set({ max_notional: v })} min={1} step={1000} placeholder="no cap" wide />
+              </span>
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={orderType === "moc" || !!d.whole_shares}
+                disabled={orderType === "moc"}
+                onChange={(e) => set({ whole_shares: e.target.checked })}
+              />
+              Whole shares only <span className="muted small">{orderType === "moc" ? "(always for market-on-close)" : "(round every order down)"}</span>
+            </label>
+            {chasing && (
+              <>
+                <label>
+                  Chase reprices <span className="muted small">(blank = default 5)</span>
+                  <OptNum value={d.chase_retries ?? null} onChange={(v) => set({ chase_retries: v === null ? null : Math.round(v) })} min={1} max={50} placeholder="5" />
+                </label>
+                <label>
+                  Seconds per reprice <span className="muted small">(blank = default 5)</span>
+                  <OptNum value={d.chase_interval ?? null} onChange={(v) => set({ chase_interval: v })} min={0.5} max={120} step={0.5} placeholder="5" />
+                </label>
+                <label>
+                  Aggression <span className="muted small">(% past the mid toward a fill; blank = 0)</span>
+                  <span className="inline">
+                    <OptNum
+                      value={d.chase_aggression == null ? null : Math.round(d.chase_aggression * 100000) / 1000}
+                      onChange={(v) => set({ chase_aggression: v === null ? null : v / 100 })}
+                      min={0}
+                      max={5}
+                      step={0.05}
+                      placeholder="0"
+                    />
+                    %
+                  </span>
+                </label>
+              </>
+            )}
+          </div>
         </section>
 
         <section className="card-plain">
@@ -259,6 +355,7 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
 
       <div className="panel-stack">
         <Capital sid={saved.id} ledgers={sleeve} disabled={dirty} onChange={setSleeve} />
+        <SleeveTools sid={saved.id} ledgers={sleeve} disabled={dirty} onChange={setSleeve} />
         <section className="card-plain">
           <h3>Automation</h3>
           {sched?.running ? (
@@ -439,6 +536,177 @@ function Capital({
   );
 }
 
+const describeAmount = (a: SleeveAmount | undefined, none: string) =>
+  !a ? none : a.mode === "pct-nav" ? `${+(Number(a.value) * 100).toFixed(4)}% of account NAV` : money(a.value);
+
+type ShareAction = "adopt" | "release" | "adjust";
+const SHARE_HELP: Record<ShareAction, string> = {
+  adopt: "Give shares you already hold (and no strategy owns) to this strategy. Nothing is traded.",
+  release: "Hand shares back to your manual book. The strategy stops managing them. Nothing is traded.",
+  adjust: "Overwrite the strategy's share count for one ticker, e.g. after a corporate action or a manual sale. Nothing is traded.",
+};
+
+/** The `msts-trader sleeve` admin commands for this strategy's sleeve. */
+function SleeveTools({
+  sid,
+  ledgers,
+  disabled,
+  onChange,
+}: {
+  sid: string;
+  ledgers: SleeveLedger[] | null;
+  disabled: boolean;
+  onChange: (l: SleeveLedger[]) => void;
+}) {
+  const [shareAction, setShareAction] = useState<ShareAction>("adopt");
+  const [ticker, setTicker] = useState("");
+  const [qty, setQty] = useState("");
+  const [baseMode, setBaseMode] = useState<"own-nav" | "pct" | "usd">("own-nav");
+  const [baseValue, setBaseValue] = useState("");
+  const [capMode, setCapMode] = useState<"off" | "pct" | "usd">("off");
+  const [capValue, setCapValue] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; output: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const policy = ledgers?.[0]?.policy ?? {};
+
+  const run = async (label: string, body: Record<string, string>) => {
+    setBusy(label);
+    setErr(null);
+    setResult(null);
+    try {
+      const r = await api<{ ok: boolean; output: string; sleeve: SleeveLedger[] }>(`/strategies/${sid}/sleeve-tool`, { body });
+      onChange(r.sleeve);
+      setResult({ ok: r.ok, output: r.output });
+      return r.ok;
+    } catch (e) {
+      setErr((e as Error).message);
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+  const spec = (mode: string, value: string) => (mode === "pct" ? `${value}%` : mode === "usd" ? `$${value}` : mode);
+  const shareValid = /^[A-Za-z0-9][A-Za-z0-9.\-^=/]{0,19}$/.test(ticker.trim()) && qty !== "" && (Number(qty) > 0 || (shareAction === "adjust" && Number(qty) === 0));
+  const amountOk = (mode: string, value: string) => mode === "own-nav" || mode === "off" || Number(value) > 0;
+
+  return (
+    <section className="card-plain">
+      <h3>Sleeve tools</h3>
+      <p className="muted small">Bookkeeping for this strategy's sleeve. None of these place orders.</p>
+
+      <h4 className="small">Reconcile</h4>
+      <p className="muted small">
+        Settle orders still pending, then compare every sleeve's shares with what the account really holds. A negative "Unassigned" means a sleeve
+        claims shares the account no longer has; fix it with Set tally or Release before the next run.
+      </p>
+      <div className="btn-row">
+        <button className="btn ghost" disabled={!!busy || disabled} onClick={() => run("reconcile", { action: "reconcile" })}>
+          {busy === "reconcile" ? "Reconciling…" : "Reconcile account"}
+        </button>
+      </div>
+
+      <h4 className="small">Shares</h4>
+      <div className="form-grid">
+        <label>
+          Action
+          <select value={shareAction} onChange={(e) => setShareAction(e.target.value as ShareAction)}>
+            <option value="adopt">Adopt held shares</option>
+            <option value="release">Release shares</option>
+            <option value="adjust">Set tally</option>
+          </select>
+          <span className="muted small">{SHARE_HELP[shareAction]}</span>
+        </label>
+        <label>
+          Ticker and {shareAction === "adjust" ? "new share count" : "shares"}
+          <span className="inline">
+            <input className="num wide" placeholder="SPY" value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} />
+            <input className="amount" placeholder="Shares" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value.replace(/[^0-9.]/g, ""))} />
+          </span>
+        </label>
+      </div>
+      <div className="btn-row">
+        <button
+          className="btn"
+          disabled={!shareValid || !!busy || disabled}
+          onClick={async () => {
+            if (shareAction === "adjust" && !window.confirm(`Set this strategy's ${ticker.trim()} tally to ${qty} shares?`)) return;
+            if (await run("shares", { action: shareAction, ticker: ticker.trim(), qty })) {
+              setTicker("");
+              setQty("");
+            }
+          }}
+        >
+          {busy === "shares" ? "Applying…" : "Apply"}
+        </button>
+      </div>
+
+      <h4 className="small">Sizing</h4>
+      <div className="kv">
+        <span>Sizes against</span>
+        <b>{describeAmount(policy.base, "its own NAV (compounding)")}</b>
+      </div>
+      <div className="kv">
+        <span>Cap</span>
+        <b>{describeAmount(policy.cap, "none")}</b>
+      </div>
+      <div className="form-grid">
+        <label>
+          Base
+          <span className="inline">
+            <select value={baseMode} onChange={(e) => setBaseMode(e.target.value as typeof baseMode)}>
+              <option value="own-nav">Own NAV (compounding)</option>
+              <option value="pct">% of account NAV</option>
+              <option value="usd">Fixed dollars</option>
+            </select>
+            {baseMode !== "own-nav" && (
+              <input className="amount" placeholder={baseMode === "pct" ? "20" : "50000"} inputMode="decimal" value={baseValue} onChange={(e) => setBaseValue(e.target.value.replace(/[^0-9.]/g, ""))} />
+            )}
+            <button
+              className="btn small"
+              disabled={!amountOk(baseMode, baseValue) || !!busy || disabled}
+              onClick={() => run("base", { action: "base", spec: spec(baseMode, baseValue) })}
+            >
+              Set
+            </button>
+          </span>
+          <span className="muted small">
+            {baseMode === "own-nav"
+              ? "The strategy grows and shrinks with its own results."
+              : baseMode === "pct"
+                ? "The strategy's capital floats with the whole account."
+                : "Constant dollars: gains above it are trimmed, drawdowns topped up from the account."}
+          </span>
+        </label>
+        <label>
+          Cap
+          <span className="inline">
+            <select value={capMode} onChange={(e) => setCapMode(e.target.value as typeof capMode)}>
+              <option value="off">No cap</option>
+              <option value="pct">% of account NAV</option>
+              <option value="usd">Dollars</option>
+            </select>
+            {capMode !== "off" && (
+              <input className="amount" placeholder={capMode === "pct" ? "25" : "50000"} inputMode="decimal" value={capValue} onChange={(e) => setCapValue(e.target.value.replace(/[^0-9.]/g, ""))} />
+            )}
+            <button
+              className="btn small"
+              disabled={!amountOk(capMode, capValue) || !!busy || disabled}
+              onClick={() => run("cap", { action: "cap", spec: spec(capMode, capValue) })}
+            >
+              Set
+            </button>
+          </span>
+          <span className="muted small">The most the strategy may ever deploy; gains beyond it stay in its cash.</span>
+        </label>
+      </div>
+
+      {result && <pre className={`alert small ${result.ok ? "" : "error"}`} style={{ whiteSpace: "pre-wrap", overflowX: "auto" }}>{result.output}</pre>}
+      {err && <div className="alert error small">{err}</div>}
+    </section>
+  );
+}
+
 function ConfirmLive({ strategy, onCancel, onConfirm }: { strategy: Strategy; onCancel: () => void; onConfirm: (c: string) => void }) {
   const [text, setText] = useState("");
   const paper = strategy.deploy.broker === "paper";
@@ -561,6 +829,50 @@ function localTime(iso: string) {
   return Number.isNaN(d.getTime())
     ? "–"
     : d.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
+}
+
+/** Optional number: blank means "use the default" (null). */
+function OptNum({
+  value,
+  onChange,
+  min,
+  max,
+  step = 1,
+  placeholder,
+  wide = false,
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  placeholder?: string;
+  wide?: boolean;
+}) {
+  const [text, setText] = useState(value === null ? "" : String(value));
+  // Re-sync only when the value changed from outside (e.g. switching
+  // strategy), so typing "0." isn't snapped back to "0".
+  useEffect(() => {
+    setText((t) => ((t.trim() === "" ? null : Number(t)) === value ? t : value === null ? "" : String(value)));
+  }, [value]);
+  return (
+    <input
+      type="number"
+      className={wide ? "num wide" : "num"}
+      value={text}
+      min={min}
+      max={max}
+      step={step}
+      placeholder={placeholder}
+      onChange={(e) => {
+        setText(e.target.value);
+        const raw = e.target.value.trim();
+        if (raw === "") return onChange(null);
+        const v = Number(raw);
+        if (Number.isFinite(v) && (min === undefined || v >= min) && (max === undefined || v <= max)) onChange(v);
+      }}
+    />
+  );
 }
 
 /** "HH:MM" New York time -> the same instant on the viewer's clock (today's DST offsets). */

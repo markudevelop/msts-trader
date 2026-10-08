@@ -159,6 +159,21 @@ def test_partial_then_fallback_for_remainder():
     assert res.get("chase_limit_filled") == 8.0
 
 
+def test_child_orders_list_every_rung_and_the_fallback():
+    """A sleeve settles a chase leg from every broker order it placed, so the
+    result must name each rung and the market fallback with its quantity."""
+    b = FakeBroker(fill_attempt=None, partials={1: 4, 2: 4})
+    res = chase_fill(b, _order(qty="10"), _fast_cfg(retries=2), sleep=NOSLEEP)
+    kids = [(c["order_id"], Decimal(c["quantity"])) for c in res["child_orders"]]
+    assert kids == [("oid-1", Decimal(10)), ("oid-2", Decimal(6)), ("mkt", Decimal(2))]
+
+
+def test_child_orders_on_first_rung_fill():
+    b = FakeBroker(fill_attempt=1)
+    res = chase_fill(b, _order(qty="10"), _fast_cfg(), sleep=NOSLEEP)
+    assert [c["order_id"] for c in res["child_orders"]] == ["oid-1"]
+
+
 def test_no_fallback_unfilled_is_error():
     b = FakeBroker(fill_attempt=None)
     res = chase_fill(b, _order(qty="10"), _fast_cfg(retries=2, fallback_to_market=False), sleep=NOSLEEP)

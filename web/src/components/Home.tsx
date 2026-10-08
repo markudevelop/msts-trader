@@ -26,6 +26,18 @@ function schedule(r: DashRow) {
           · MOC
         </span>
       )}
+      {r.deploy.order_type === "limit-chase" && (
+        <span className="muted" title="limit-chase orders (limit near the mid, then market)">
+          {" "}
+          · chase
+        </span>
+      )}
+      {r.deploy.order_type === "extended" && (
+        <span className="muted" title="extended hours: limit-only orders, premarket and after-hours allowed">
+          {" "}
+          · ext
+        </span>
+      )}
     </span>
   );
 }

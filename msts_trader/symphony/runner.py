@@ -92,14 +92,33 @@ def rebalance_cmd(sym: Symphony, csv_path: str, *, mode: str, force: bool = Fals
         # Explicit either way: a `moc = true` in config.toml must not turn a
         # market strategy into MOC (and get it refused near the close).
         "--moc" if d.order_type == "moc" else "--no-moc",
-        # Same for whole-share rounding and the min-weight filter: a
-        # `whole_shares = true` / `min_weight = 0.02` left in config.toml would
-        # silently stop small targets from ever being bought ("held < target").
-        # MOC and brokers without fractional trading still round to whole shares.
-        "--whole-shares" if d.order_type == "moc" else "--fractional",
+        "--order-type",
+        "limit-chase" if d.order_type in ("limit-chase", "extended") else "market",
+        # Extended hours is limit-only (the engine forces --no-chase-fallback).
+        # Otherwise unattended runs finish every leg: `extended_hours = true` or
+        # `chase_fallback = false` in config.toml would leave remainders unfilled.
+        "--extended-hours" if d.order_type == "extended" else "--no-extended-hours",
+        "--chase-fallback",
+        # Same for the sizing options: whatever config.toml says about whole
+        # shares / min weight / scope, the Deploy tab decides. A stray
+        # `min_weight = 0.02` there would otherwise stop small targets from ever
+        # being bought. MOC and brokers without fractional trading still round
+        # to whole shares.
+        "--whole-shares" if d.whole_shares or d.order_type == "moc" else "--fractional",
         "--min-weight",
-        "0",
+        f"{d.min_weight:g}",
+        "--rebalance-scope",
+        d.rebalance_scope,
     ]
+    if d.max_notional is not None:
+        cmd += ["--max-notional", str(d.max_notional)]
+    for flag, val in (
+        ("--chase-retries", d.chase_retries),
+        ("--chase-interval", d.chase_interval),
+        ("--chase-aggression", d.chase_aggression),
+    ):
+        if val is not None:
+            cmd += [flag, str(val)]
     if d.account:
         cmd += ["--account", d.account]
     if mode == LIVE:

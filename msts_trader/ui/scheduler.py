@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta
 
 from ..market_hours import ET, close_time_for, is_holiday, is_weekend
 from ..symphony import store  # runner (pandas & co.) is imported only to run
-from ..symphony.model import MOC_LEAD_MINUTES, Symphony
+from ..symphony.model import CHASE_LEAD_MINUTES, EXTENDED_LEAD_MINUTES, EXTENDED_OPEN, MOC_LEAD_MINUTES, Symphony
 
 TICK_SECONDS = 20
 RETRY_AFTER = timedelta(minutes=10)  # after an error, don't hammer data/broker every tick
@@ -43,12 +43,27 @@ def run_time(s: Symphony, d: date) -> datetime:
     """When the strategy runs on day `d` (ET): its schedule time, but never
     later than 10 min before the close (half-days), and — for market-on-close
     strategies — never later than MOC_LEAD_MINUTES before it, because the
-    rebalance engine refuses MOC orders inside 12 min of the close."""
+    rebalance engine refuses MOC orders inside 12 min of the close. A
+    limit-chase run takes minutes, so it gets CHASE_LEAD_MINUTES. Extended-hours
+    strategies run any time from 04:00 to EXTENDED_LEAD_MINUTES before 20:00."""
     hh, mm = (int(x) for x in s.deploy.schedule_time.split(":"))
     want = datetime(d.year, d.month, d.day, hh, mm, tzinfo=ET)
+    if s.deploy.order_type == "extended":
+        oh, om = (int(x) for x in EXTENDED_OPEN.split(":"))
+        start = datetime(d.year, d.month, d.day, oh, om, tzinfo=ET)
+        return min(max(want, start), session_end(s, d) - timedelta(minutes=EXTENDED_LEAD_MINUTES))
     close = datetime.combine(d, close_time_for(d), tzinfo=ET)
-    lead = MOC_LEAD_MINUTES if s.deploy.order_type == "moc" else 10
+    lead = {"moc": MOC_LEAD_MINUTES, "limit-chase": CHASE_LEAD_MINUTES}.get(s.deploy.order_type, 10)
     return min(want, close - timedelta(minutes=lead))
+
+
+def session_end(s: Symphony, d: date) -> datetime:
+    """When the strategy's trading window ends on `d`: 20:00 ET (end of
+    after-hours, also on half-days) for extended-hours strategies, else the
+    regular close."""
+    if s.deploy.order_type == "extended":
+        return datetime(d.year, d.month, d.day, 20, 0, tzinfo=ET)
+    return datetime.combine(d, close_time_for(d), tzinfo=ET)
 
 
 def last_scheduled_period(s: Symphony) -> str | None:
@@ -69,8 +84,7 @@ def due(s: Symphony, now: datetime) -> bool:
     today = now.date()
     if is_weekend(today) or is_holiday(today):
         return False
-    close = datetime.combine(today, close_time_for(today), tzinfo=ET)
-    if not (run_time(s, today) <= now < close):
+    if not (run_time(s, today) <= now < session_end(s, today)):
         return False
     return last_scheduled_period(s) != period_key(today, s.rebalance)
 

@@ -10,6 +10,44 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Added
+- Studio: **Limit chase** order type on the Deploy tab, for every broker.
+  Each order is a limit at the mid, repriced a few times, then a market
+  order for the rest. Scheduled chase runs start no later than 15 minutes
+  before the close. Home shows a *chase* tag next to the schedule.
+- Studio: **Extended hours** order type (every broker except Hyperliquid):
+  a limit-only chase that can be scheduled from 04:00 to 19:50 ET, so a
+  strategy can rebalance premarket or after-hours. Home shows an *ext* tag.
+- Studio: an **Execution** section on the Deploy tab with the per-strategy
+  `rebalance` options: rebalance scope (whole book / per ticker), minimum
+  weight, max buys per run (`--max-notional`), whole shares, and chase
+  reprices / interval / aggression.
+- Studio: a **Sleeve tools** panel on the Deploy tab for the `sleeve`
+  bookkeeping commands: reconcile the account, adopt / release shares, set a
+  ticker's tally, and set the sizing base and cap. It shows the current base
+  and cap. New endpoint `POST /api/strategies/{id}/sleeve-tool`.
+- Studio: a warning when a Market, MOC or Limit chase strategy is scheduled
+  outside regular hours, where its orders would be refused.
+- `rebalance --sleeve` now accepts `--order-type limit-chase` and
+  `--extended-hours`. A chase result lists every broker order it placed
+  (`child_orders`), and the sleeve ledger settles each one from its own
+  filled quantity.
+
+### Fixed
+- Studio runs always pass `--order-type`, `--no-extended-hours` and
+  `--chase-fallback`. Before, `order_type = "limit-chase"` or
+  `extended_hours = true` in `config.toml` made every Studio run fail (sleeves
+  refused them).
+
+### Changed
+- Docs: the IBKR + EU note now covers elective-professional (MiFID II
+  opt-up) reclassification, which removes the KID/PRIIPs ETF block. The
+  IBKR KID error message lists the criteria.
+- Docs: a warning in the README and the Studio guide that IBKR is reported
+  to reject a MOC order on a ticker that already has an opposite-side MOC
+  order open. Two sleeves or strategies in one account trading the same
+  ticker in opposite directions at the close can lose a leg.
+
 ## [0.44.0] — 2026-10-08
 
 ### Added

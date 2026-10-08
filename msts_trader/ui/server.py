@@ -14,6 +14,7 @@ Security model — this process can place real orders, so:
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -28,11 +29,21 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
-from ..brokers import MOC_SUPPORTED, SUPPORTED
+from ..brokers import EXTENDED_SUPPORTED, MOC_SUPPORTED, SUPPORTED
 from ..market_hours import market_status
 from ..symphony import backtest, composer_import, feeds, performance, prices, runner, store, studio_meta
 from ..symphony.evaluate import EvalError
-from ..symphony.model import INDICATORS, MOC_LEAD_MINUTES, Feed, Symphony, combine, slugify, tickers
+from ..symphony.model import (
+    CHASE_LEAD_MINUTES,
+    EXTENDED_LEAD_MINUTES,
+    INDICATORS,
+    MOC_LEAD_MINUTES,
+    Feed,
+    Symphony,
+    combine,
+    slugify,
+    tickers,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 TOKEN_HEADER = "x-msts-token"
@@ -65,6 +76,12 @@ def _summary(s: Symphony) -> dict:
         "tickers": tickers(s),
         "deploy": s.deploy.model_dump(),
     }
+
+
+# Sleeve-tool inputs reach the CLI as positional args, so they must never
+# start with "-" (it would parse as an option).
+_SLEEVE_TICKER = re.compile(r"[A-Z0-9][A-Z0-9.\-^=/]{0,19}")
+_SLEEVE_AMOUNT = re.compile(r"\$?\d+(\.\d+)?%?")
 
 
 def _sleeve_state(sid: str, broker: str) -> list[dict]:
@@ -116,6 +133,9 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
             "brokers": list(SUPPORTED),
             "moc_brokers": list(MOC_SUPPORTED),
             "moc_lead_minutes": MOC_LEAD_MINUTES,
+            "chase_lead_minutes": CHASE_LEAD_MINUTES,
+            "extended_brokers": list(EXTENDED_SUPPORTED),
+            "extended_lead_minutes": EXTENDED_LEAD_MINUTES,
             "indicators": list(INDICATORS),
             "market": {"status": ms.status, "minutes_to_close": ms.minutes_to_close},
         }
@@ -446,6 +466,49 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
         if not res["ok"]:
             _bad(422, res["output"] or f"sleeve {action} failed")
         performance.snapshot(s, event=action)
+        return {**res, "sleeve": _sleeve_state(s.id, s.deploy.broker)}
+
+    # `msts-trader sleeve <action>` for this strategy's sleeve. None of these
+    # trade: they edit the local ledger (adopt / release / adjust / base / cap)
+    # or settle and compare it to the account (reconcile, account-wide).
+    @app.post("/api/strategies/{sid}/sleeve-tool")
+    def sleeve_tool(
+        sid: str,
+        action: str = Body(...),
+        ticker: str | None = Body(None),
+        qty: str | None = Body(None),
+        spec: str | None = Body(None),
+    ):
+        s = _get(sid)
+        if action in ("adopt", "release", "adjust"):
+            tkr = (ticker or "").strip().upper()
+            if not _SLEEVE_TICKER.fullmatch(tkr):
+                _bad(422, "ticker must be a symbol like SPY or BRK.B")
+            try:
+                q = Decimal((qty or "").strip())
+                if not q.is_finite() or q < 0 or (q == 0 and action != "adjust"):
+                    raise InvalidOperation
+            except InvalidOperation:
+                _bad(422, "quantity must be a positive number of shares (0 is allowed only for set tally)")
+            args = ["sleeve", action, s.id, tkr, str(q)]
+        elif action in ("base", "cap"):
+            sp = (spec or "").strip().lower().replace(",", "")
+            allowed = ("own-nav",) if action == "base" else ("off",)
+            if sp not in allowed and not _SLEEVE_AMOUNT.fullmatch(sp):
+                _bad(422, f"{action} must be {allowed[0]}, a dollar amount like $50000, or a percent like 20%")
+            args = ["sleeve", action, s.id, sp]
+        elif action == "reconcile":
+            args = ["sleeve", "reconcile"]
+        else:
+            _bad(422, "action must be adopt, release, adjust, base, cap or reconcile")
+        args += ["--broker", s.deploy.broker]
+        if s.deploy.account:
+            args += ["--account", s.deploy.account]
+        res = _cli(args)
+        if res["ok"] and action in ("adopt", "release", "adjust"):
+            performance.snapshot(s, event=action)
+        # A failed reconcile still printed its table (the negative residuals
+        # are the point), so failures come back as data, not an HTTP error.
         return {**res, "sleeve": _sleeve_state(s.id, s.deploy.broker)}
 
     @app.get("/api/strategies/{sid}/sleeve")

@@ -79,7 +79,20 @@ def _mid(broker, order: Order):
 
 def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False, log=None, sleep=time.sleep) -> dict:
     """Work `order` as a limit chase on `broker`. Returns a place_market-style
-    result dict (status/ticker/order_id/...). `sleep` is injectable for tests."""
+    result dict (status/ticker/order_id/...). `sleep` is injectable for tests.
+
+    Every order the chase placed at the broker (each limit rung and the market
+    fallback) is listed under ``child_orders`` as {order_id, quantity}: a
+    sleeve settles its tally from each child's own filled_qty, since one leg's
+    fill is spread across several order ids."""
+    children: list[dict] = []
+    result = _chase_fill(broker, order, cfg, children, dry_run=dry_run, log=log, sleep=sleep)
+    if children:
+        result["child_orders"] = children
+    return result
+
+
+def _chase_fill(broker, order: Order, cfg: ChaseConfig, children: list, *, dry_run, log, sleep) -> dict:
     say = log if callable(log) else (lambda *a, **k: None)
     cfg = cfg or ChaseConfig()
     if order.extended_hours:
@@ -256,6 +269,8 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
                 "filled_quantity": float(filled_qty),
                 "order_live": order.extended_hours,  # submission may have reached the broker
             }
+        if placed.get("order_id"):
+            children.append({"order_id": str(placed["order_id"]), "quantity": str(rem)})
         if str(placed.get("status") or "").lower() in _PLACE_FAILED:
             if placed.get("order_live"):
                 return {**placed, "filled_quantity": float(filled_qty)}
@@ -360,6 +375,8 @@ def chase_fill(broker, order: Order, cfg: ChaseConfig, *, dry_run: bool = False,
             fb = broker.place_market(replace(order, quantity=rem), dry_run=False)
         except Exception as e:
             fb = {"status": "error", "ticker": order.ticker, "reason": f"chase market fallback failed: {e}"}
+        if fb.get("order_id"):
+            children.append({"order_id": str(fb["order_id"]), "quantity": str(rem)})
         fb["chase_fell_back"] = True
         if filled_qty > 0:
             fb["chase_limit_filled"] = float(filled_qty)

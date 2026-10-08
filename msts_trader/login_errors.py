@@ -56,7 +56,9 @@ def explain_login_error(broker: str, err: Exception) -> str:
                 "SHV, GLD, ...) because they lack an EU Key Information Document.\n"
                 "Options: use a non-EU broker (Tastytrade / Alpaca work with these "
                 "tickers), trade UCITS/EU-domiciled equivalents instead, or ask "
-                "IBKR about elective-professional classification."
+                "IBKR to reclassify you as an elective professional client "
+                "(MiFID II: meet 2 of 3 criteria, e.g. a >EUR 500k portfolio "
+                "held anywhere plus relevant finance experience)."
             )
         if "10349" in low or "order preset" in low:
             return (

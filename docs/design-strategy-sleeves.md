@@ -4,7 +4,9 @@ Status: **P1 implemented** (`rebalance --sleeve`, the ledger in
 `msts_trader/sleeves.py`, the `sleeve` command group, fill-driven settlement,
 the residual gate, sleeve-scoped verify/self-heal). P2 (sleeve-scoped stops,
 `liquidate --sleeve`) and P3 (broker-side tags, `multi` integration) are not
-built; sleeve runs are market-order-only and refuse stops. The zero-code
+built; sleeve runs refuse stops. Limit-chase and extended hours work: every
+rung (and the market fallback) is its own broker order, and each is settled
+into the tally from its own filled quantity. The zero-code
 workarounds in the README remain valid alternatives.
 
 ## Problem

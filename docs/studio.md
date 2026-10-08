@@ -181,6 +181,24 @@ Everything the CLI enforces still applies: session hours, idempotency
 (identical targets once per day unless forced), margin-aware sizing,
 post-trade verify and self-heal, the negative-residual refusal, and so on.
 
+### Sleeve tools
+
+The **Sleeve tools** panel (Deploy tab, under Capital) runs the
+`msts-trader sleeve` bookkeeping commands for the strategy's sleeve. None of
+them place orders.
+
+| Panel control | CLI command | What it does |
+|---|---|---|
+| Reconcile account | `sleeve reconcile` | Settles pending orders, then shows every ticker's account shares, sleeve claims, and unassigned shares for the whole account. A negative "Unassigned" blocks the next run until fixed. |
+| Adopt held shares | `sleeve adopt` | Gives shares you already hold, and no sleeve owns, to this strategy. |
+| Release shares | `sleeve release` | Returns shares from the strategy to your manual book. |
+| Set tally | `sleeve adjust` | Overwrites the strategy's share count for one ticker (asks to confirm). |
+| Base | `sleeve base` | Sizes against its own NAV (the default, compounding), a % of account NAV, or fixed dollars. |
+| Cap | `sleeve cap` | The most the strategy may deploy, in dollars or % of account NAV, or no cap. |
+
+The panel shows the current base and cap. Adopt, release and set tally also
+record a snapshot for the live-performance chart.
+
 ### Live performance (out-of-sample)
 
 Go-live is the strategy's first executed live run (paper counts). From then
@@ -240,6 +258,40 @@ so a MOC strategy runs no later than 15 minutes before the close (15:45 ET,
 the strategy's own order type, so `moc = true` in `config.toml` doesn't affect
 Studio strategies. pnlportfolio books publish near 15:45 ET, so use Market for
 them.
+
+**Limit chase** (all brokers) works each order as a limit at the mid,
+repriced a few times, then sends a market order for anything still unfilled,
+so you pay less of the spread. It takes about 30 seconds per order, so a
+scheduled chase strategy also runs no later than 15:45 ET (12:45 on
+half-days). Studio always finishes each order with the market fallback.
+
+**Extended hours** (every broker except Hyperliquid) is a limit-only chase
+that may also run premarket and after-hours. The scheduled time can be any
+time from 04:00 to 19:50 ET on trading days, half-days included. Anything
+still unfilled after the last reprice is cancelled, not sent at market, and
+the run is reported as incomplete. Your broker's own extended session,
+symbol eligibility and account permissions still apply. With Market,
+Market-on-close or Limit chase, a schedule outside 09:30–16:00 ET is flagged
+on the Deploy tab, because those orders would be refused.
+
+**Execution** (Deploy tab) holds the per-strategy versions of the
+`rebalance` options. Studio always passes them, so `config.toml` doesn't
+change Studio strategies:
+
+| Setting | `rebalance` flag | Default |
+|---|---|---|
+| Rebalance scope: whole book / per ticker | `--rebalance-scope` | whole book |
+| Minimum weight | `--min-weight` | 0 (trade every target) |
+| Max buys per run | `--max-notional` | no cap |
+| Whole shares only | `--whole-shares` | off (always on for MOC) |
+| Chase reprices, seconds per reprice, aggression | `--chase-retries`, `--chase-interval`, `--chase-aggression` | 5, 5 s, 0 (blank uses `config.toml` or these defaults) |
+
+Each strategy sends its own orders; Studio does not net them across
+strategies. IBKR is reported to reject a MOC order on a ticker that already
+has an open MOC order on the other side, and the first side wins. If two MOC
+strategies share an IBKR account and one buys a ticker while the other sells
+it, one leg can be rejected. Avoid overlapping tickers between MOC
+strategies on one account, or set one of them to Market.
 
 For unattended trading without the UI running, use cron or GitHub Actions:
 

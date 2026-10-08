@@ -10,7 +10,7 @@ import inspect
 
 import pytest
 
-from msts_trader.brokers import MOC_SUPPORTED, SUPPORTED, BrokerError, make
+from msts_trader.brokers import EXTENDED_SUPPORTED, MOC_SUPPORTED, SUPPORTED, BrokerError, make
 
 
 REQUIRED_ATTRS = ("name", "supports_fractional", "supports_moc")
@@ -54,6 +54,13 @@ def test_moc_support_matrix():
     assert supported == {"alpaca", "ibkr", "schwab", "paper"}
     # Studio reads MOC_SUPPORTED (no SDK imports) to offer the MOC order type.
     assert set(MOC_SUPPORTED) == supported
+
+
+def test_extended_hours_support_matrix():
+    # Studio reads EXTENDED_SUPPORTED (no SDK imports) to offer extended hours.
+    classes = _broker_classes()
+    supported = {n for n, cls in classes.items() if getattr(cls, "supports_extended_hours", False)}
+    assert set(EXTENDED_SUPPORTED) == supported
 
 
 @pytest.mark.parametrize("name", SUPPORTED)

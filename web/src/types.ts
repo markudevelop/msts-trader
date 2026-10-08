@@ -85,7 +85,7 @@ export interface FeedNode extends Base {
 export type Node = AssetNode | GroupNode | EqualNode | SpecifiedNode | InvVolNode | IfNode | FilterNode | FeedNode;
 export type Step = Node["step"];
 
-export type OrderType = "market" | "moc";
+export type OrderType = "market" | "moc" | "limit-chase" | "extended";
 
 export interface Deploy {
   broker: string;
@@ -95,6 +95,14 @@ export interface Deploy {
   schedule_time: string;
   threshold: number;
   order_type: OrderType;
+  /** Mirrors `rebalance` flags; all passed explicitly by Studio. */
+  rebalance_scope?: "whole-book" | "per-ticker";
+  min_weight?: number;
+  whole_shares?: boolean;
+  max_notional?: number | null;
+  chase_retries?: number | null;
+  chase_interval?: number | null;
+  chase_aggression?: number | null;
   /** A real broker's paper / sandbox account: no real money (Home lists it under Incubation). */
   paper_account?: boolean;
 }
@@ -123,6 +131,9 @@ export interface Meta {
   brokers: string[];
   moc_brokers?: string[];
   moc_lead_minutes?: number;
+  chase_lead_minutes?: number;
+  extended_brokers?: string[];
+  extended_lead_minutes?: number;
   indicators: IndicatorFn[];
   market: { status: string; minutes_to_close: number | null };
 }
@@ -217,6 +228,13 @@ export interface SleeveLedger {
   contributed: string | null;
   holdings: Record<string, string>;
   pending: { ticker: string; side: string; requested: string; order_id: string }[];
+  /** Sizing policy; absent base = own NAV (compounding), absent cap = no cap. */
+  policy?: { base?: SleeveAmount; cap?: SleeveAmount };
+}
+
+export interface SleeveAmount {
+  mode: "pct-nav" | "fixed";
+  value: string;
 }
 
 export interface SchedulerState {

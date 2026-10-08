@@ -58,10 +58,18 @@ Done. tastytrade: sent 4, failed 0
   on the public SDK but has not been run against a live account. Test on
   testnet (`HL_TESTNET=1`) with tiny size first.
 
-**IBKR + EU accounts:** an EU-regulated IBKR account cannot trade
-US-domiciled ETFs (KID/PRIIPs, Error 201). US stocks may still be
-cancelled by an account Order Preset (Error 10349 → fix in TWS Global
-Configuration → Presets). Tastytrade and Alpaca have neither limit.
+**IBKR + EU accounts:** an EU *retail* IBKR account cannot buy
+US-domiciled ETFs (KID/PRIIPs, Error 201). The KID rule applies only to
+retail clients. If you qualify as an **elective professional client**
+under MiFID II, you can ask IBKR to reclassify the account, and the block
+goes away. To qualify you need two of three: a financial portfolio over
+€500k (it doesn't all have to be at IBKR), about 10 significant trades
+per quarter over the last year, or at least a year of relevant work in
+finance. Opting up gives up some retail protections, so read IBKR's
+terms first. Otherwise, use UCITS equivalents or a non-EU broker. US
+stocks may still be cancelled by an account Order Preset (Error 10349 →
+fix in TWS Global Configuration → Presets). Tastytrade and Alpaca have
+neither limit.
 
 Open a GitHub issue to prioritise a broker (Tradier and a ccxt-based
 crypto adapter are likely next).
@@ -370,6 +378,12 @@ msts-trader --broker paper rebalance --csv-file ...   # test against paper
   the CLI refuses rather than silently downgrading). MOC orders are
   whole-share only, and exchanges stop accepting them around **15:50 ET**,
   so submit before then. Also available as `moc = true` in the config file.
+  **One direction per ticker per account:** IBKR is reported to reject a MOC
+  order on a ticker that already has an open MOC order on the other side
+  (the first side wins). Two sleeves or Studio strategies in one account
+  that buy and sell the same ticker at the close can therefore have one
+  leg rejected. Give them different tickers or accounts, or use Market for
+  one of them.
 - **`--order-type limit-chase`:** instead of one market order per leg, each
   order is worked as a **LIMIT pegged to the live mid** — re-quote and reprice
   every few seconds (`--chase-interval`, default 5s; polled every
@@ -391,7 +405,7 @@ msts-trader --broker paper rebalance --csv-file ...   # test against paper
   **Tastytrade, Alpaca, IBKR, Schwab, Tradier, and paper**. Unfilled remainders
   are cancelled and reported as incomplete; a failed cancellation is reported
   as potentially still live and is never retried by self-heal. Existing chase
-  price/retry settings apply. Cannot be combined with `--moc` or `--sleeve`.
+  price/retry settings apply. Cannot be combined with `--moc`.
   See [Extended-hours weights](#extended-hours-weights) below.
 - **`--whole-shares`:** round every order *down* to whole shares (buys never
   exceed target, sells never exceed the held quantity). Use it for an IBKR
@@ -830,7 +844,9 @@ How it stays safe (details in
 - An account-level `rebalance` (no `--sleeve`) on a ledgered account is
   refused — its sweep would sell every sleeve's holdings.
 
-v1 limits: market orders only (no `--order-type limit-chase`), no protective
+Market, MOC, limit-chase and `--extended-hours` orders all work under
+`--sleeve`: each chase rung is its own broker order, and each is settled into
+the tally from its own fill. Limits: no protective
 stops under `--sleeve` (stops are sized account-wide today), and `multi` has no
 sleeve support yet — run one `rebalance --sleeve` per strategy. Bootstrap each
 sleeve with `sleeve invest` (else weights size against full account NAV), and
@@ -1028,8 +1044,7 @@ Two things to know for a **fresh account**:
   the separate `liquidate` command remains regular-hours only.
 - Shorting. Negative weights are rejected.
 - Options or futures.
-- Protective stops or limit-chase under `--sleeve` (sleeve runs are
-  market-order only in v1) — see [Multiple strategies in one
+- Protective stops under `--sleeve` — see [Multiple strategies in one
   account](#multiple-strategies-in-one-account).
 - Active stop *management* (Hydra/Fusion-style trailing watchers). Static
   protective stops **are** supported via the `stop_pct` CSV column — see

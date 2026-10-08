@@ -1244,7 +1244,7 @@ def liquidate(
     default=None,
     help="Per-strategy share tally: size against ONLY the shares this named sleeve owns (a local ledger of "
     "this sleeve's confirmed fills), leaving other sleeves' and manually-traded shares untouched. "
-    "Market orders only; stops not yet supported. See `msts-trader sleeve --help`.",
+    "Protective stops not yet supported. See `msts-trader sleeve --help`.",
 )
 @click.option(
     "--csv-file",
@@ -1434,15 +1434,14 @@ def rebalance(
         if moc:
             _fail("--extended-hours and --moc are mutually exclusive.")
         order_type = "limit-chase"
-    # Sleeve mode is deliberately narrow in v1 (fail-closed, not degraded):
-    #   - limit-chase aggregates fills across several order ids, which the
-    #     ledger's per-order settlement cursor cannot attribute yet;
+    # Sleeve mode is deliberately narrow (fail-closed, not degraded). Limit-chase
+    # and extended hours are fine: every chase rung's order id (including one
+    # left live) is settled into the tally from its own fills — see
+    # _record_sleeve_fills. Not supported yet:
     #   - protective stops are sized to the ACCOUNT holding and reconciled/
     #     pre-cancelled account-wide — in a shared account that would put a
     #     stop across (or cancel a stop protecting) shares the sleeve does
     #     not own.
-    if sleeve_name and order_type == "limit-chase":
-        _fail("--sleeve supports market orders only for now — drop --extended-hours / --order-type limit-chase.")
     if sleeve_name and default_stop is not None:
         _fail("--sleeve does not support protective stops yet — drop --stop-pct (stops are sized account-wide).")
     chase_cfg = None
@@ -1978,18 +1977,21 @@ def _record_sleeve_fills(broker, ledger, sleeve_name: str, orders, results) -> N
     acquires it for the whole run) — taking it again here would self-block.
     """
     for o, r in zip(orders, results):
-        oid = r.get("order_id")
-        if not oid:
-            continue  # never reached the broker (error/skip) -> no tally impact
-        sleeves.record_order(
-            ledger,
-            sleeve_name,
-            order_id=str(oid),
-            ticker=o.ticker,
-            side=o.side.value,
-            requested=o.quantity,
-            est_price=o.estimated_price,
+        # A limit-chase leg is several broker orders (one per rung, plus the
+        # market fallback); each settles from its own filled_qty.
+        legs = r.get("child_orders") or (
+            [{"order_id": r["order_id"], "quantity": o.quantity}] if r.get("order_id") else []
         )
+        for leg in legs:  # empty: never reached the broker (error/skip) -> no tally impact
+            sleeves.record_order(
+                ledger,
+                sleeve_name,
+                order_id=str(leg["order_id"]),
+                ticker=o.ticker,
+                side=o.side.value,
+                requested=Decimal(str(leg["quantity"])),
+                est_price=o.estimated_price,
+            )
     for n in sleeves.settle_pending(ledger, broker):
         say(f"[dim]sleeve: {escape(n)}[/dim]")
     sleeves.save(ledger)

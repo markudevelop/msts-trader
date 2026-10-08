@@ -404,14 +404,33 @@ def test_account_level_run_on_ledgered_account_is_refused(paper_env, tmp_path):
     assert "sleeve tallies" in r2.output and "--sleeve" in r2.output
 
 
-def test_sleeve_refuses_stops_and_limit_chase(paper_env, tmp_path):
-    runner, tp = paper_env
-    stops = _csv(tp, "s.csv", "ticker,weight,stop_pct\nSPY,1.0,0.02\n")
-    r = runner.invoke(main, ["--broker", "paper", "rebalance", "--sleeve", "momo", "--csv-file", stops, "--dry-run"])
-    assert r.exit_code != 0 and "stop" in r.output.lower()
+def test_sleeve_settles_every_chase_child_order(tmp_path):
+    """One chase leg = several broker orders. The tally must be the sum of each
+    child's real fill (4 + 4 on two limit rungs, 2 on the market fallback)."""
+    import msts_trader.__main__ as cli
+    from msts_trader.models import Order, Side
 
-    plain = _csv(tp, "p.csv", "ticker,weight\nSPY,1.0\n")
-    r2 = runner.invoke(
+    led = _ledger()
+    b = _FakeBroker({"oid-1": ("cancelled", 4), "oid-2": ("cancelled", 4), "mkt": ("filled", 2)})
+    o = Order(ticker="SPY", side=Side.BUY, quantity=Decimal("10"), estimated_price=Decimal("500"))
+    res = {
+        "status": "FILLED",
+        "order_id": "mkt",
+        "child_orders": [
+            {"order_id": "oid-1", "quantity": "10"},
+            {"order_id": "oid-2", "quantity": "6"},
+            {"order_id": "mkt", "quantity": "2"},
+        ],
+    }
+    cli._record_sleeve_fills(b, led, "momo", [o], [res])
+    assert led.tally("momo", "SPY") == Decimal("10")
+    assert led.pending == []
+
+
+def test_sleeve_limit_chase_run_fills_and_tallies(paper_env, tmp_path):
+    runner, tp = paper_env
+    momo = _csv(tp, "momo.csv", "ticker,weight\nSPY,1.0\n")
+    r = runner.invoke(
         main,
         [
             "--broker",
@@ -419,15 +438,65 @@ def test_sleeve_refuses_stops_and_limit_chase(paper_env, tmp_path):
             "rebalance",
             "--sleeve",
             "momo",
+            "--allocation",
+            "20000",
             "--csv-file",
-            plain,
+            momo,
             "--order-type",
             "limit-chase",
-            "--dry-run",
+            "--chase-interval",
+            "0.01",
+            "--chase-poll",
+            "0.01",
+            "--yes",
         ],
     )
-    assert r2.exit_code != 0 and "market orders only" in r2.output
+    assert r.exit_code == 0, r.output
+    assert "CHASE" in r.output
+    assert _positions(runner)["SPY"] == Decimal("60")  # 20 manual + 40 momo
+    led = sleeves.load("paper", "PAPER")
+    assert led.tally("momo", "SPY") == Decimal("40")
+    assert led.pending == []
 
+
+def test_sleeve_extended_hours_run_fills_and_tallies(paper_env, tmp_path):
+    runner, tp = paper_env
+    momo = _csv(tp, "momo.csv", "ticker,weight\nSPY,1.0\n")
+    r = runner.invoke(
+        main,
+        [
+            "--broker",
+            "paper",
+            "rebalance",
+            "--sleeve",
+            "momo",
+            "--allocation",
+            "20000",
+            "--csv-file",
+            momo,
+            "--extended-hours",
+            "--chase-interval",
+            "0.01",
+            "--chase-poll",
+            "0.01",
+            "--yes",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert "CHASE" in r.output
+    assert _positions(runner)["SPY"] == Decimal("60")  # 20 manual + 40 momo
+    led = sleeves.load("paper", "PAPER")
+    assert led.tally("momo", "SPY") == Decimal("40")
+    assert led.pending == []
+
+
+def test_sleeve_refuses_stops(paper_env, tmp_path):
+    runner, tp = paper_env
+    stops = _csv(tp, "s.csv", "ticker,weight,stop_pct\nSPY,1.0,0.02\n")
+    r = runner.invoke(main, ["--broker", "paper", "rebalance", "--sleeve", "momo", "--csv-file", stops, "--dry-run"])
+    assert r.exit_code != 0 and "stop" in r.output.lower()
+
+    plain = _csv(tp, "p.csv", "ticker,weight\nSPY,1.0\n")
     r3 = runner.invoke(
         main,
         ["--broker", "paper", "rebalance", "--sleeve", "momo", "--csv-file", plain, "--stop-pct", "0.02", "--dry-run"],

@@ -12,6 +12,9 @@ SUPPORTED = ("tastytrade", "alpaca", "tradier", "ibkr", "schwab", "hyperliquid",
 # Brokers whose adapter declares supports_moc — listed here so callers (Studio)
 # don't import every broker SDK to ask. test_brokers_protocol keeps it in sync.
 MOC_SUPPORTED = ("alpaca", "ibkr", "schwab", "paper")
+# Brokers whose adapter declares supports_extended_hours (premarket / after-hours
+# limit orders) — same reason, same sync test.
+EXTENDED_SUPPORTED = ("tastytrade", "alpaca", "tradier", "ibkr", "schwab", "paper")
 
 
 def make(name: str, **creds) -> Broker:
@@ -52,6 +55,7 @@ __all__ = [
     "Balances",
     "Broker",
     "BrokerError",
+    "EXTENDED_SUPPORTED",
     "LinkedAccount",
     "make",
     "MOC_SUPPORTED",
