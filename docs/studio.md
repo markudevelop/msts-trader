@@ -48,7 +48,8 @@ Home has these tabs:
 
 Live and Incubation each have their own **Combined portfolio**, so paper
 positions never inflate the real-money totals. Each funded tab shows:
-- capital, and current value (cash + holdings at the latest cached close)
+- capital, and current value (cash + holdings at the latest cached close; *–* ⚠ until
+  every holding has a cached price, which each live run refreshes)
 - **held / target** positions. When the latest run left targets unbought it
   shows *N not bought*; hover for each ticker and the rebalance engine's
   reason, e.g. "qty rounds to 0 (whole-share)" for market-on-close orders

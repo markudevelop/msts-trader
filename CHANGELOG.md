@@ -10,6 +10,16 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+### Fixed
+- Studio Home: **Value** no longer shows the sleeve's cash alone (e.g. "$-404"
+  for a slightly levered book) when a holding has no cached price. It shows
+  "–" with a ⚠ naming the unpriced tickers.
+- Studio: every live run (executed or nothing-to-do) now refreshes the price
+  cache for what the sleeve holds, from go-live on. Feed strategies (e.g.
+  pnlportfolio books) never load their underlying tickers' prices to evaluate,
+  so newly bought names left Value and the live stats with "no cached prices
+  for ...". The refresh is best effort and never fails a run.
+
 ## [0.45.0] — 2026-10-08
 
 ### Added

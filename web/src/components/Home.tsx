@@ -74,6 +74,22 @@ export function StagePill({ r }: { r: DashRow }) {
   );
 }
 
+function ValueCell({ r }: { r: DashRow }) {
+  if (r.nav != null) return <>{money(r.nav)}</>;
+  const missing = r.unpriced ?? [];
+  if (missing.length) {
+    return (
+      <span
+        className="muted"
+        title={`No cached price yet for ${missing.join(", ")}, so the value can't be computed. Prices refresh after each live run, or open the strategy's Performance tab.`}
+      >
+        – <span className="warn-text">⚠</span>
+      </span>
+    );
+  }
+  return <>{money(r.cash)}</>; // nothing held: the value is the sleeve's cash
+}
+
 function HeldCell({ r }: { r: DashRow }) {
   const t = r.target_positions;
   const nb = r.not_bought ?? [];
@@ -402,7 +418,9 @@ function Funded({ rows, stage, onOpen }: { rows: DashRow[]; stage?: Stage; onOpe
                     </div>
                   </td>
                   <td className="num mono">{money(r.contributed)}</td>
-                  <td className="num mono">{money(r.nav ?? r.cash)}</td>
+                  <td className="num mono">
+                    <ValueCell r={r} />
+                  </td>
                   <td className="num mono">
                     <HeldCell r={r} />
                   </td>

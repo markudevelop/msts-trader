@@ -592,3 +592,66 @@ def test_home_tabs_setting_normalises_and_round_trips(client):
         "Passive weights",
     ]
     assert client.put("/api/settings", json={"home_tabs": []}, headers=H()).json()["home_tabs"] == []
+
+
+# ── Value needs a price for every holding; live runs keep the cache warm ──
+def test_dashboard_value_is_unknown_not_cash_when_a_holding_is_unpriced(client, tmp_path, monkeypatch):
+    from decimal import Decimal
+
+    import pandas as pd
+
+    from msts_trader import sleeves
+    from msts_trader.symphony import prices
+
+    monkeypatch.setenv("MSTS_PRICES_DIR", str(tmp_path / "prices"))
+    store.save(make_sym(live_enabled=True))
+    led = sleeves.load("paper", "acct1")
+    led.cash["momo"] = Decimal("-404")  # a 108%-gross book: the sleeve borrowed
+    led.contributed["momo"] = Decimal("10000")
+    led.sleeves["momo"] = {"SPY": Decimal("10"), "ETHA": Decimal("100")}
+    sleeves.save(led)
+    idx = pd.date_range("2026-01-01", periods=3, freq="D")
+    prices._write_cache("SPY", pd.Series(500.0, index=idx), (idx[-1] + pd.Timedelta(days=1)).date())
+    row = client.get("/api/dashboard", headers=H()).json()["strategies"][0]
+    assert row["nav"] is None and row["unpriced"] == ["ETHA"]  # not "-$404"
+    prices._write_cache("ETHA", pd.Series(55.0, index=idx), (idx[-1] + pd.Timedelta(days=1)).date())
+    row = client.get("/api/dashboard", headers=H()).json()["strategies"][0]
+    assert row["unpriced"] == [] and row["nav"] == pytest.approx(-404 + 10 * 500 + 100 * 55)
+
+
+def test_live_run_refreshes_prices_for_what_the_sleeve_holds(client, monkeypatch):
+    from msts_trader.symphony import prices, runner
+    from tests.test_studio import _closes
+
+    calls = []
+    monkeypatch.setattr(
+        prices, "load_closes", lambda tickers, start=None, **k: calls.append(sorted(tickers)) or _closes(tickers)
+    )
+    s = make_sym(live_enabled=True)
+    store.save(s)
+    client.post("/api/strategies/momo/capital", json={"action": "invest", "amount": "10000"}, headers=H())
+    res = runner.run(s, mode="live")
+    assert res["status"] == "executed"
+    assert calls[-1] == ["SPY", "TLT"]  # the holdings, after the fills
+    n = len(calls)
+    runner.run(s, mode="dry")
+    assert len(calls) == n + 1  # a dry run only evaluates; no extra refresh
+
+
+def test_price_refresh_failure_never_fails_the_run(client, monkeypatch):
+    from msts_trader.symphony import prices, runner
+    from tests.test_studio import _closes
+
+    state = {"n": 0}
+
+    def flaky(tickers, start=None, **k):
+        state["n"] += 1
+        if state["n"] > 1:  # evaluation works, the post-run refresh blows up
+            raise prices.PriceError("yahoo is down")
+        return _closes(tickers)
+
+    monkeypatch.setattr(prices, "load_closes", flaky)
+    s = make_sym(live_enabled=True)
+    store.save(s)
+    client.post("/api/strategies/momo/capital", json={"action": "invest", "amount": "10000"}, headers=H())
+    assert runner.run(s, mode="live")["status"] == "executed"

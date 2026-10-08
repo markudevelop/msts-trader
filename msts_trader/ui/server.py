@@ -549,7 +549,8 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
             lt = last_target.get(s.id)
             holdings = {t: float(q) for t, q in (led.get("holdings") or {}).items()}
             cash = float(led["cash"]) if led.get("cash") not in (None, "") else None
-            priced = all(t in px for t in holdings)
+            unpriced = sorted(t for t in holdings if t not in px)
+            priced = not unpriced
             nav = (cash or 0.0) + sum(q * px[t] for t, q in holdings.items()) if priced else None
             weights = (lt or {}).get("weights") or {}
             # Why targets aren't held, as the rebalance engine reported it on
@@ -571,6 +572,9 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
                     "contributed": led.get("contributed"),
                     "cash": led.get("cash"),
                     "nav": None if nav is None else round(nav, 2),
+                    # Held tickers with no cached close: Value can't be computed (cash
+                    # alone would be misleading, e.g. negative for a levered book).
+                    "unpriced": unpriced,
                     "positions": len(holdings),
                     "target_positions": len(lt.get("weights") or {}) if lt else None,
                     "not_bought": not_bought,

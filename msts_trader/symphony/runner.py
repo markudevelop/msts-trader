@@ -233,8 +233,33 @@ def run(
 def _finish(sym: Symphony, entry: dict, logged: dict) -> dict:
     from . import studio_meta
 
+    if logged.get("mode") == LIVE and logged.get("status") in ("executed", "partial", "nothing-to-do", "duplicate"):
+        warm_prices(sym)
     studio_meta.notify_run(logged, sym.name)
     return logged
+
+
+def warm_prices(sym: Symphony, today: date | None = None) -> None:
+    """Refresh the price cache for what the sleeve HOLDS, from go-live on.
+
+    Home values sleeves and computes live stats from cached closes only (no
+    network). A feed strategy never loads its underlying tickers' prices to
+    evaluate, and a strategy's holdings can include names its current tree no
+    longer references, so without this a newly bought ticker leaves the
+    sleeve unpriced. Best effort: a failed refresh never fails the run."""
+    try:
+        from .performance import _pick, go_live, sleeve_ledgers
+
+        led = _pick(sleeve_ledgers(sym.id, sym.deploy.broker), sym.deploy.account) or {}
+        held = sorted(led.get("holdings") or {})
+        if not held:
+            return
+        today = today or datetime.now(ET).date()
+        start = today - timedelta(days=10)
+        live = go_live(sym.id, sym.deploy.broker)
+        prices.load_closes(held, min(live, start) if live else start)
+    except Exception:  # network down, a delisted ticker, ... -> Home shows "no cached prices"
+        pass
 
 
 def _run_target(sym: Symphony, entry: dict, target: dict, *, mode: str, force: bool) -> dict:
