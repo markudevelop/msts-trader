@@ -1,6 +1,6 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { api, apiBlob, download } from "../api";
-import type { DashRow, Rollup } from "../types";
+import type { DashRow, Rollup, Stage } from "../types";
 
 const pct = (v: number | null | undefined, dp = 1) => (v == null ? "–" : `${(v * 100).toFixed(dp)}%`);
 const num = (v: number | null | undefined) => (v == null ? "–" : v.toFixed(2));
@@ -44,6 +44,20 @@ function RunCell({ r }: { r: DashRow }) {
   return (
     <span title={`${lr.source === "scheduler" ? "Scheduled" : "Manual"} check · ${detail}`}>
       <span className={`status status-${lr.status}`}>{label}</span> <span className="muted small">{when(lr.ts)}</span>
+    </span>
+  );
+}
+
+// "live" = real money; a paper / sandbox strategy that places (simulated) orders is "paper".
+export function StagePill({ r }: { r: DashRow }) {
+  if (!r.deploy.live_enabled) return null;
+  return r.stage === "live" ? (
+    <span className="pill pill-live" title="places real-money orders">
+      live
+    </span>
+  ) : (
+    <span className="pill pill-paper" title="places paper / sandbox orders: no real money">
+      paper
     </span>
   );
 }
@@ -125,25 +139,61 @@ function Tags({ tags }: { tags: string[] }) {
   );
 }
 
+type View = { kind: "stage"; stage: Stage } | { kind: "tag"; tag: string } | { kind: "all" };
+const sameView = (a: View, b: View) =>
+  a.kind === b.kind && (a.kind !== "stage" || a.stage === (b as typeof a).stage) && (a.kind !== "tag" || a.tag === (b as typeof a).tag);
+const VIEW_KEY = "msts.home.view";
+
+function loadView(): View | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(VIEW_KEY) || "null");
+    return v && typeof v.kind === "string" ? (v as View) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function Home({
   rows,
-  rollup,
+  rollups,
+  homeTabs,
+  onHomeTabs,
   onOpen,
   onChanged,
   onNew,
   onImport,
 }: {
   rows: DashRow[];
-  rollup: Rollup | null;
+  rollups: Record<Stage, Rollup> | null;
+  homeTabs: string[];
+  onHomeTabs: (tabs: string[]) => Promise<void>;
   onOpen: (id: string) => void;
   onChanged: () => Promise<void>;
   onNew: () => void;
   onImport: () => void;
 }) {
-  const funded = rows.filter((r) => r.funded);
-  // Default to Funded once data is in (rows arrive after the first render).
-  const [picked, setView] = useState<"funded" | "all" | null>(null);
-  const view = picked ?? (funded.length ? "funded" : "all");
+  const live = rows.filter((r) => r.funded && r.stage === "live");
+  const incubation = rows.filter((r) => r.funded && r.stage === "incubation");
+  const allTags = useMemo(() => [...new Set(rows.flatMap((r) => r.tags))].sort((a, b) => a.localeCompare(b)), [rows]);
+  const [picked, setPicked] = useState<View | null>(loadView);
+  const setView = (v: View) => {
+    setPicked(v);
+    try {
+      localStorage.setItem(VIEW_KEY, JSON.stringify(v));
+    } catch {
+      /* private window: the tab just isn't remembered */
+    }
+  };
+  // Default once data is in: real money first, then paper, then the library.
+  const fallback: View = live.length ? { kind: "stage", stage: "live" } : incubation.length ? { kind: "stage", stage: "incubation" } : { kind: "all" };
+  const view: View = picked && (picked.kind !== "tag" || homeTabs.includes(picked.tag)) ? picked : fallback;
+  const [adding, setAdding] = useState(false);
+  const unpinned = allTags.filter((t) => !homeTabs.includes(t));
+  const tab = (v: View, label: string, count: number, extra?: ReactNode) => (
+    <button key={JSON.stringify(v)} role="tab" aria-selected={sameView(view, v)} className={`tab ${sameView(view, v) ? "active" : ""}`} onClick={() => setView(v)}>
+      {label} ({count}){extra}
+    </button>
+  );
 
   if (!rows.length) {
     return (
@@ -169,20 +219,70 @@ export function Home({
     <div className="panel-stack">
       <div className="home-head">
         <h2>Strategies</h2>
-        <div className="tabs compact" role="tablist">
-          <button role="tab" aria-selected={view === "funded"} className={`tab ${view === "funded" ? "active" : ""}`} onClick={() => setView("funded")}>
-            Funded ({funded.length})
-          </button>
-          <button role="tab" aria-selected={view === "all"} className={`tab ${view === "all" ? "active" : ""}`} onClick={() => setView("all")}>
-            All strategies ({rows.length})
-          </button>
+        <div className="tabs compact home-tabs" role="tablist">
+          {tab({ kind: "stage", stage: "live" }, "Live", live.length)}
+          {tab({ kind: "stage", stage: "incubation" }, "Incubation", incubation.length)}
+          {homeTabs.map((t) =>
+            tab(
+              { kind: "tag", tag: t },
+              t,
+              rows.filter((r) => r.tags.includes(t)).length,
+              <span
+                className="tab-x"
+                role="button"
+                aria-label={`Unpin ${t}`}
+                title="Unpin this tab (the tag stays on its strategies)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void onHomeTabs(homeTabs.filter((x) => x !== t));
+                }}
+              >
+                ×
+              </span>,
+            ),
+          )}
+          {tab({ kind: "all" }, "All strategies", rows.length)}
+          {adding ? (
+            <select
+              className="tab-add"
+              autoFocus
+              value=""
+              onBlur={() => setAdding(false)}
+              onChange={(e) => {
+                const t = e.target.value;
+                setAdding(false);
+                if (t) {
+                  void onHomeTabs([...homeTabs, t]);
+                  setView({ kind: "tag", tag: t });
+                }
+              }}
+            >
+              <option value="">Pin a tag as a tab…</option>
+              {unpinned.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <button
+              className="tab tab-plus"
+              disabled={!unpinned.length}
+              title={unpinned.length ? "Pin a tag as a tab (e.g. options, active, passive)" : "Add tags to strategies first (under each strategy's name), then pin them here"}
+              onClick={() => setAdding(true)}
+            >
+              +
+            </button>
+          )}
         </div>
       </div>
-      {view === "funded" ? (
+      {view.kind === "stage" ? (
         <>
-          <Funded rows={funded} onOpen={onOpen} />
-          {rollup && funded.length > 0 && <Combined rollup={rollup} onOpen={onOpen} />}
+          <Funded rows={view.stage === "live" ? live : incubation} stage={view.stage} onOpen={onOpen} />
+          {rollups && (view.stage === "live" ? live : incubation).length > 0 && <Combined rollup={rollups[view.stage]} onOpen={onOpen} />}
         </>
+      ) : view.kind === "tag" ? (
+        <TagView tag={view.tag} rows={rows.filter((r) => r.tags.includes(view.tag))} onOpen={onOpen} onChanged={onChanged} />
       ) : (
         <Library rows={rows} onOpen={onOpen} onChanged={onChanged} />
       )}
@@ -190,12 +290,40 @@ export function Home({
   );
 }
 
-function Funded({ rows, onOpen }: { rows: DashRow[]; onOpen: (id: string) => void }) {
+function TagView({ tag, rows, onOpen, onChanged }: { tag: string; rows: DashRow[]; onOpen: (id: string) => void; onChanged: () => Promise<void> }) {
+  const funded = rows.filter((r) => r.funded);
+  const rest = rows.filter((r) => !r.funded);
+  if (!rows.length) {
+    return <div className="empty-state">No strategy is tagged “{tag}” any more. Unpin the tab with its ×, or tag a strategy under its name.</div>;
+  }
+  return (
+    <>
+      {funded.length > 0 && <Funded rows={funded} onOpen={onOpen} />}
+      {rest.length > 0 && <Library rows={rest} onOpen={onOpen} onChanged={onChanged} />}
+    </>
+  );
+}
+
+function Funded({ rows, stage, onOpen }: { rows: DashRow[]; stage?: Stage; onOpen: (id: string) => void }) {
   const total = rows.reduce((a, r) => a + Number(r.contributed ?? 0), 0);
   if (!rows.length) {
     return (
       <div className="empty-state">
-        No funded strategies yet. Open a strategy, go to <b>Deploy</b> and <b>Invest</b> some capital. It will show up here with its stats.
+        {stage === "live" ? (
+          <>
+            No strategies trading real money yet. Paper, sandbox and preview-only strategies are under <b>Incubation</b>. To go live, pick a real broker
+            in a strategy's <b>Deploy</b> tab, allow live orders and <b>Invest</b> capital.
+          </>
+        ) : stage === "incubation" ? (
+          <>
+            Nothing in incubation. Open a strategy, go to <b>Deploy</b>, keep the <b>paper</b> broker and <b>Invest</b> some capital to paper-trade it and
+            build an out-of-sample record.
+          </>
+        ) : (
+          <>
+            No funded strategies yet. Open a strategy, go to <b>Deploy</b> and <b>Invest</b> some capital. It will show up here with its stats.
+          </>
+        )}
       </div>
     );
   }
@@ -204,7 +332,8 @@ function Funded({ rows, onOpen }: { rows: DashRow[]; onOpen: (id: string) => voi
     <div className="card-plain">
       <div className="section-head">
         <span className="muted small">
-          {rows.length} funded · {money(total)} allocated · Live = the sleeve's own out-of-sample record since go-live · Backtest = the last full backtest
+          {rows.length} {stage === "live" ? "trading real money" : stage === "incubation" ? "in incubation (paper / preview-only)" : "funded"} ·{" "}
+          {money(total)} allocated · Out-of-sample = the sleeve's own record since go-live · Backtest = the last full backtest
         </span>
       </div>
       {previewOnly.length > 0 && (
@@ -220,7 +349,7 @@ function Funded({ rows, onOpen }: { rows: DashRow[]; onOpen: (id: string) => voi
             <tr className="group-head">
               <th colSpan={6} />
               <th colSpan={4} className="group" title="actual sleeve performance since go-live (out-of-sample), time-weighted">
-                Live
+                Out-of-sample
               </th>
               <th colSpan={4} className="group" title="the strategy's last full backtest (in-sample)">
                 Backtest
@@ -251,7 +380,11 @@ function Funded({ rows, onOpen }: { rows: DashRow[]; onOpen: (id: string) => voi
               return (
                 <tr key={r.id} className="clickable" onClick={() => onOpen(r.id)}>
                   <td>
-                    <b>{r.name}</b> {r.deploy.live_enabled && <span className="pill pill-live">live</span>} <span className="muted small">{r.deploy.broker}</span>
+                    <b>{r.name}</b> <StagePill r={r} />{" "}
+                    <span className="muted small">
+                      {r.deploy.broker}
+                      {r.deploy.paper_account ? " · paper account" : ""}
+                    </span>
                     <div>
                       <Tags tags={r.tags} />
                     </div>

@@ -279,6 +279,14 @@ class Deploy(_Base):
     # Exchanges stop taking MOC ~15:50 ET, so MOC scheduled runs are pulled to
     # MOC_LEAD_MINUTES before the close (see ui/scheduler.run_time).
     order_type: OrderType = "market"
+    # The broker account is a paper / sandbox one (Alpaca paper, Tradier
+    # sandbox, ...): no real money, so Home lists it under Incubation. The
+    # `paper` broker always is; this flag is only for real brokers' test accounts.
+    paper_account: bool = False
+
+    @property
+    def real_money(self) -> bool:
+        return self.live_enabled and self.broker != "paper" and not self.paper_account
 
     @field_validator("schedule_time")
     @classmethod

@@ -34,7 +34,20 @@ can't trade fractions) and no minimum weight. Defaults such as `whole_shares`,
 `min_weight` or `moc` in `~/.msts-trader/config.toml` apply to plain CLI
 `rebalance` runs only.
 
-Opening Studio shows the **Funded** strategies:
+Home has these tabs:
+- **Live**: funded strategies trading real money at a broker.
+- **Incubation**: funded strategies on the `paper` broker, on a real broker's
+  paper / sandbox account (tick *This is a paper / sandbox account* in Deploy,
+  e.g. Alpaca paper or the Tradier sandbox), or with live orders off
+  (preview-only). Use it to paper-trade many strategies without crowding Live.
+- **Pinned tags**: press **+** to pin any tag as its own tab (e.g. *Options*,
+  *Active strategies*, *Passive weights*); **×** unpins it, and the tag stays on
+  its strategies. A tag tab lists its funded strategies with their stats, then
+  the unfunded ones.
+- **All strategies**: the whole library.
+
+Live and Incubation each have their own **Combined portfolio**, so paper
+positions never inflate the real-money totals. Each funded tab shows:
 - capital, and current value (cash + holdings at the latest cached close)
 - **held / target** positions. When the latest run left targets unbought it
   shows *N not bought*; hover for each ticker and the rebalance engine's
@@ -65,8 +78,9 @@ actions:
 - **go to cash**: sells everything the strategy's sleeve holds and pauses it.
   It needs a typed `CASH` confirmation; real orders on real brokers.
 
-Tags are edited under each strategy's name. The sidebar lists Funded and the
-20 most recently opened strategies, plus a search box for everything else.
+Tags are edited under each strategy's name. The sidebar lists the Live
+(real-money) strategies and the 20 most recently opened ones, plus a search box
+for everything else.
 
 ## Blocks
 

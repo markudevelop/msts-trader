@@ -95,6 +95,8 @@ export interface Deploy {
   schedule_time: string;
   threshold: number;
   order_type: OrderType;
+  /** A real broker's paper / sandbox account: no real money (Home lists it under Incubation). */
+  paper_account?: boolean;
 }
 
 export interface Strategy {
@@ -255,6 +257,8 @@ export interface UrlFeedTest {
   token_stored: boolean;
 }
 
+export type Stage = "live" | "incubation";
+
 export interface DashRow {
   id: string;
   name: string;
@@ -262,6 +266,8 @@ export interface DashRow {
   rebalance: Cadence;
   deploy: Deploy;
   funded: boolean;
+  /** live = real money at a broker; incubation = paper broker, paper/sandbox account, or preview-only. */
+  stage: Stage;
   contributed: string | null;
   cash: string | null;
   positions: number;
@@ -292,6 +298,8 @@ export interface StudioSettings {
   notify_on: "off" | "live" | "all";
   telegram_chat_id: string;
   weekly_digest: boolean;
+  /** Tags pinned as Home tabs, in order. */
+  home_tabs: string[];
   has_notify_url: boolean;
   has_telegram_token: boolean;
 }

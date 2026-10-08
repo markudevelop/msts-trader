@@ -24,7 +24,7 @@ from pathlib import Path
 _LOCK = threading.Lock()
 _KEYRING_SERVICE = "msts-trader"
 _SECRET_KEYS = {"notify_url": "studio-notify-url", "telegram_token": "studio-telegram-token"}
-DEFAULT_SETTINGS = {"notify_on": "live", "telegram_chat_id": "", "weekly_digest": False}
+DEFAULT_SETTINGS = {"notify_on": "live", "telegram_chat_id": "", "weekly_digest": False, "home_tabs": []}
 
 
 def _now() -> str:
@@ -131,13 +131,31 @@ def get_settings() -> dict:
         "notify_on": s["notify_on"],
         "telegram_chat_id": s.get("telegram_chat_id") or "",
         "weekly_digest": bool(s.get("weekly_digest")),
+        "home_tabs": list(s.get("home_tabs") or []),
         "has_notify_url": bool(_secret("notify_url")),
         "has_telegram_token": bool(_secret("telegram_token")),
     }
 
 
+def _tab_labels(labels) -> list[str]:
+    """Tags pinned as Home tabs: tag-normalised (trimmed, inner spaces
+    collapsed), de-duplicated case-insensitively, order kept, at most 12."""
+    out: list[str] = []
+    for x in labels or []:
+        t = " ".join(str(x).split())[:40]
+        if t and t.lower() not in {o.lower() for o in out}:
+            out.append(t)
+    return out[:12]
+
+
 def save_settings(
-    *, notify_on=None, telegram_chat_id=None, weekly_digest=None, notify_url=None, telegram_token=None
+    *,
+    notify_on=None,
+    telegram_chat_id=None,
+    weekly_digest=None,
+    notify_url=None,
+    telegram_token=None,
+    home_tabs=None,
 ) -> dict:
     """None = leave unchanged; "" for a secret = clear it."""
     s = {**DEFAULT_SETTINGS, **_read(settings_path())}
@@ -149,6 +167,8 @@ def save_settings(
         s["telegram_chat_id"] = str(telegram_chat_id).strip()
     if weekly_digest is not None:
         s["weekly_digest"] = bool(weekly_digest)
+    if home_tabs is not None:
+        s["home_tabs"] = _tab_labels(home_tabs)
     _write(settings_path(), {k: s[k] for k in DEFAULT_SETTINGS})
     if notify_url is not None:
         if notify_url and not notify_url.lower().startswith(("http://", "https://")):

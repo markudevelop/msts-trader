@@ -815,6 +815,11 @@ input.num.wide {
   color: var(--neg);
   font-weight: 700;
 }
+.pill-paper {
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-weight: 600;
+}
 .status {
   font-size: 12px;
   font-weight: 600;
@@ -1266,6 +1271,33 @@ input.num.wide {
 .tabs.compact {
   margin: 0;
   border-bottom: 0;
+}
+.home-tabs {
+  flex-wrap: wrap;
+}
+.tab-x {
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--muted);
+  opacity: 0.6;
+}
+.tab-x:hover {
+  opacity: 1;
+  background: var(--surface-2);
+  color: var(--text);
+}
+.tab-plus {
+  font-weight: 600;
+}
+.tab-plus:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tab-add {
+  font-size: 13px;
+  padding: 4px 6px;
+  max-width: 220px;
 }
 .table.dash tr.clickable {
   cursor: pointer;

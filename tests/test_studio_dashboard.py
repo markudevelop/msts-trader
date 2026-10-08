@@ -363,7 +363,7 @@ def test_dashboard_rollup_targets_holdings_and_last_check(client):
     assert rows["momo"]["last_run"]["status"] == "preview" and rows["momo"]["last_run"]["orders"] == 2
     assert rows["bond"]["positions"] == 1 and rows["bond"]["last_run"]["status"] == "executed"
 
-    r = d["rollup"]
+    r = d["rollups"]["incubation"]
     assert r["strategies"] == 2 and r["with_targets"] == 2
     t = {x["ticker"]: x for x in r["tickers"]}
     # no cached prices in this isolated home -> capital falls back to contributed
@@ -379,7 +379,7 @@ def test_dashboard_rollup_targets_holdings_and_last_check(client):
     cache.mkdir(parents=True, exist_ok=True)
     (cache / "TLT.csv").write_text("date,close\n2026-09-30,100.0\n", encoding="utf-8")
     d2 = client.get("/api/dashboard", headers=H()).json()
-    t2 = {x["ticker"]: x for x in d2["rollup"]["tickers"]}
+    t2 = {x["ticker"]: x for x in d2["rollups"]["incubation"]["tickers"]}
     assert t2["TLT"]["held_value"] == pytest.approx(held * 100.0) and t2["TLT"]["priced"] is True
     bond_nav = {x["id"]: x for x in d2["strategies"]}["bond"]["nav"]
     assert bond_nav == pytest.approx(
@@ -396,8 +396,8 @@ def test_rollup_after_go_to_cash_targets_cash(client):
     d = client.get("/api/dashboard", headers=H()).json()
     row = d["strategies"][0]
     assert row["positions"] == 0 and row["target_positions"] == 0 and row["last_run"]["target"] == "cash"
-    assert d["rollup"]["tickers"] == [] and d["rollup"]["total_target"] == 0
-    assert d["rollup"]["unallocated"] == pytest.approx(d["rollup"]["total_capital"])
+    assert d["rollups"]["incubation"]["tickers"] == [] and d["rollups"]["incubation"]["total_target"] == 0
+    assert d["rollups"]["incubation"]["unallocated"] == pytest.approx(d["rollups"]["incubation"]["total_capital"])
 
 
 # ── live (out-of-sample) stats per funded row ─────────────────────────────
@@ -549,3 +549,46 @@ def test_nav_series_marks_a_ticker_missing_todays_bar_at_its_last_close():
     snaps = [{"ts": "2026-10-05T20:00:00Z", "cash": "0", "holdings": {"SPY": "1", "DECO": "10"}, "contributed": "200"}]
     nav = performance.nav_series(snaps, closes, idx[0].date())
     assert list(nav["nav"]) == [200.0, 211.0, 212.0]  # DECO marked at 11 on the 7th, no "no close" error
+
+
+# ── Home tabs: Live (real money) vs Incubation (paper), pinned tag tabs ────
+def _fund_ledger(broker, sid, amount):
+    from decimal import Decimal
+
+    from msts_trader import sleeves
+
+    led = sleeves.load(broker, "acct1")
+    led.cash[sid] = Decimal(amount)
+    led.contributed[sid] = Decimal(amount)
+    sleeves.save(led)
+
+
+def test_stage_splits_real_money_from_paper_and_rollups_follow(client):
+    store.save(make_sym("real", broker="alpaca", live_enabled=True))
+    store.save(make_sym("sandbox", broker="alpaca", live_enabled=True, paper_account=True))
+    store.save(make_sym("preview", broker="alpaca", live_enabled=False))
+    store.save(make_sym("paper", live_enabled=True))
+    for sid, broker in (("real", "alpaca"), ("sandbox", "alpaca"), ("preview", "alpaca"), ("paper", "paper")):
+        _fund_ledger(broker, sid, "1000")
+    d = client.get("/api/dashboard", headers=H()).json()
+    stage = {r["id"]: r["stage"] for r in d["strategies"]}
+    assert stage == {"real": "live", "sandbox": "incubation", "preview": "incubation", "paper": "incubation"}
+    assert d["rollups"]["live"]["strategies"] == 1 and d["rollups"]["live"]["total_capital"] == pytest.approx(1000)
+    assert d["rollups"]["incubation"]["strategies"] == 3
+
+
+def test_home_tabs_setting_normalises_and_round_trips(client):
+    r = client.put(
+        "/api/settings",
+        json={"home_tabs": ["  Options ", "options", "Active  strategies", "", "Passive weights"]},
+        headers=H(),
+    )
+    assert r.status_code == 200 and r.json()["home_tabs"] == ["Options", "Active strategies", "Passive weights"]
+    assert client.get("/api/dashboard", headers=H()).json()["settings"]["home_tabs"] == r.json()["home_tabs"]
+    client.put("/api/settings", json={"weekly_digest": True}, headers=H())  # other settings leave tabs alone
+    assert client.get("/api/settings", headers=H()).json()["home_tabs"] == [
+        "Options",
+        "Active strategies",
+        "Passive weights",
+    ]
+    assert client.put("/api/settings", json={"home_tabs": []}, headers=H()).json()["home_tabs"] == []

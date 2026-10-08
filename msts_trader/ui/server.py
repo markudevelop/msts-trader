@@ -503,6 +503,8 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
                     "rebalance": s.rebalance,
                     "deploy": s.deploy.model_dump(),
                     "funded": bool(led.get("contributed") or led.get("cash") or led.get("holdings")),
+                    # Home tabs: real money at a broker vs paper / preview-only (incubation)
+                    "stage": "live" if s.deploy.real_money else "incubation",
                     "contributed": led.get("contributed"),
                     "cash": led.get("cash"),
                     "nav": None if nav is None else round(nav, 2),
@@ -526,11 +528,14 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
                     "_target_ts": (lt or {}).get("ts"),
                 }
             )
-        rollup = _rollup([r for r in rows if r["funded"]], px)
+        # One combined portfolio per stage: paper must never inflate the real-money totals.
+        rollups = {
+            st: _rollup([r for r in rows if r["funded"] and r["stage"] == st], px) for st in ("live", "incubation")
+        }
         for r in rows:
             for k in ("_holdings", "_weights", "_target_ts"):
                 r.pop(k)
-        return {"strategies": rows, "rollup": rollup, "settings": studio_meta.get_settings()}
+        return {"strategies": rows, "rollups": rollups, "settings": studio_meta.get_settings()}
 
     def _rollup(funded: list[dict], px: dict) -> dict:
         """Combined portfolio of the funded strategies, per ticker:
@@ -665,6 +670,7 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
         weekly_digest: bool | None = Body(None),
         notify_url: str | None = Body(None),
         telegram_token: str | None = Body(None),
+        home_tabs: list[str] | None = Body(None),
     ):
         try:
             return studio_meta.save_settings(
@@ -673,6 +679,7 @@ def create_app(token: str, *, allowed_origins: set[str] | None = None, static_di
                 weekly_digest=weekly_digest,
                 notify_url=notify_url,
                 telegram_token=telegram_token,
+                home_tabs=home_tabs,
             )
         except ValueError as e:
             _bad(422, str(e))

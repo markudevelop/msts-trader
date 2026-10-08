@@ -153,9 +153,17 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
             </label>
             <p className="muted small">
               {d.broker === "paper"
-                ? "Paper trading is simulated locally; no real orders."
-                : "Real money. Scheduled runs place orders without asking. Manual runs still need a typed confirmation."}
+                ? "Paper trading is simulated locally; no real orders. Home lists it under Incubation."
+                : d.paper_account
+                  ? "Paper / sandbox account: orders go to the broker's test environment, no real money. Home lists it under Incubation."
+                  : "Real money. Scheduled runs place orders without asking. Manual runs still need a typed confirmation."}
             </p>
+            {d.broker !== "paper" && (
+              <label className="check small">
+                <input type="checkbox" checked={!!d.paper_account} onChange={(e) => set({ paper_account: e.target.checked })} />
+                This is a paper / sandbox account (e.g. Alpaca paper, Tradier sandbox): list it under Incubation, not Live
+              </label>
+            )}
           </div>
           {dirty && (
             <div className="alert warn">
@@ -280,7 +288,7 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
       {confirming && <ConfirmLive strategy={saved} onCancel={() => setConfirming(false)} onConfirm={executeLive} />}
       {cashOpen && (
         <CashModal
-          rows={[{ id: saved.id, name: saved.name, deploy: saved.deploy, tags: [], rebalance: saved.rebalance, funded: true, contributed: null, cash: null, nav: null, positions: 0, target_positions: null, last_viewed: null, last_backtest: null, last_run: null }]}
+          rows={[{ id: saved.id, name: saved.name, deploy: saved.deploy, tags: [], rebalance: saved.rebalance, funded: true, stage: "incubation", contributed: null, cash: null, nav: null, positions: 0, target_positions: null, last_viewed: null, last_backtest: null, last_run: null }]}
           onClose={() => setCashOpen(false)}
           onDone={async () => {
             setCashOpen(false);
