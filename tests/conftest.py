@@ -42,6 +42,15 @@ def no_network_paper_quotes(monkeypatch):
     monkeypatch.setenv("MSTS_PAPER_YF", "0")
 
 
+@pytest.fixture(autouse=True)
+def no_system_trust_bundle(monkeypatch):
+    """CLI invocations would otherwise write ~/.msts-trader/ca-bundle.pem and
+    point this process's CA env vars at it; test_tls.py tests it directly."""
+    from msts_trader import tls
+
+    monkeypatch.setattr(tls, "use_system_trust", lambda path=None: None)
+
+
 @pytest.fixture
 def basic_targets() -> list[Target]:
     return [

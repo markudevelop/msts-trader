@@ -10,6 +10,7 @@ so a condition like "cumulative return of SPY over 10d > 5" means +5%.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Annotated, Literal, Union
 
@@ -82,6 +83,12 @@ FEED_SOURCES: dict[str, "Feed"] = {}
 
 class _Base(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    def model_dump_json(self, *, indent: int | None = None, **kw) -> str:
+        # pydantic-core's JSON serializer refuses trees nested ~49+ levels deep
+        # on Windows ("Circular reference detected (depth exceeded)"), which a
+        # Composer else-if chain easily reaches; its dict dump has no such cap.
+        return json.dumps(self.model_dump(mode="json", **kw), indent=indent, ensure_ascii=False)
 
 
 class Metric(_Base):
@@ -342,6 +349,11 @@ class Symphony(_Base):
     name: str
     description: str = ""
     rebalance: Rebalance = "daily"
+    # Threshold ("corridor") rebalancing, as Composer does it: each scheduled
+    # check trades only if some line is more than this far from its target
+    # (as a fraction of the whole book), and then puts EVERY line back on
+    # target. None = always go back to target on schedule.
+    rebalance_threshold: float | None = Field(default=None, gt=0, le=1)
     children: list[Node] = Field(default_factory=list)
     deploy: Deploy = Field(default_factory=Deploy)
     # Free-form labels for grouping a large library (a "folder" is just a tag).

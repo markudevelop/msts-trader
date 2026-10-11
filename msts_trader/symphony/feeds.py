@@ -89,6 +89,19 @@ def clear_token() -> None:
 
 
 # ── HTTP ───────────────────────────────────────────────────────────────────
+def unreachable(what: str, reason) -> str:
+    msg = f"{what} unreachable ({reason})"
+    if "CERTIFICATE_VERIFY_FAILED" in str(reason):
+        # The site's certificate is fine for everyone else; this machine's
+        # view of it is not (clock, HTTPS-scanning antivirus, stale CA bundle).
+        msg += (
+            ". This computer rejected the site's HTTPS certificate: check the system clock, antivirus HTTPS "
+            "scanning (Avast/AVG Web Shield, Kaspersky, ESET), and that SSL_CERT_FILE / REQUESTS_CA_BUNDLE, "
+            "if set, point at an up-to-date bundle"
+        )
+    return msg
+
+
 def _get(path: str, *, token: str | None = None, timeout: float = 30) -> tuple[bytes, dict]:
     headers = {"User-Agent": _UA, "Accept": "application/json, text/csv"}
     if token:
@@ -105,7 +118,7 @@ def _get(path: str, *, token: str | None = None, timeout: float = 30) -> tuple[b
             detail = {"message": body.decode("utf-8", "replace")[:200]}
         raise _http_error(e.code, detail, path) from None
     except urllib.error.URLError as e:
-        raise FeedError(f"pnlportfolio unreachable ({e.reason})") from None
+        raise FeedError(unreachable("pnlportfolio", e.reason)) from None
 
 
 def _http_error(code: int, detail: dict, path: str) -> FeedError:
@@ -249,7 +262,7 @@ def fetch_url(url: str, *, token: str | None = None, auth: str = "none", token_p
             raise FeedError(f"{shown} refused access ({e.code}): check the token and how it is sent") from None
         raise FeedError(f"{shown} returned HTTP {e.code}") from None
     except urllib.error.URLError as e:
-        raise FeedError(f"{shown} unreachable ({e.reason})") from None
+        raise FeedError(unreachable(shown, e.reason)) from None
     if len(data) > MAX_BYTES:
         raise FeedError(f"{shown} returned more than 5 MB: is this really a weights file?")
     return data.decode("utf-8-sig", "replace")

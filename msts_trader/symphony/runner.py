@@ -84,10 +84,12 @@ def rebalance_cmd(sym: Symphony, csv_path: str, *, mode: str, force: bool = Fals
         csv_path,
         "--sleeve",
         sym.id,
+        # A strategy-level rebalance_threshold is Composer's corridor: any line
+        # off target by more than X% of the book snaps the whole book back.
         "--threshold",
-        str(d.threshold),
+        str(sym.rebalance_threshold if sym.rebalance_threshold is not None else d.threshold),
         "--threshold-mode",
-        "position",
+        "nav" if sym.rebalance_threshold is not None else "position",
         "--json",
         # Explicit either way: a `moc = true` in config.toml must not turn a
         # market strategy into MOC (and get it refused near the close).
@@ -108,7 +110,7 @@ def rebalance_cmd(sym: Symphony, csv_path: str, *, mode: str, force: bool = Fals
         "--min-weight",
         f"{d.min_weight:g}",
         "--rebalance-scope",
-        d.rebalance_scope,
+        "whole-book" if sym.rebalance_threshold is not None else d.rebalance_scope,
     ]
     if d.max_notional is not None:
         cmd += ["--max-notional", str(d.max_notional)]

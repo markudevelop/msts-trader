@@ -333,12 +333,50 @@ def test_unsupported_nodes_are_reported_not_dropped():
     assert "unsupported indicator 'alpha-magic'" in msg
 
 
-def test_corridor_rebalance_warns():
+def test_corridor_rebalance_without_width_warns():
     s, warnings = import_text('{:step :root :name "C" :rebalance :none :children [{:step :asset :ticker "SPY"}]}')
-    assert s.rebalance == "daily" and warnings
+    assert s.rebalance == "daily" and s.rebalance_threshold is None and warnings
+
+
+@pytest.mark.parametrize("width", ["0.05", "5", '"5"'])
+def test_corridor_rebalance_maps_to_threshold(width):
+    s, warnings = import_text(
+        f'{{:step :root :name "C" :rebalance :none :rebalance-corridor-width {width} :children [{{:step :asset :ticker "SPY"}}]}}'
+    )
+    assert s.rebalance == "daily" and s.rebalance_threshold == pytest.approx(0.05) and not warnings
+
+
+def test_rebalance_threshold_holds_drift_inside_the_corridor(closes):
+    kids = [{"step": "wt-cash-equal", "children": [asset("SPY"), asset("TLT")]}]
+    daily = backtest.run(sym(kids), closes, cost_bps=0)
+    banded = backtest.run(sym(kids, rebalance_threshold=0.03), closes, cost_bps=0)
+    never = backtest.run(sym(kids, rebalance_threshold=1.0), closes, cost_bps=0)
+    assert len(never["allocations"]) == 1  # the initial buy, then never trades again
+    assert 0 < banded["metrics"]["annual_turnover"] < daily["metrics"]["annual_turnover"]
+    # Buy and hold: the equity curve is the 50/50 basket left to drift.
+    spy, tlt = closes["SPY"], closes["TLT"]
+    t0 = never["dates"][0]
+    hold = 0.5 * spy[spy.index >= t0] / spy[t0] + 0.5 * tlt[tlt.index >= t0] / tlt[t0]
+    assert never["equity"][-1] == pytest.approx(float(hold.iloc[-1]), rel=1e-4)
 
 
 def test_native_format_round_trips(closes):
     s = sym([{"step": "wt-cash-equal", "children": [asset("SPY"), asset("TLT", weight=0.3)]}])
     again, _ = import_text(s.model_dump_json(by_alias=True))
+    assert again == s
+
+
+def test_deeply_nested_else_if_chain_serialises():
+    # A 60-deep else-if chain: pydantic-core's own JSON serializer gives up
+    # near 49 levels on Windows, which made saving such an import a 500.
+    node = asset("BIL")
+    for _ in range(60):
+        cond = {
+            "lhs": {"fn": "relative-strength-index", "ticker": "SPY", "window": 10},
+            "comparator": "gt",
+            "rhs_value": 50,
+        }
+        node = {"step": "if", "condition": cond, "then": [asset("SPY")], "else": [node]}
+    s = sym([node])
+    again, _ = import_text(s.model_dump_json(by_alias=True, indent=2))
     assert again == s

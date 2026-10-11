@@ -24,7 +24,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm  # used for the post-preview Y/N (works fine in all terminals)
 from rich.table import Table
 
-from . import __version__, config, fill_log, keychain, notifications, retry, runstate, safety, sleeves
+from . import __version__, config, fill_log, keychain, notifications, retry, runstate, safety, sleeves, tls
 from .brokers import SUPPORTED, BrokerError, make
 from .brokers.base import LinkedAccount, resolve_linked_account
 from .creds_file import CredsFileError, broker_kwargs_from_env, load_into_env
@@ -528,6 +528,7 @@ def main(ctx: click.Context, broker: str | None) -> None:
     """
     ctx.ensure_object(dict)
     ctx.obj["broker"] = broker
+    tls.use_system_trust()  # before anything imports yfinance / requests
     if ctx.invoked_subcommand is None:
         ctx.invoke(rebalance)
 

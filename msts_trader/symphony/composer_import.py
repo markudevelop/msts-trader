@@ -331,6 +331,22 @@ def _convert(node, path: str, errors: list[str]) -> dict | None:
     return out
 
 
+def _corridor(data: dict, errors: list[str]) -> float | None:
+    """Composer's corridor width, as a fraction of the book. Exports have
+    carried it as a fraction (0.05) or in percent (5); either reads as 5%."""
+    for key in ("rebalance-corridor-width", "corridor-width", "rebalance-threshold"):
+        if data.get(key) not in (None, ""):
+            v = _num(data[key], key, "root", errors)
+            if v is None:
+                return None
+            v = v / 100 if v > 1 else v
+            if not 0 < v <= 1:
+                errors.append(f"root: {key} {data[key]!r} is not a usable corridor width")
+                return None
+            return v
+    return None
+
+
 _KW = re.compile(r":[a-z][a-z0-9?-]*")
 
 
@@ -361,12 +377,17 @@ def convert(data: Any, *, id: str | None = None) -> tuple[Symphony, list[str]]:
         data = {"step": "root", "name": "Imported", "children": [data]}
     name = str(data.get("name") or "Imported symphony")
     reb = str(data.get("rebalance") or "daily")
+    band = None
     if reb not in ("daily", "weekly", "monthly", "quarterly", "yearly"):
-        warnings.append(
-            f"rebalance {reb!r} is not supported (threshold/corridor rebalancing) — using daily; "
-            f"the deploy drift threshold still limits turnover"
-        )
+        # :rebalance :none = Composer threshold ("corridor") rebalancing:
+        # checked daily, trades only once a holding drifts past the corridor.
         reb = "daily"
+        band = _corridor(data, errors)
+        if band is None:
+            warnings.append(
+                "Composer threshold rebalancing came without a corridor width — imported as daily "
+                "rebalancing; set the rebalance threshold on the Build tab to match Composer"
+            )
     children = _children(data, "root", errors)
     if errors:
         raise ComposerImportError("could not import:\n  " + "\n  ".join(errors))
@@ -377,6 +398,7 @@ def convert(data: Any, *, id: str | None = None) -> tuple[Symphony, list[str]]:
                 "name": name,
                 "description": str(data.get("description") or ""),
                 "rebalance": reb,
+                "rebalance_threshold": band,
                 "children": children,
             }
         )

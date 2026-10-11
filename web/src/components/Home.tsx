@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { api, apiBlob, download } from "../api";
+import { confirmDialog, promptDialog } from "./Dialog";
 import type { DashRow, Rollup, Stage } from "../types";
 
 const pct = (v: number | null | undefined, dp = 1) => (v == null ? "–" : `${(v * 100).toFixed(dp)}%`);
@@ -492,16 +493,17 @@ function Library({ rows, onOpen, onChanged }: { rows: DashRow[]; onOpen: (id: st
     }
   };
 
-  const doTag = () => {
-    const t = window.prompt(`Tag ${ids.length} strateg${ids.length === 1 ? "y" : "ies"} as:`, tag !== "*" && tag ? tag : "");
+  const doTag = async () => {
+    const t = await promptDialog(`Tag ${ids.length} strateg${ids.length === 1 ? "y" : "ies"} as:`, tag !== "*" && tag ? tag : "");
     if (t && t.trim()) bulk("tag", { tag: t.trim() });
   };
-  const doUntag = () => {
-    const t = window.prompt(`Remove which tag from ${ids.length} strateg${ids.length === 1 ? "y" : "ies"}?`, tag !== "*" && tag ? tag : allTags[0] ?? "");
+  const doUntag = async () => {
+    const t = await promptDialog(`Remove which tag from ${ids.length} strateg${ids.length === 1 ? "y" : "ies"}?`, tag !== "*" && tag ? tag : allTags[0] ?? "");
     if (t && t.trim()) bulk("untag", { tag: t.trim() });
   };
-  const doDelete = () => {
-    if (window.confirm(`Delete ${ids.length} strateg${ids.length === 1 ? "y" : "ies"}? Holdings at the broker are not touched (use Go to cash first).`)) bulk("delete");
+  const doDelete = async () => {
+    const what = `${ids.length} strateg${ids.length === 1 ? "y" : "ies"}`;
+    if (await confirmDialog(`Delete ${what}? Holdings at the broker are not touched (use Go to cash first).`, { ok: "Delete", danger: true })) bulk("delete");
   };
   const doExport = async () => {
     setBusy("export");

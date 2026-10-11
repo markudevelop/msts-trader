@@ -5,7 +5,8 @@ and held from the close of t to the close of t+1. Nothing evaluated on day t
 can see t+1, which `test_symphony_backtest.py` pins with a lookahead canary.
 The live runner trades ~10 minutes before the close on a near-close price, so
 the backtest is slightly optimistic by that gap; costs are charged as bps of
-turnover on every rebalance.
+turnover on every rebalance. With a `rebalance_threshold` the book only
+trades when some line has drifted past it, then goes fully back to target.
 
 Weights that sum below 1 leave the remainder in cash earning 0%.
 """
@@ -129,14 +130,21 @@ def run(
             except EvalError as e:
                 raise EvalError(f"{e} (backtest day {eng._day(t)})") from e
             names = set(target) | set(held)
-            turn = sum(abs(target.get(k, 0.0) - held.get(k, 0.0)) for k in names)
-            turnover_total += turn
-            equity[-1] *= 1.0 - turn * cost
-            # Log target CHANGES (> 0.5% on any line), not the daily drift trims.
-            prev = allocations[-1]["weights"] if allocations else None
-            if prev is None or any(abs(target.get(k, 0.0) - prev.get(k, 0.0)) > 0.005 for k in set(target) | set(prev)):
-                allocations.append({"date": eng._day(t), "weights": {k: round(v, 6) for k, v in target.items()}})
-            held = dict(target)
+            band = sym.rebalance_threshold
+            # Inside the corridor: keep holding the drifted book, no trades.
+            if not (
+                held and band is not None and max(abs(target.get(k, 0.0) - held.get(k, 0.0)) for k in names) <= band
+            ):
+                turn = sum(abs(target.get(k, 0.0) - held.get(k, 0.0)) for k in names)
+                turnover_total += turn
+                equity[-1] *= 1.0 - turn * cost
+                # Log target CHANGES (> 0.5% on any line), not the daily drift trims.
+                prev = allocations[-1]["weights"] if allocations else None
+                if prev is None or any(
+                    abs(target.get(k, 0.0) - prev.get(k, 0.0)) > 0.005 for k in set(target) | set(prev)
+                ):
+                    allocations.append({"date": eng._day(t), "weights": {k: round(v, 6) for k, v in target.items()}})
+                held = dict(target)
         # Hold from close t to close t+1, then let weights drift.
         r = 0.0
         grown = {}

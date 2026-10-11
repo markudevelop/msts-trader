@@ -112,6 +112,8 @@ export interface Strategy {
   name: string;
   description: string;
   rebalance: Cadence;
+  /** Composer-style corridor: trade only once a line is this far (fraction of the book) off target. */
+  rebalance_threshold?: number | null;
   children: Node[];
   deploy: Deploy;
   tags?: string[];

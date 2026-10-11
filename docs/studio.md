@@ -126,9 +126,12 @@ drawdown are in **percent**, so `cumulative-return(SPY, 10) > 5` means +5%.
 - The backtest starts once the youngest ticker has enough history for the
   longest indicator window.
 - Rebalance cadence (daily / weekly / monthly / quarterly / yearly) applies
-  in the backtest and to scheduled runs. Composer's threshold ("corridor")
-  rebalancing is not modeled. The deploy **drift threshold** is what limits
-  live turnover.
+  in the backtest and to scheduled runs. **when off by X%** next to it is
+  Composer's threshold ("corridor") rebalancing: a check only trades once some
+  holding is X percentage points of the book off its target, and then puts
+  every holding back on target. The backtest and live runs both honor it (it
+  replaces the deploy drift threshold). Blank means the deploy **drift
+  threshold** limits live turnover and the backtest rebalances every period.
 
 A good backtest is not evidence of an edge. Treat the numbers as a
 description of the past, not a forecast.
@@ -388,9 +391,11 @@ Paste the symphony's EDN (from its editor's source view) or JSON into
 Conditions from Composer's newer editor (the structured `condition`: binary,
 multi-ticker `%` conditions, any/all compounds) import as ALL of / ANY of
 groups and take precedence over the stale `lhs-`/`rhs-` fields edited nodes
-keep. Anything else (another indicator, `:rebalance :none` corridors, …) is
-reported with its path. Corridors fall back to daily with a warning;
-unknown blocks and indicators stop the import rather than being dropped.
+keep. `:rebalance :none` with a `:rebalance-corridor-width` (0.05 or 5 both
+mean 5%) imports as a daily check with that rebalance threshold; without a
+width it imports as daily with a warning. Anything else (another indicator,
+an unknown block, …) is reported with its path and stops the import rather
+than being dropped.
 
 Composer's format is not publicly specified. If a real export fails to
 import, please open an issue with it.

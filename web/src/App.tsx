@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError, hasToken } from "./api";
 import { TEMPLATES, treeTickers } from "./blocks";
 import { BacktestPanel } from "./components/Backtest";
+import { confirmDialog } from "./components/Dialog";
 import { DeployPanel } from "./components/Deploy";
-import { NodeList } from "./components/Editor";
+import { NodeList, OptionalPct } from "./components/Editor";
 import { Home, StagePill } from "./components/Home";
 import { SettingsModal, TagEditor } from "./components/Settings";
 import type { Cadence, DashRow, EvalResult, FeedCatalog, Meta, Rollup, Stage, Strategy, StudioSettings, UrlFeedTest } from "./types";
@@ -32,8 +33,8 @@ export default function App() {
   const dirty = useMemo(() => !!draft && !!saved && JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved]);
 
   const go = useCallback(
-    (id: string | null, tab: Tab = "build") => {
-      if (dirty && id !== route.id && !window.confirm("Discard unsaved changes?")) return;
+    async (id: string | null, tab: Tab = "build") => {
+      if (dirty && id !== route.id && !(await confirmDialog("Discard unsaved changes?", { ok: "Discard", danger: true }))) return;
       window.location.hash = id ? `/${id}/${tab}` : "";
     },
     [dirty, route.id],
@@ -158,7 +159,7 @@ export default function App() {
   };
 
   const remove = async () => {
-    if (!saved || !window.confirm(`Delete "${saved.name}"? (Its sleeve holdings at the broker are not touched.)`)) return;
+    if (!saved || !(await confirmDialog(`Delete "${saved.name}"? (Its sleeve holdings at the broker are not touched.)`, { ok: "Delete", danger: true }))) return;
     await api(`/strategies/${saved.id}`, { method: "DELETE" });
     await loadList();
     setSaved(null);
@@ -254,6 +255,14 @@ export default function App() {
                     ))}
                   </select>
                 </label>
+                <label
+                  className="inline small"
+                  title="Threshold rebalancing, as in Composer: trade only once some holding is this many percentage points of the book off its target, then put every holding back on target. Blank = always rebalance on schedule."
+                >
+                  when off by
+                  <OptionalPct value={draft.rebalance_threshold} onChange={(v) => setDraft({ ...draft, rebalance_threshold: v })} placeholder="any" />
+                  %
+                </label>
                 <button className="btn ghost" onClick={() => create({ ...draft, id: undefined, name: `${draft.name} (copy)` } as Partial<Strategy>)}>
                   Duplicate
                 </button>
@@ -285,7 +294,7 @@ export default function App() {
                   others={rows.filter((x) => x.id !== draft.id)}
                   onSaved={async (s) => {
                     await loadList();
-                    if (dirty && !window.confirm("Open the new blend? Unsaved changes to this strategy will be discarded.")) return;
+                    if (dirty && !(await confirmDialog("Open the new blend? Unsaved changes to this strategy will be discarded.", { ok: "Open blend" }))) return;
                     setSaved(s);
                     setDraft(s);
                     window.location.hash = `/${s.id}/build`;

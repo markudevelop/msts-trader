@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { confirmDialog } from "./Dialog";
 import { CashModal } from "./Home";
 import type { Deploy, Meta, OosResult, OrderType, OsSchedule, RunEntry, SchedulerState, SleeveAmount, SleeveLedger, Strategy } from "../types";
 import { LineChart, cssColor, type Series } from "./Chart";
@@ -128,6 +129,12 @@ export function DeployPanel({ draft, saved, dirty, meta, onDeploy, onSave }: Pro
               <span className="inline">
                 <NumInput value={Math.round(d.threshold * 10000) / 100} onChange={(v) => set({ threshold: v / 100 })} min={0} max={100} step={0.5} />% of each position
               </span>
+              {draft.rebalance_threshold != null && (
+                <span className="muted small">
+                  Not used: this strategy rebalances the whole book once any holding is {+(draft.rebalance_threshold * 100).toFixed(2)}% of the book off
+                  target (set on the Build tab).
+                </span>
+              )}
             </label>
             <label>
               Order type
@@ -630,7 +637,7 @@ function SleeveTools({
           className="btn"
           disabled={!shareValid || !!busy || disabled}
           onClick={async () => {
-            if (shareAction === "adjust" && !window.confirm(`Set this strategy's ${ticker.trim()} tally to ${qty} shares?`)) return;
+            if (shareAction === "adjust" && !(await confirmDialog(`Set this strategy's ${ticker.trim()} tally to ${qty} shares?`))) return;
             if (await run("shares", { action: shareAction, ticker: ticker.trim(), qty })) {
               setTicker("");
               setQty("");

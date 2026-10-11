@@ -39,6 +39,17 @@ def test_rebalance_cmd_passes_no_moc_for_market():
     assert "--no-moc" in cmd and "--moc" not in cmd
 
 
+def test_rebalance_cmd_uses_strategy_threshold_as_whole_book_corridor():
+    plain = runner.rebalance_cmd(make_sym(), "w.csv", mode=runner.DRY)
+    assert plain[plain.index("--threshold-mode") + 1] == "position"
+    s = make_sym()
+    s = s.model_copy(update={"rebalance_threshold": 0.05})
+    cmd = runner.rebalance_cmd(s, "w.csv", mode=runner.DRY)
+    assert cmd[cmd.index("--threshold") + 1] == "0.05"
+    assert cmd[cmd.index("--threshold-mode") + 1] == "nav"
+    assert cmd[cmd.index("--rebalance-scope") + 1] == "whole-book"
+
+
 def test_rebalance_cmd_passes_moc_for_moc():
     cmd = runner.rebalance_cmd(make_sym(order_type="moc"), "w.csv", mode=runner.DRY)
     assert "--moc" in cmd and "--no-moc" not in cmd

@@ -489,6 +489,31 @@ export function NumInput({
   );
 }
 
+/** A percent that may be unset: blank (or 0) means null. Value is a fraction. */
+export function OptionalPct({ value, onChange, placeholder }: { value: number | null | undefined; onChange: (v: number | null) => void; placeholder?: string }) {
+  const shown = (v: number | null | undefined) => (v == null ? "" : String(+(v * 100).toFixed(4)));
+  const [text, setText] = useState(shown(value));
+  useEffect(() => {
+    if ((text.trim() === "" ? null : Number(text) / 100) !== (value ?? null)) setText(shown(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return (
+    <input
+      className="num"
+      inputMode="decimal"
+      placeholder={placeholder}
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        const v = Number(e.target.value);
+        if (e.target.value.trim() === "" || v === 0) onChange(null);
+        else if (Number.isFinite(v) && v > 0 && v <= 100) onChange(v / 100);
+      }}
+      onBlur={() => setText(shown(value))}
+    />
+  );
+}
+
 function IconBtn({ label, onClick, children, danger }: { label: string; onClick: () => void; children: React.ReactNode; danger?: boolean }) {
   return (
     <button className={`icon-btn ${danger ? "danger" : ""}`} onClick={onClick} title={label} aria-label={label}>
