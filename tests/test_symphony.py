@@ -11,7 +11,7 @@ pytest.importorskip("pandas")
 from msts_trader.csv_parser import parse_csv  # noqa: E402
 from msts_trader.symphony import backtest, indicators  # noqa: E402
 from msts_trader.symphony.composer_import import ComposerImportError, import_text, parse_edn  # noqa: E402
-from msts_trader.symphony.evaluate import Engine, EvalError, evaluate, to_csv  # noqa: E402
+from msts_trader.symphony.evaluate import Engine, EvalError, evaluate, max_lookback, to_csv  # noqa: E402
 from msts_trader.symphony.model import INDICATORS, Symphony, tickers  # noqa: E402
 
 
@@ -165,6 +165,42 @@ def test_insufficient_history_is_a_clear_error(closes):
     s = sym([{"step": "filter", "sort_fn": "cumulative-return", "window": 300, "children": [asset("SPY")]}])
     with pytest.raises(EvalError, match="insufficient history"):
         Engine(s, closes).weights(100)
+
+
+def test_max_lookback_stacks_through_ranked_groups(closes):
+    """A filter ranking groups evaluates each group on its trailing `span`
+    days, and each of those days needs the group's own 200d MA: live runs
+    load exactly `max_lookback` of warm-up, so it must be the SUM, not the max."""
+    ma_switch = {
+        "step": "if",
+        "condition": {
+            "lhs": {"fn": "current-price", "ticker": "SPY"},
+            "comparator": "gt",
+            "rhs": {"fn": "moving-average-price", "ticker": "SPY", "window": 200},
+        },
+        "then": [asset("QQQ")],
+        "else": [asset("TLT")],
+    }
+    inv_vol = {
+        "step": "wt-inverse-vol",
+        "window": 20,
+        "children": [{"step": "group", "children": [ma_switch]}, asset("BIL")],
+    }
+    s = sym(
+        [
+            {
+                "step": "filter",
+                "sort_fn": "cumulative-return",
+                "window": 50,
+                "children": [{"step": "group", "name": "A", "children": [inv_vol]}, asset("SPY")],
+            }
+        ]
+    )
+    need = max_lookback(s)
+    assert need >= 50 + 20 + 200
+    assert Engine(s, closes).weights(need)
+    with pytest.raises(EvalError, match="insufficient history"):
+        Engine(s, closes).weights(201)  # what the old max-of-lookbacks estimate allowed
 
 
 def test_csv_round_trips_through_parser(closes):

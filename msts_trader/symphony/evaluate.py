@@ -30,7 +30,6 @@ from .model import (
     WeightEqual,
     WeightInverseVol,
     WeightSpecified,
-    walk,
 )
 
 Weights = dict[str, float]
@@ -216,16 +215,32 @@ class Engine:
 
 def max_lookback(sym: Symphony) -> int:
     """Conservative history (trading days) needed before the first evaluation."""
+    return _lookback(sym.children)
+
+
+def _lookback(nodes: list) -> int:
+    """Lookbacks STACK through ranked groups: `child_metric` evaluates a
+    non-asset child on each of the `span` days before t, and each of those
+    days needs the child's own history (a filter over groups that hold a 200d
+    MA switch needs span + 200 days, not the larger of the two)."""
     need = 1
-    for n in walk(sym.children):
+    for n in nodes:
         if isinstance(n, If):
             for m in n.condition.metrics():
                 need = max(need, indicators.lookback(m.fn, m.window))
-        elif isinstance(n, Filter):
-            # Group children rank on a synthetic curve that itself needs history.
-            need = max(need, indicators.lookback(n.sort_fn, n.window) * 2)
-        elif isinstance(n, WeightInverseVol):
-            need = max(need, (n.window + 1) * 2)
+            need = max(need, _lookback(n.then), _lookback(n.otherwise))
+        elif isinstance(n, (Filter, WeightInverseVol)):
+            fn = n.sort_fn if isinstance(n, Filter) else "standard-deviation-return"
+            look = indicators.lookback(fn, n.window)
+            # The old flat estimate stays a floor, so warm-ups never shrink.
+            need = max(need, look * 2)
+            for c in n.children:
+                if isinstance(c, (Asset, Feed)):
+                    need = max(need, look)
+                else:
+                    need = max(need, max(look, 2) + _lookback([c]))
+        elif hasattr(n, "children"):
+            need = max(need, _lookback(n.children))
     return need
 
 
