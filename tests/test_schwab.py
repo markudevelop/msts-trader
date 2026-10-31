@@ -193,13 +193,78 @@ def test_place_market_dry_run():
     assert r["status"] == "dry-run" and r["dry_run"] is True
 
 
-def test_place_market_fractional_skipped():
+def test_place_market_sub_share_is_sent_as_fractional_quantity():
     from msts_trader.models import Order, Side
     from decimal import Decimal as D
 
-    # 0.4 shares -> int() -> 0 -> Schwab whole-share skip
-    r = _broker().place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("0.4")))
-    assert r["status"] == "skipped" and "whole shares" in r["reason"]
+    captured = {}
+    b = _broker()
+    b._client = SimpleNamespace(
+        place_order=lambda h, spec: (
+            captured.update(spec=spec) or _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/12346")
+        )
+    )
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("0.4"), estimated_price=D("10")))
+    assert r["status"] == "submitted" and r["quantity"] == 0.4
+    assert captured["spec"]["orderLegCollection"][0]["quantity"] == 0.4
+
+
+def test_place_market_fractional_quantity_is_rounded_down_to_four_places():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+
+    captured = {}
+    b = _broker()
+    b._client = SimpleNamespace(
+        place_order=lambda h, spec: (
+            captured.update(spec=spec) or _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/12347")
+        )
+    )
+    r = b.place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("0.123456"), estimated_price=D("100")))
+    assert r["status"] == "submitted" and r["quantity"] == 0.1234
+    assert captured["spec"]["orderLegCollection"][0]["quantity"] == 0.1234
+
+
+def test_place_market_skips_fractional_order_below_one_dollar():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+
+    r = _broker().place_market(
+        Order(ticker="SPY", side=Side.BUY, quantity=D("0.1"), estimated_price=D("9.99"))
+    )
+    assert r["status"] == "skipped" and "$1" in r["reason"]
+
+
+def test_place_market_skips_fractional_moc_order():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+
+    r = _broker().place_market(Order(ticker="SPY", side=Side.BUY, quantity=D("0.5"), moc=True))
+    assert r["status"] == "skipped" and "regular-session only" in r["reason"]
+
+
+def test_place_limit_fractional_share_order_is_sent():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+
+    captured = {}
+    b = _broker()
+    b._client = SimpleNamespace(
+        place_order=lambda h, spec: (
+            captured.update(spec=spec) or _OrderResp("https://api.schwab.com/v1/accounts/HASH/orders/12348")
+        )
+    )
+    r = b.place_limit(Order(ticker="SPY", side=Side.BUY, quantity=D("1.25")), D("100"))
+    assert r["status"] == "submitted" and r["quantity"] == 1.25
+    assert captured["spec"]["orderLegCollection"][0]["quantity"] == 1.25
+
+
+def test_place_limit_sub_share_order_skips_for_market_fallback():
+    from msts_trader.models import Order, Side
+    from decimal import Decimal as D
+
+    r = _broker().place_limit(Order(ticker="SPY", side=Side.SELL, quantity=D("0.5")), D("100"))
+    assert r["status"] == "skipped" and "must use market execution" in r["reason"]
 
 
 def test_place_market_moc_sets_order_type(monkeypatch):

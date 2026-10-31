@@ -10,6 +10,16 @@ behaviour changes; patch versions (0.x.y) are fixes and docs.
 
 ## [Unreleased]
 
+## [0.48.0] — 2026-10-31
+
+### Added
+- Schwab: fractional equity order support to four decimal places for eligible
+  symbols. Rebalance previews and margin-aware sizing preserve this precision.
+  Schwab's regular-session order restrictions are applied: orders under one
+  share use market execution, extended-hours and market-on-close orders use
+  whole shares, and protective stops remain whole-share only. Orders below
+  $1 are skipped.
+
 ## [0.47.1] — 2026-10-16
 
 ### Added
@@ -1793,7 +1803,8 @@ was folded into this release; no 0.3.1 was published to PyPI).
 - Credentials stored in the OS keychain (BYO Tastytrade OAuth app).
 - OIDC trusted publishing to PyPI on tag push.
 
-[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.47.1...HEAD
+[Unreleased]: https://github.com/markudevelop/msts-trader/compare/v0.48.0...HEAD
+[0.48.0]: https://github.com/markudevelop/msts-trader/compare/v0.47.1...v0.48.0
 [0.47.1]: https://github.com/markudevelop/msts-trader/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/markudevelop/msts-trader/compare/v0.46.1...v0.47.0
 [0.46.1]: https://github.com/markudevelop/msts-trader/compare/v0.46.0...v0.46.1

@@ -36,6 +36,7 @@ def build_preview(
     rebalance_scope: str = "whole-book",
     sweep: bool = True,
     whole_shares: bool = False,
+    fractional_precision: int = 2,
 ) -> Preview:
     warnings: list[str] = []
     blockers: list[str] = []
@@ -43,11 +44,10 @@ def build_preview(
     orders: list[Order] = []
 
     # Quantity precision: whole shares (for brokers/accounts without
-    # fractional-API permission — e.g. an IBKR account that rejects fractional
-    # orders with error 10243) vs the default 0.01-share granularity. Always
-    # rounds DOWN so a buy never exceeds its target and a sell never exceeds
-    # the held quantity.
-    qexp = Decimal("1") if whole_shares else Decimal("0.01")
+    # fractional-API permission) or the broker's fractional granularity.
+    # Always rounds DOWN so a buy never exceeds its target and a sell never
+    # exceeds the held quantity.
+    qexp = Decimal("1") if whole_shares else Decimal(1).scaleb(-fractional_precision)
 
     def _mv(pos: Position | None, tkr: str) -> Decimal:
         """Current market value of a held position, sized from the LIVE quote
@@ -326,6 +326,7 @@ def apply_margin_aware(
     bp_safety: Decimal = BP_SAFETY,
     add_warning: bool = True,
     whole_shares: bool = False,
+    fractional_precision: int = 2,
 ) -> Decimal:
     """Scale all BUY orders by one factor so the book fits buying power.
 
@@ -365,7 +366,7 @@ def apply_margin_aware(
         return Decimal(1)  # already fits — nothing to scale
 
     scale = (available * bp_safety) / need
-    qexp = Decimal("1") if whole_shares else Decimal("0.01")
+    qexp = Decimal("1") if whole_shares else Decimal(1).scaleb(-fractional_precision)
     kept: list[Order] = []
     for o in preview.orders:
         if o.side == Side.BUY:

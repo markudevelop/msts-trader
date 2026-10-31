@@ -262,7 +262,12 @@ def _apply_margin_aware(broker, preview, buying_power, max_passes: int = 3, whol
                 real = None
         used_real = used_real or real is not None
         scale = apply_margin_aware(
-            preview, buying_power=buying_power, real_margin=real, add_warning=False, whole_shares=whole_shares
+            preview,
+            buying_power=buying_power,
+            real_margin=real,
+            add_warning=False,
+            whole_shares=whole_shares,
+            fractional_precision=getattr(broker, "fractional_precision", 2),
         )
         passes += 1
         cumulative *= scale
@@ -1524,16 +1529,18 @@ def rebalance(
     if extended_hours:
         if not (getattr(b, "supports_extended_hours", False) and getattr(b, "supports_limit_chase", False)):
             _fail(f"{b.name} does not support extended-hours equity limit orders.")
-        # Tastytrade limits require whole shares, including chase residuals.
-        whole_shares = whole_shares or b.name == "tastytrade"
-    # Brokers that can't place fractional equity orders (Schwab, Tradier)
-    # already truncate to whole shares at submit — so force whole-share sizing
+        # Tastytrade limits require whole shares; Schwab fractions are regular-session only.
+        whole_shares = whole_shares or b.name in ("tastytrade", "schwab")
+    # Brokers that can't place fractional equity orders already truncate at submit —
+    # so force whole-share sizing
     # in the preview too, otherwise the preview / notional / --max-notional cap
     # would over-report vs. what actually gets sent.
     if not getattr(b, "supports_fractional", True) and not whole_shares:
         whole_shares = True
         say(f"[dim]{b.name} places whole-share equity orders — sizing to whole shares.[/dim]")
     if moc:
+        # Schwab fractional orders are not eligible for its closing auction.
+        whole_shares = whole_shares or b.name == "schwab"
         if not getattr(b, "supports_moc", False):
             _fail(f"{b.name} does not support market-on-close orders (MOC works on: alpaca, ibkr, schwab, paper).")
         # NYSE/Nasdaq stop accepting MOC around 15:50 ET; refuse rather than
@@ -1626,6 +1633,7 @@ def rebalance(
         rebalance_scope=rebalance_scope or "whole-book",
         sweep=sweep,
         whole_shares=whole_shares,
+        fractional_precision=getattr(b, "fractional_precision", 2),
     )
     if margin_aware:
         _apply_margin_aware(b, preview, bal.buying_power, whole_shares=whole_shares)
@@ -2218,6 +2226,7 @@ def _verify_once(
         rebalance_scope=rebalance_scope or "whole-book",
         sweep=sweep,
         whole_shares=whole_shares,
+        fractional_precision=getattr(b, "fractional_precision", 2),
     )
     # When margin-aware is on, a residual buy the account can't fund is "as
     # deployed as possible", not a non-convergence — don't let self-heal chase it.
@@ -2541,7 +2550,7 @@ def _rebalance_one(
         if not (getattr(b, "supports_extended_hours", False) and getattr(b, "supports_limit_chase", False)):
             raise BrokerError(f"{b.name} does not support extended-hours equity limit orders")
         order_type = "limit-chase"
-        whole_shares = whole_shares or b.name == "tastytrade"
+        whole_shares = whole_shares or b.name in ("tastytrade", "schwab")
     error = trading_session_error(b.name, extended_hours=extended_hours, status=market_status())
     if error and not dry_run:
         return {"broker": b.name, "account": b.account_id, "status": "blocked", "blockers": [error]}
@@ -2590,6 +2599,7 @@ def _rebalance_one(
         rebalance_scope=rebalance_scope or "whole-book",
         sweep=sweep,
         whole_shares=whole_shares,
+        fractional_precision=getattr(b, "fractional_precision", 2),
     )
     if margin_aware:
         _apply_margin_aware(b, preview, bal.buying_power, whole_shares=whole_shares)

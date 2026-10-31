@@ -33,7 +33,7 @@ import json
 import os
 import time
 import webbrowser
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from typing import Iterable
 
@@ -66,6 +66,16 @@ TOKEN_PATH = Path(os.path.expanduser("~/.msts-trader/schwab_token.json"))  # leg
 TOKEN_MAX_AGE_SECONDS = int(60 * 60 * 24 * 6.5)
 
 
+def _fractional_quantity(quantity) -> Decimal:
+    """Schwab accepts at most four decimal places; round down to avoid oversells."""
+    return Decimal(str(quantity)).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
+
+
+def _below_minimum_notional(quantity: Decimal, price: Decimal | None, notional: Decimal = Decimal(0)) -> bool:
+    value = quantity * price if price is not None else (Decimal(str(notional)) if notional else None)
+    return value is not None and value < Decimal("1")
+
+
 def _env_manual() -> bool:
     raw = os.environ.get("MSTS_SCHWAB_MANUAL", "").strip().lower()
     return raw in {"1", "true", "yes", "manual"}
@@ -73,7 +83,8 @@ def _env_manual() -> bool:
 
 class Schwab:
     name = "schwab"
-    supports_fractional = False  # Schwab Trader API places whole-share equity orders
+    supports_fractional = True  # Trader API accepts up to four decimals for eligible equities
+    fractional_precision = 4
     supports_moc = True  # orderType MARKET_ON_CLOSE
     supports_stops = True  # GTC sell stop via schwab-py order spec
     supports_limit_chase = True  # LIMIT DAY via equity_buy_limit/equity_sell_limit
@@ -223,24 +234,38 @@ class Schwab:
                 "ticker": order.ticker,
                 "reason": "extended-hours orders require LIMIT execution",
             }
-        qty = int(order.quantity)  # Schwab equity orders are whole shares
+        qty = _fractional_quantity(order.quantity)
         if qty <= 0:
             return {
                 "status": "skipped",
-                "reason": "qty rounds to 0 (Schwab requires whole shares)",
+                "reason": "qty rounds to 0 at Schwab's 4-decimal share precision",
                 "ticker": order.ticker,
             }
+        if order.moc and qty != qty.to_integral_value():
+            return {
+                "status": "skipped",
+                "reason": "Schwab fractional orders are regular-session only",
+                "ticker": order.ticker,
+            }
+        if _below_minimum_notional(qty, order.estimated_price, order.notional):
+            return {"status": "skipped", "reason": "Schwab orders must be at least $1", "ticker": order.ticker}
         if dry_run:
             return {
                 "status": "dry-run",
                 "ticker": order.ticker,
                 "side": order.side.value,
-                "quantity": qty,
+                "quantity": float(qty),
                 "moc": order.moc,
                 "dry_run": True,
             }
 
-        spec = equity_buy_market(order.ticker, qty) if order.side == Side.BUY else equity_sell_market(order.ticker, qty)
+        # schwab-py serializes Python ints/floats; Decimal is not JSON serializable.
+        api_qty = float(qty)
+        spec = (
+            equity_buy_market(order.ticker, api_qty)
+            if order.side == Side.BUY
+            else equity_sell_market(order.ticker, api_qty)
+        )
         if order.moc:
             from schwab.orders.common import OrderType as SchwabOrderType  # type: ignore
 
@@ -258,7 +283,7 @@ class Schwab:
             "status": "submitted",
             "ticker": order.ticker,
             "side": order.side.value,
-            "quantity": qty,
+            "quantity": float(qty),
             "moc": order.moc,
             "order_id": order_id,
             "dry_run": False,
@@ -266,25 +291,43 @@ class Schwab:
 
     # ---- limit chase ------------------------------------------------------
     def place_limit(self, order: Order, limit_price: Decimal, dry_run: bool = False) -> dict:
-        """LIMIT DAY order for the chase engine. Schwab equities are
-        whole-share — dust is skipped and the engine market-fallbacks it."""
-        qty = int(order.quantity)
+        """LIMIT DAY order for the chase engine, including supported fractions."""
+        qty = _fractional_quantity(order.quantity)
         if qty <= 0:
-            return {"status": "skipped", "reason": "qty rounds to 0 (Schwab whole shares)", "ticker": order.ticker}
+            return {
+                "status": "skipped",
+                "reason": "qty rounds to 0 at Schwab's 4-decimal share precision",
+                "ticker": order.ticker,
+            }
+        if order.extended_hours and qty != qty.to_integral_value():
+            return {
+                "status": "skipped",
+                "reason": "Schwab fractional orders are regular-session only",
+                "ticker": order.ticker,
+            }
+        if qty < 1 and qty != qty.to_integral_value():
+            return {
+                "status": "skipped",
+                "reason": "Schwab orders below 1 share must use market execution",
+                "ticker": order.ticker,
+            }
         px = round(float(limit_price), 2)
+        if _below_minimum_notional(qty, Decimal(str(px))):
+            return {"status": "skipped", "reason": "Schwab orders must be at least $1", "ticker": order.ticker}
+        api_qty = float(qty)
         if dry_run:
             return {
                 "status": "dry-run",
                 "ticker": order.ticker,
                 "side": order.side.value,
-                "quantity": qty,
+                "quantity": api_qty,
                 "limit_price": px,
                 "dry_run": True,
             }
         spec = (
-            equity_buy_limit(order.ticker, qty, px)
+            equity_buy_limit(order.ticker, api_qty, px)
             if order.side == Side.BUY
-            else equity_sell_limit(order.ticker, qty, px)
+            else equity_sell_limit(order.ticker, api_qty, px)
         )
         if order.extended_hours:
             from schwab.orders.common import Session
@@ -301,7 +344,7 @@ class Schwab:
             "status": "submitted",
             "ticker": order.ticker,
             "side": order.side.value,
-            "quantity": qty,
+            "quantity": api_qty,
             "order_id": order_id,
             "limit_price": px,
             "dry_run": False,

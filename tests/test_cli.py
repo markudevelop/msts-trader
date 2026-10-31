@@ -661,7 +661,7 @@ def test_rebalance_without_whole_shares_allows_fraction(tmp_path, monkeypatch):
 
 
 def test_rebalance_auto_whole_shares_for_nonfractional_broker(tmp_path, monkeypatch):
-    """A broker with supports_fractional=False (e.g. Schwab/Tradier) must size
+    """A broker with supports_fractional=False (e.g. Tradier) must size
     the preview to whole shares automatically — it truncates at submit anyway,
     so the preview must match what's actually sent."""
     import json as _json

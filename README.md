@@ -304,6 +304,14 @@ same selector works on `rebalance` / `liquidate` / `doctor`, config
 `account_id = "…"`, env `SCHWAB_ACCOUNT_ID` / `SCHWAB_ACCOUNT_HASH`, or
 `account = "…"` on a `multi` `[[account]]` row.
 
+Schwab equity orders support fractional shares to four decimal places on
+eligible symbols. Regular-session market and limit orders use that precision;
+orders below one share use market execution, and orders must be at least $1.
+Fractional orders are not used for extended-hours or market-on-close execution.
+Schwab protective stops remain whole-share only.
+Use `--whole-shares` (or `whole_shares = true`) to keep every order to whole
+shares.
+
 ### Paper (offline simulator)
 
 ```bash
